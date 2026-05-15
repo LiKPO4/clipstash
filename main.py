@@ -31,7 +31,7 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.1"
+APP_VERSION = "v1.1.2"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -135,6 +135,43 @@ def _normalize_hotkey(text):
             continue
         part = raw_part.lower()
         parts.append(aliases.get(part, part if part.startswith("<") else part))
+    return "+".join(parts)
+
+
+def _hotkey_from_event(event):
+    modifier_keys = {
+        "control_l", "control_r", "shift_l", "shift_r",
+        "alt_l", "alt_r", "win_l", "win_r", "super_l", "super_r",
+    }
+    key = str(getattr(event, "keysym", "") or "").lower()
+    if not key or key in modifier_keys:
+        return ""
+    key_aliases = {
+        "return": "<enter>",
+        "escape": "<esc>",
+        "space": "<space>",
+        "backspace": "<backspace>",
+        "delete": "<delete>",
+        "tab": "<tab>",
+    }
+    if len(key) == 1:
+        key_text = key
+    elif key.startswith("f") and key[1:].isdigit():
+        key_text = f"<{key}>"
+    else:
+        key_text = key_aliases.get(key, key)
+
+    state = getattr(event, "state", 0)
+    parts = []
+    if state & 0x0004:
+        parts.append("<ctrl>")
+    if state & 0x0008:
+        parts.append("<alt>")
+    if state & 0x0001:
+        parts.append("<shift>")
+    if state & 0x0040:
+        parts.append("<cmd>")
+    parts.append(key_text)
     return "+".join(parts)
 
 
@@ -404,7 +441,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_save=None):
         super().__init__(parent)
         self.title("设置")
-        self.geometry("420x520")
+        self.geometry("420x640")
         self.resizable(False, False)
         self.transient(parent)
         self.configure(fg_color=COLORS["bg"])
@@ -515,6 +552,7 @@ class SettingsDialog(ctk.CTkToplevel):
             border_color=COLORS["border"], corner_radius=8,
         )
         self.show_hotkey_entry.pack(fill="x", padx=16)
+        self._bind_hotkey_entry(self.show_hotkey_entry, self.show_hotkey_var, "show_hotkey")
 
         ctk.CTkLabel(
             frame, text="导入当前剪切板快捷键",
@@ -530,14 +568,23 @@ class SettingsDialog(ctk.CTkToplevel):
             border_color=COLORS["border"], corner_radius=8,
         )
         self.capture_hotkey_entry.pack(fill="x", padx=16)
+        self._bind_hotkey_entry(self.capture_hotkey_entry, self.capture_hotkey_var, "capture_hotkey")
         ctk.CTkLabel(
-            frame, text="格式示例：<ctrl>+<shift>+v 或 ctrl+alt+v",
+            frame, text="点击输入框后直接按下组合键，会立即保存",
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
+        ctk.CTkButton(
+            frame, text="检查更新", height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
+            hover_color=COLORS["border"], corner_radius=8,
+            command=self._check_updates
+        ).pack(fill="x", padx=16, pady=(12, 0))
+
         # 按钮
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(16, 12))
+        btn_frame.pack(fill="x", padx=16, pady=(12, 12))
         ctk.CTkButton(
             btn_frame, text="取消", width=68, height=32,
             font=ctk.CTkFont(size=12),
@@ -558,6 +605,32 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _on_slider_change(self, value):
         self.delay_label.configure(text=f"{value:.1f} 秒")
+
+    def _bind_hotkey_entry(self, entry, variable, setting_key):
+        def arm_capture(event=None):
+            variable.set("请按下快捷键...")
+            entry.focus_set()
+            return "break"
+
+        def capture(event):
+            hotkey = _hotkey_from_event(event)
+            if not hotkey:
+                return "break"
+            variable.set(hotkey)
+            self.settings[setting_key] = hotkey
+            save_settings(self.settings)
+            if self.on_save:
+                self.on_save()
+            return "break"
+
+        entry.bind("<Button-1>", arm_capture)
+        entry.bind("<FocusIn>", arm_capture)
+        entry.bind("<KeyPress>", capture)
+
+    def _check_updates(self):
+        self._close()
+        if hasattr(self._parent, "_check_for_updates"):
+            self._parent._check_for_updates()
 
     def _save(self):
         self.settings["hover_delay_ms"] = int(self.delay_var.get() * 1000)
@@ -1129,6 +1202,7 @@ class DemandStashApp(ctk.CTk):
         if HAS_TRAY:
             self._setup_tray()
             self._start_hotkey_listener()
+        self.after(100, self._do_show)
 
     # ---------- 托盘 & 快捷键 ----------
     def _create_tray_image(self):
@@ -1236,7 +1310,7 @@ class DemandStashApp(ctk.CTk):
         btn_frame.pack(side="right", padx=16, pady=10)
 
         self.count_label = ctk.CTkLabel(
-            btn_frame, text="0 条",
+            btn_frame, text="总计 0 条消息",
             font=ctk.CTkFont(size=12), text_color=COLORS["text_hint"]
         )
         self.count_label.pack(side="left", padx=(0, 10))
@@ -1258,15 +1332,6 @@ class DemandStashApp(ctk.CTk):
             command=self._open_settings
         )
         self.settings_btn.pack(side="left", padx=(0, 4))
-
-        self.update_btn = ctk.CTkButton(
-            btn_frame, text="更新", width=48, height=30,
-            font=ctk.CTkFont(size=11),
-            fg_color="transparent", text_color=COLORS["text_hint"],
-            hover_color=COLORS["tag_bg"], corner_radius=6,
-            command=self._check_for_updates
-        )
-        self.update_btn.pack(side="left", padx=(0, 4))
 
         self.new_msg_btn = ctk.CTkButton(
             btn_frame, text="+ 新建", width=80, height=32,
@@ -1594,8 +1659,7 @@ class DemandStashApp(ctk.CTk):
             sort_order=sort_order
         )
         count = len(items)
-        label = "已归档" if self.view_mode == "archived" else "消息"
-        self.count_label.configure(text=f"{count} 条{label}")
+        self.count_label.configure(text=f"总计 {count} 条消息")
 
         if not items:
             self._render_empty_state()
