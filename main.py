@@ -23,16 +23,8 @@ from config import (
     get_launch_on_startup, get_show_hotkey, get_capture_hotkey
 )
 
-# 托盘 & 全局快捷键
-try:
-    import pystray
-    from pynput import keyboard
-    HAS_TRAY = True
-except ImportError:
-    HAS_TRAY = False
-
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.4"
+APP_VERSION = "v1.1.5"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -42,6 +34,9 @@ SORT_LABELS = {
     "oldest": "最早优先",
 }
 SORT_VALUES = {label: value for value, label in SORT_LABELS.items()}
+pystray = None
+keyboard = None
+HAS_TRAY = None
 
 
 def _parse_version(version_text):
@@ -192,6 +187,21 @@ def _app_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.getcwd()
+
+
+def _load_tray_modules():
+    global pystray, keyboard, HAS_TRAY
+    if HAS_TRAY is not None:
+        return HAS_TRAY
+    try:
+        import pystray as _pystray
+        from pynput import keyboard as _keyboard
+        pystray = _pystray
+        keyboard = _keyboard
+        HAS_TRAY = True
+    except ImportError:
+        HAS_TRAY = False
+    return HAS_TRAY
 
 
 def _looks_like_app_title(title):
@@ -1289,13 +1299,15 @@ class DemandStashApp(ctk.CTk):
         self._track_foreground_window()
 
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
-
-        if HAS_TRAY:
-            self._setup_tray()
-            self._start_hotkey_listener()
         self.after(100, self._do_show)
+        self.after(200, self._setup_background_features)
 
     # ---------- 托盘 & 快捷键 ----------
+    def _setup_background_features(self):
+        if _load_tray_modules():
+            self._setup_tray()
+            self._start_hotkey_listener()
+
     def _create_tray_image(self):
         return _load_app_icon_image(64)
 
@@ -1310,7 +1322,7 @@ class DemandStashApp(ctk.CTk):
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
     def _start_hotkey_listener(self):
-        if not HAS_TRAY:
+        if not _load_tray_modules():
             return
         if self._hotkey_listener:
             try:
