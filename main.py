@@ -10,7 +10,6 @@ import subprocess
 import textwrap
 import urllib.error
 import urllib.request
-import webbrowser
 import winreg
 from io import BytesIO
 from clipboard_utils import (
@@ -32,7 +31,7 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v1.1.1"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -144,6 +143,12 @@ def _get_foreground_hwnd():
         return ctypes.windll.user32.GetForegroundWindow()
     except Exception:
         return None
+
+
+def _app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.getcwd()
 
 
 # ========== 单例锁（Windows 命名互斥量）==========
@@ -589,7 +594,9 @@ class UpdateDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.configure(fg_color=COLORS["bg"])
         self._parent = parent
-        self.release_url = release.get("html_url") or f"https://github.com/{APP_REPOSITORY}/releases/latest"
+        self.release = release
+        self.latest_version = latest_version
+        self.asset_url = self._find_windows_asset_url(release)
 
         frame = ctk.CTkFrame(self, fg_color=COLORS["card"], corner_radius=12)
         frame.pack(fill="both", expand=True, padx=16, pady=16)
@@ -600,7 +607,7 @@ class UpdateDialog(ctk.CTkToplevel):
         ).pack(padx=16, pady=(16, 6), anchor="w")
 
         ctk.CTkLabel(
-            frame, text=f"当前版本 {APP_VERSION}，可以前往 GitHub Release 下载新版。",
+            frame, text=f"当前版本 {APP_VERSION}，点击一键安装会下载新版到应用所在目录。",
             font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"],
             wraplength=320, justify="left"
         ).pack(padx=16, anchor="w")
@@ -615,8 +622,14 @@ class UpdateDialog(ctk.CTkToplevel):
         textbox.insert("1.0", notes[:800])
         textbox.configure(state="disabled")
 
+        self.status_label = ctk.CTkLabel(
+            frame, text="",
+            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+        )
+        self.status_label.pack(fill="x", padx=16, pady=(8, 0), anchor="w")
+
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(14, 12))
+        btn_frame.pack(fill="x", padx=16, pady=(8, 12))
         ctk.CTkButton(
             btn_frame, text="稍后", width=72, height=32,
             font=ctk.CTkFont(size=12),
@@ -624,20 +637,63 @@ class UpdateDialog(ctk.CTkToplevel):
             hover_color=COLORS["border"], corner_radius=8,
             command=self._close
         ).pack(side="right", padx=(6, 0))
-        ctk.CTkButton(
-            btn_frame, text="打开下载页", width=108, height=32,
+        self.install_btn = ctk.CTkButton(
+            btn_frame, text="一键安装", width=108, height=32,
             font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
-            corner_radius=8, command=self._open_release
-        ).pack(side="right")
+            corner_radius=8, command=self._install_update
+        )
+        self.install_btn.pack(side="right")
 
         self.protocol("WM_DELETE_WINDOW", self._close)
         self._place_centered()
         self.grab_set()
 
-    def _open_release(self):
-        webbrowser.open(self.release_url)
-        self._close()
+    def _find_windows_asset_url(self, release):
+        for asset in release.get("assets", []):
+            name = asset.get("name", "")
+            if name.lower().endswith(".exe"):
+                return asset.get("browser_download_url")
+        return None
+
+    def _install_update(self):
+        if not self.asset_url:
+            self.status_label.configure(text="未找到可下载的 exe 附件")
+            return
+        self.install_btn.configure(state="disabled", text="下载中...")
+        self.status_label.configure(text="正在下载新版...")
+
+        def worker():
+            try:
+                target_name = f"ClipStash-{self.latest_version}.exe"
+                target_path = os.path.join(_app_dir(), target_name)
+                request = urllib.request.Request(
+                    self.asset_url,
+                    headers={"User-Agent": f"ClipStash/{APP_VERSION}"},
+                )
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    data = response.read()
+                with open(target_path, "wb") as f:
+                    f.write(data)
+                self.after(0, lambda: self._finish_install(target_path))
+            except Exception as e:
+                message = f"下载失败: {e}"
+                self.after(0, lambda: self._install_failed(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_install(self, target_path):
+        self.status_label.configure(text=f"已下载到 {target_path}")
+        try:
+            subprocess.Popen([target_path], cwd=os.path.dirname(target_path))
+            self._close()
+            self._parent._quit_app()
+        except Exception as e:
+            self._install_failed(f"启动新版失败: {e}")
+
+    def _install_failed(self, message):
+        self.status_label.configure(text=message)
+        self.install_btn.configure(state="normal", text="一键安装")
 
     def _close(self):
         self.grab_release()
