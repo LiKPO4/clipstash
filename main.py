@@ -11,7 +11,7 @@ import urllib.request
 import webbrowser
 from io import BytesIO
 from clipboard_utils import (
-    get_clipboard_image, copy_text_to_clipboard,
+    get_clipboard_image, get_clipboard_text, copy_text_to_clipboard,
     copy_image_to_clipboard, send_ctrl_v, diagnose_clipboard
 )
 from config import (
@@ -28,7 +28,7 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.0.7"
+APP_VERSION = "v1.0.8"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 
@@ -659,6 +659,8 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
     def _on_paste(self, event=None):
         img, diagnostics = get_clipboard_image()
         if img is None:
+            if get_clipboard_text():
+                return None
             DiagnoseDialog(self, diagnostics)
             return "break"
         buf = BytesIO()
@@ -1218,6 +1220,15 @@ class DemandStashApp(ctk.CTk):
     def _on_paste(self, event=None):
         img, diagnostics = get_clipboard_image()
         if img is None:
+            text = get_clipboard_text()
+            if text:
+                db.add_message(text_content=text)
+                if self.view_mode != "active":
+                    self._switch_view("active")
+                else:
+                    self.load_items()
+                self._show_status("已保存文字")
+                return "break"
             DiagnoseDialog(self, diagnostics)
             return
 

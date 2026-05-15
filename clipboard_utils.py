@@ -475,6 +475,15 @@ def copy_text_to_clipboard(text):
         pyperclip.copy(text)
 
 
+def get_clipboard_text():
+    """读取剪贴板文字。没有文字或读取失败时返回空字符串。"""
+    try:
+        text = pyperclip.paste()
+    except Exception:
+        return ""
+    return text if isinstance(text, str) else ""
+
+
 def copy_image_to_clipboard(image_path):
     image = Image.open(image_path)
     output = BytesIO()
