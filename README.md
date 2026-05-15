@@ -20,7 +20,7 @@ python main.py
 ## 打包
 
 ```powershell
-python -m PyInstaller --noconfirm --onefile --windowed --name ClipStash main.py
+python -m PyInstaller --noconfirm --onefile --windowed --name ClipStash --icon assets/app_icon.ico --add-data "assets;assets" main.py
 ```
 
 生成文件位于 `dist/ClipStash.exe`。

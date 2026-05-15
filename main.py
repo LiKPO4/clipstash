@@ -28,9 +28,10 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.0.8"
+APP_VERSION = "v1.0.9"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
+WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
 
 
 def _parse_version(version_text):
@@ -60,62 +61,28 @@ def _fetch_latest_release():
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8"))
 
-# ========== 生成应用图标 ==========
+def _resource_path(relative_path):
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
+
+# ========== 应用图标 ==========
 def _ensure_app_icon() -> str:
-    """生成应用图标 ICO 文件，返回路径"""
-    icon_dir = os.path.join(os.environ.get("TEMP", "C:\\temp"), "clipstash")
-    os.makedirs(icon_dir, exist_ok=True)
-    icon_path = os.path.join(icon_dir, "app_icon.ico")
-    if os.path.exists(icon_path):
-        return icon_path
+    """返回窗口和任务栏使用的 ICO 图标路径。"""
+    return _resource_path(os.path.join("assets", "app_icon.ico"))
 
-    # 生成多种尺寸的图标
-    sizes = [16, 24, 32, 48, 64, 128, 256]
-    images = []
-    for size in sizes:
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        pad = size // 8
-        radius = size // 6
-        # 蓝色圆角背景
-        draw.rounded_rectangle(
-            [pad, pad, size - pad, size - pad],
-            radius=radius, fill=(59, 130, 246, 255)
-        )
-        # 白色剪贴板图案
-        clip_w = size * 3 // 5
-        clip_h = size * 3 // 5
-        cx = (size - clip_w) // 2
-        cy = (size - clip_h) // 2 + 1
-        clip_radius = max(2, size // 15)
-        draw.rounded_rectangle(
-            [cx, cy, cx + clip_w, cy + clip_h],
-            radius=clip_radius, outline=(255, 255, 255, 255),
-            width=max(1, size // 16)
-        )
-        # 顶部小夹子
-        clip_top_y = cy - size // 12
-        draw.rectangle(
-            [cx + clip_w // 4, clip_top_y, cx + clip_w * 3 // 4, cy],
-            fill=(255, 255, 255, 255)
-        )
-        # 两条横线
-        line_y1 = cy + clip_h // 3
-        line_y2 = cy + clip_h * 2 // 3
-        line_w = clip_w * 2 // 3
-        line_x = cx + (clip_w - line_w) // 2
-        draw.line(
-            [(line_x, line_y1), (line_x + line_w, line_y1)],
-            fill=(255, 255, 255, 255), width=max(1, size // 20)
-        )
-        draw.line(
-            [(line_x, line_y2), (line_x + line_w, line_y2)],
-            fill=(255, 255, 255, 255), width=max(1, size // 20)
-        )
-        images.append(img)
 
-    images[0].save(icon_path, format="ICO", sizes=[(s, s) for s in sizes])
-    return icon_path
+def _load_app_icon_image(size=64):
+    """返回托盘使用的 PNG 图标。"""
+    icon_path = _resource_path(os.path.join("assets", "app_icon.png"))
+    return Image.open(icon_path).convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+
+
+def _set_windows_app_id():
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
+    except Exception:
+        pass
 
 
 # ========== 单例锁（Windows 命名互斥量）==========
@@ -969,15 +936,7 @@ class DemandStashApp(ctk.CTk):
 
     # ---------- 托盘 & 快捷键 ----------
     def _create_tray_image(self):
-        size = 64
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=12, fill=(59, 130, 246, 255))
-        draw.rounded_rectangle([18, 16, 46, 48], radius=4, outline=(255, 255, 255, 255), width=3)
-        draw.line([(24, 16), (24, 12), (40, 12), (40, 16)], fill=(255, 255, 255, 255), width=3)
-        draw.line([(22, 28), (42, 28)], fill=(255, 255, 255, 255), width=2)
-        draw.line([(22, 36), (42, 36)], fill=(255, 255, 255, 255), width=2)
-        return img
+        return _load_app_icon_image(64)
 
     def _setup_tray(self):
         image = self._create_tray_image()
@@ -1426,6 +1385,7 @@ def insert_test_data():
 
 
 if __name__ == "__main__":
+    _set_windows_app_id()
     if not _ensure_single_instance():
         sys.exit(0)
     try:
