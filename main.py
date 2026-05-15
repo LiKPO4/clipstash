@@ -31,11 +31,16 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.2"
+APP_VERSION = "v1.1.3"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
 STARTUP_REG_NAME = "ClipStash"
+SORT_LABELS = {
+    "newest": "最新优先",
+    "oldest": "最早优先",
+}
+SORT_VALUES = {label: value for value, label in SORT_LABELS.items()}
 
 
 def _parse_version(version_text):
@@ -490,10 +495,11 @@ class SettingsDialog(ctk.CTkToplevel):
             sort_frame, text="消息排序",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"]
         ).pack(side="left")
-        self.sort_var = ctk.StringVar(value=self.settings.get("sort_order", "newest"))
+        sort_value = self.settings.get("sort_order", "newest")
+        self.sort_var = ctk.StringVar(value=SORT_LABELS.get(sort_value, "最新优先"))
         sort_menu = ctk.CTkOptionMenu(
             sort_frame, variable=self.sort_var,
-            values=["newest", "oldest"], width=120, height=28,
+            values=list(SORT_VALUES.keys()), width=120, height=28,
             font=ctk.CTkFont(size=12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             button_color=COLORS["primary"], button_hover_color=COLORS["primary_hover"],
@@ -635,7 +641,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def _save(self):
         self.settings["hover_delay_ms"] = int(self.delay_var.get() * 1000)
         self.settings["auto_archive_after_import"] = self.archive_var.get()
-        self.settings["sort_order"] = self.sort_var.get()
+        self.settings["sort_order"] = SORT_VALUES.get(self.sort_var.get(), "newest")
         self.settings["launch_on_startup"] = self.startup_var.get()
         self.settings["show_hotkey"] = _normalize_hotkey(self.show_hotkey_var.get())
         self.settings["capture_hotkey"] = _normalize_hotkey(self.capture_hotkey_var.get())
@@ -662,7 +668,7 @@ class UpdateDialog(ctk.CTkToplevel):
         super().__init__(parent)
         latest_version = release.get("tag_name", "未知版本")
         self.title("发现新版本")
-        self.geometry("380x260")
+        self.geometry("380x320")
         self.resizable(False, False)
         self.transient(parent)
         self.configure(fg_color=COLORS["bg"])
@@ -687,7 +693,7 @@ class UpdateDialog(ctk.CTkToplevel):
 
         notes = (release.get("body") or "该版本没有填写更新说明。").strip()
         textbox = ctk.CTkTextbox(
-            frame, height=90, wrap="word", font=ctk.CTkFont(size=11),
+            frame, height=80, wrap="word", font=ctk.CTkFont(size=11),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             border_width=0, corner_radius=8
         )
