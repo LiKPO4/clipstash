@@ -8,6 +8,7 @@ import ctypes
 import json
 import subprocess
 import textwrap
+import time
 import urllib.error
 import urllib.request
 import winreg
@@ -31,7 +32,7 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.3"
+APP_VERSION = "v1.1.4"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -193,29 +194,113 @@ def _app_dir():
     return os.getcwd()
 
 
+def _looks_like_app_title(title):
+    return (
+        title.startswith(f"{APP_NAME} ")
+        or title.startswith("ClipStash ")
+        or "需求暂存站" in title
+    ) and "@linjianglu" in title
+
+
+def _version_from_title(title):
+    for token in str(title or "").replace("@", " ").split():
+        if token.lower().startswith("v"):
+            parsed = _parse_version(token)
+            if parsed != (0, 0, 0):
+                return parsed
+    return (0, 0, 0)
+
+
+def _get_window_text(hwnd):
+    user32 = ctypes.windll.user32
+    length = user32.GetWindowTextLengthW(hwnd)
+    if length <= 0:
+        return ""
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buffer, length + 1)
+    return buffer.value
+
+
+def _find_running_app_windows():
+    user32 = ctypes.windll.user32
+    windows = []
+    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def enum_proc(hwnd, lparam):
+        title = _get_window_text(hwnd)
+        if title and _looks_like_app_title(title):
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            windows.append({
+                "hwnd": hwnd,
+                "pid": pid.value,
+                "title": title,
+                "version": _version_from_title(title),
+            })
+        return True
+
+    user32.EnumWindows(enum_proc_type(enum_proc), 0)
+    windows.sort(key=lambda item: item["version"], reverse=True)
+    return windows
+
+
+def _show_window(hwnd):
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+
+
+def _terminate_window_process(hwnd):
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return False
+
+    PROCESS_TERMINATE = 0x0001
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid.value)
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(handle, 0))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 # ========== 单例锁（Windows 命名互斥量）==========
 _mutex_handle = None
 
 def _ensure_single_instance():
-    """确保只有一个实例运行。如果已有实例，激活它并退出。"""
+    """确保只有一个实例运行；新版可替换后台旧版。"""
     global _mutex_handle
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     kernel32.GetLastError.restype = ctypes.c_uint32
+    kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 
     _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
     if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        # 激活已有实例
-        user32 = ctypes.windll.user32
-        # 尝试匹配当前版本标题
-        hwnd = user32.FindWindowW(None, f"{APP_NAME} {APP_VERSION}  @linjianglu")
-        if not hwnd:
-            # 兼容旧版本标题
-            hwnd = user32.FindWindowW(None, f"ClipStash {APP_VERSION}  @linjianglu")
-        if hwnd:
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(hwnd)
+        running_windows = _find_running_app_windows()
+        current_version = _parse_version(APP_VERSION)
+        newest_running = running_windows[0] if running_windows else None
+        if newest_running and current_version > newest_running["version"]:
+            for window in running_windows:
+                _terminate_window_process(window["hwnd"])
+            kernel32.CloseHandle(_mutex_handle)
+            _mutex_handle = None
+            time.sleep(0.8)
+            _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
+            if kernel32.GetLastError() != 183:
+                return True
+
+        if newest_running:
+            _show_window(newest_running["hwnd"])
+        if _mutex_handle:
+            kernel32.CloseHandle(_mutex_handle)
+            _mutex_handle = None
         return False
     return True
 
