@@ -6,9 +6,12 @@ import sys
 import threading
 import ctypes
 import json
+import subprocess
+import textwrap
 import urllib.error
 import urllib.request
 import webbrowser
+import winreg
 from io import BytesIO
 from clipboard_utils import (
     get_clipboard_image, get_clipboard_text, copy_text_to_clipboard,
@@ -16,7 +19,8 @@ from clipboard_utils import (
 )
 from config import (
     load_settings, save_settings,
-    get_hover_delay_ms, get_auto_archive_after_import, get_sort_order
+    get_hover_delay_ms, get_auto_archive_after_import, get_sort_order,
+    get_launch_on_startup, get_show_hotkey, get_capture_hotkey
 )
 
 # 托盘 & 全局快捷键
@@ -28,10 +32,11 @@ except ImportError:
     HAS_TRAY = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.0.9"
+APP_VERSION = "v1.1.0"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
+STARTUP_REG_NAME = "ClipStash"
 
 
 def _parse_version(version_text):
@@ -83,6 +88,62 @@ def _set_windows_app_id():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
     except Exception:
         pass
+
+
+def _startup_command():
+    if getattr(sys, "frozen", False):
+        return subprocess.list2cmdline([sys.executable])
+    return subprocess.list2cmdline([sys.executable, os.path.abspath(__file__)])
+
+
+def _set_launch_on_startup(enabled):
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            if enabled:
+                winreg.SetValueEx(key, STARTUP_REG_NAME, 0, winreg.REG_SZ, _startup_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, STARTUP_REG_NAME)
+                except FileNotFoundError:
+                    pass
+    except Exception:
+        pass
+
+
+def _normalize_hotkey(text):
+    aliases = {
+        "ctrl": "<ctrl>",
+        "control": "<ctrl>",
+        "<control>": "<ctrl>",
+        "shift": "<shift>",
+        "alt": "<alt>",
+        "win": "<cmd>",
+        "windows": "<cmd>",
+        "cmd": "<cmd>",
+        "space": "<space>",
+        "enter": "<enter>",
+        "esc": "<esc>",
+        "escape": "<esc>",
+    }
+    parts = []
+    for raw_part in str(text or "").replace(" ", "").split("+"):
+        if not raw_part:
+            continue
+        part = raw_part.lower()
+        parts.append(aliases.get(part, part if part.startswith("<") else part))
+    return "+".join(parts)
+
+
+def _get_foreground_hwnd():
+    try:
+        return ctypes.windll.user32.GetForegroundWindow()
+    except Exception:
+        return None
 
 
 # ========== 单例锁（Windows 命名互斥量）==========
@@ -156,6 +217,25 @@ def center_window(window, parent):
     x = px + (pw - ww) // 2
     y = py + (ph - wh) // 2
     window.geometry(f"+{x}+{y}")
+
+
+def _wrap_preview_text(text, width=58, max_lines=5):
+    lines = []
+    for raw_line in str(text or "").splitlines() or [""]:
+        wrapped = textwrap.wrap(
+            raw_line,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=False,
+        )
+        lines.extend(wrapped or [""])
+        if len(lines) >= max_lines:
+            break
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+    return "\n".join(lines)
 
 
 # ========== 悬浮预览 ==========
@@ -319,7 +399,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_save=None):
         super().__init__(parent)
         self.title("设置")
-        self.geometry("360x340")
+        self.geometry("420x520")
         self.resizable(False, False)
         self.transient(parent)
         self.configure(fg_color=COLORS["bg"])
@@ -399,6 +479,57 @@ class SettingsDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
+        self.startup_var = ctk.BooleanVar(
+            value=self.settings.get("launch_on_startup", False)
+        )
+        startup_switch = ctk.CTkSwitch(
+            frame, text="开机自启动",
+            variable=self.startup_var,
+            font=ctk.CTkFont(size=13), text_color=COLORS["text"],
+            progress_color=COLORS["primary"],
+            button_color=COLORS["primary"],
+            button_hover_color=COLORS["primary_hover"],
+        )
+        startup_switch.pack(fill="x", padx=16, pady=(12, 0))
+        ctk.CTkLabel(
+            frame, text="登录 Windows 后自动启动需求暂存站",
+            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+        ).pack(padx=16, anchor="w")
+
+        ctk.CTkLabel(
+            frame, text="呼出界面快捷键",
+            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+        ).pack(fill="x", padx=16, pady=(12, 4), anchor="w")
+        self.show_hotkey_var = ctk.StringVar(
+            value=self.settings.get("show_hotkey", "<ctrl>+<shift>+v")
+        )
+        self.show_hotkey_entry = ctk.CTkEntry(
+            frame, textvariable=self.show_hotkey_var,
+            font=ctk.CTkFont(size=12), height=30,
+            fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
+            border_color=COLORS["border"], corner_radius=8,
+        )
+        self.show_hotkey_entry.pack(fill="x", padx=16)
+
+        ctk.CTkLabel(
+            frame, text="导入当前剪切板快捷键",
+            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+        ).pack(fill="x", padx=16, pady=(12, 4), anchor="w")
+        self.capture_hotkey_var = ctk.StringVar(
+            value=self.settings.get("capture_hotkey", "<ctrl>+<alt>+v")
+        )
+        self.capture_hotkey_entry = ctk.CTkEntry(
+            frame, textvariable=self.capture_hotkey_var,
+            font=ctk.CTkFont(size=12), height=30,
+            fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
+            border_color=COLORS["border"], corner_radius=8,
+        )
+        self.capture_hotkey_entry.pack(fill="x", padx=16)
+        ctk.CTkLabel(
+            frame, text="格式示例：<ctrl>+<shift>+v 或 ctrl+alt+v",
+            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+        ).pack(padx=16, anchor="w")
+
         # 按钮
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
         btn_frame.pack(fill="x", padx=16, pady=(16, 12))
@@ -427,7 +558,11 @@ class SettingsDialog(ctk.CTkToplevel):
         self.settings["hover_delay_ms"] = int(self.delay_var.get() * 1000)
         self.settings["auto_archive_after_import"] = self.archive_var.get()
         self.settings["sort_order"] = self.sort_var.get()
+        self.settings["launch_on_startup"] = self.startup_var.get()
+        self.settings["show_hotkey"] = _normalize_hotkey(self.show_hotkey_var.get())
+        self.settings["capture_hotkey"] = _normalize_hotkey(self.capture_hotkey_var.get())
         save_settings(self.settings)
+        _set_launch_on_startup(self.settings["launch_on_startup"])
         if self.on_save:
             self.on_save()
         self._close()
@@ -830,13 +965,14 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
     def _render_text(self):
         text_bg = ctk.CTkFrame(self, fg_color=COLORS["tag_bg"], corner_radius=6)
         text_bg.pack(fill="x", padx=10, pady=(0, 10))
+        preview_text = _wrap_preview_text(self.text_content)
         text_label = ctk.CTkLabel(
-            text_bg, text=self.text_content,
-            wraplength=430, justify="left",
+            text_bg, text=preview_text,
+            wraplength=520, justify="left", anchor="w",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"],
-            cursor="hand2"
+            cursor="hand2", width=1
         )
-        text_label.pack(padx=10, pady=8, anchor="w")
+        text_label.pack(fill="x", padx=10, pady=8, anchor="w")
 
         def on_click(e, txt=self.text_content):
             self.callbacks["copy_text"](txt)
@@ -918,6 +1054,9 @@ class DemandStashApp(ctk.CTk):
         self._import_msg_id = None
         self._editor_dialog = None
         self._checking_update = False
+        self._hotkey_listener = None
+        self._return_hwnd = None
+        _set_launch_on_startup(get_launch_on_startup())
 
         self.bind("<Control-v>", self._on_paste)
         self.bind("<Control-V>", self._on_paste)
@@ -927,6 +1066,7 @@ class DemandStashApp(ctk.CTk):
         self._create_content()
         self._create_footer()
         self.load_items()
+        self._track_foreground_window()
 
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
 
@@ -949,16 +1089,39 @@ class DemandStashApp(ctk.CTk):
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
     def _start_hotkey_listener(self):
-        def on_hotkey():
-            self.after(0, self._toggle_show_hide)
+        if not HAS_TRAY:
+            return
+        if self._hotkey_listener:
+            try:
+                self._hotkey_listener.stop()
+            except Exception:
+                pass
+            self._hotkey_listener = None
+
+        show_hotkey = _normalize_hotkey(get_show_hotkey())
+        capture_hotkey = _normalize_hotkey(get_capture_hotkey())
+        hotkeys = {}
+        if show_hotkey:
+            hotkeys[show_hotkey] = lambda: self.after(0, self._toggle_show_hide)
+        if capture_hotkey and capture_hotkey != show_hotkey:
+            hotkeys[capture_hotkey] = lambda: self.after(0, self._capture_current_clipboard)
+        if not hotkeys:
+            self._show_status("未启用全局快捷键")
+            return
 
         def listen():
-            with keyboard.GlobalHotKeys({"<ctrl>+<shift>+v": on_hotkey}) as h:
-                h.join()
+            try:
+                with keyboard.GlobalHotKeys(hotkeys) as h:
+                    self._hotkey_listener = h
+                    h.join()
+            except Exception as e:
+                message = f"快捷键注册失败: {e}"
+                self.after(0, lambda: self._show_status(message))
 
         threading.Thread(target=listen, daemon=True).start()
 
     def _show_from_tray(self, icon=None, item=None):
+        self._return_hwnd = _get_foreground_hwnd()
         self.after(0, self._do_show)
 
     def _do_show(self):
@@ -966,11 +1129,21 @@ class DemandStashApp(ctk.CTk):
         self.lift()
         self.focus_force()
 
+    def _track_foreground_window(self):
+        hwnd = _get_foreground_hwnd()
+        try:
+            if hwnd and hwnd != self.winfo_id() and ctypes.windll.user32.IsWindow(hwnd):
+                self._return_hwnd = hwnd
+        except Exception:
+            pass
+        self.after(500, self._track_foreground_window)
+
     def _hide_to_tray(self):
         self.withdraw()
 
     def _toggle_show_hide(self):
         if self.state() == "withdrawn":
+            self._return_hwnd = _get_foreground_hwnd()
             self._do_show()
         else:
             self._hide_to_tray()
@@ -979,6 +1152,11 @@ class DemandStashApp(ctk.CTk):
         self.after(0, self._quit_app)
 
     def _quit_app(self):
+        if self._hotkey_listener:
+            try:
+                self._hotkey_listener.stop()
+            except Exception:
+                pass
         if self._tray_icon:
             try:
                 self._tray_icon.stop()
@@ -1083,10 +1261,12 @@ class DemandStashApp(ctk.CTk):
             font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]
         )
         self.status_bar.pack(side="left", padx=16)
-        ctk.CTkLabel(
+        self.hotkey_hint_label = ctk.CTkLabel(
             self.footer, text="Ctrl+Shift+V 呼出",
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
-        ).pack(side="right", padx=16)
+        )
+        self.hotkey_hint_label.pack(side="right", padx=16)
+        self._refresh_hotkey_hint()
 
     def _toggle_always_on_top(self):
         self._always_on_top = not self._always_on_top
@@ -1099,7 +1279,17 @@ class DemandStashApp(ctk.CTk):
             self._show_status("已取消置顶")
 
     def _open_settings(self):
-        SettingsDialog(self, on_save=self.load_items)
+        SettingsDialog(self, on_save=self._on_settings_saved)
+
+    def _on_settings_saved(self):
+        self.load_items()
+        self._start_hotkey_listener()
+        self._refresh_hotkey_hint()
+        self._show_status("设置已保存")
+
+    def _refresh_hotkey_hint(self):
+        if hasattr(self, "hotkey_hint_label"):
+            self.hotkey_hint_label.configure(text=f"{get_show_hotkey()} 呼出")
 
     def _check_for_updates(self, icon=None, item=None):
         if self._checking_update:
@@ -1205,6 +1395,31 @@ class DemandStashApp(ctk.CTk):
         dialog.images.append((img, buf.getvalue()))
         dialog._render_thumbnails()
 
+    def _capture_current_clipboard(self):
+        img, diagnostics = get_clipboard_image()
+        if img is not None:
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            db.add_message(images_data=[buf.getvalue()])
+            if self.view_mode != "active":
+                self._switch_view("active")
+            else:
+                self.load_items()
+            self._show_status("已导入剪切板图片")
+            return
+
+        text = get_clipboard_text()
+        if text:
+            db.add_message(text_content=text)
+            if self.view_mode != "active":
+                self._switch_view("active")
+            else:
+                self.load_items()
+            self._show_status("已导入剪切板文字")
+            return
+
+        self._show_status("剪切板没有可导入内容")
+
     def _on_edit_message(self, msg_id: int):
         item = db.get_message(msg_id)
         if not item:
@@ -1255,9 +1470,24 @@ class DemandStashApp(ctk.CTk):
             return
 
         self._import_msg_id = msg_id
-        self._hide_to_tray()
+        if not self._focus_return_window():
+            self._show_status("请先呼出窗口，再点击导入")
+            return
         self._show_status("正在导入...")
         self.after(300, self._do_import_step)
+
+    def _focus_return_window(self):
+        hwnd = self._return_hwnd
+        if not hwnd:
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            if not user32.IsWindow(hwnd) or hwnd == self.winfo_id():
+                return False
+            user32.ShowWindow(hwnd, 9)
+            return bool(user32.SetForegroundWindow(hwnd))
+        except Exception:
+            return False
 
     def _do_import_step(self):
         if not self._import_queue:

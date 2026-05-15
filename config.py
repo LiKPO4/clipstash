@@ -14,6 +14,9 @@ DEFAULT_SETTINGS = {
     "hover_delay_ms": 800,
     "auto_archive_after_import": False,
     "sort_order": "newest",  # "newest" | "oldest"
+    "launch_on_startup": False,
+    "show_hotkey": "<ctrl>+<shift>+v",
+    "capture_hotkey": "<ctrl>+<alt>+v",
 }
 
 _settings = None
@@ -59,6 +62,18 @@ def get_auto_archive_after_import():
 
 def get_sort_order():
     return load_settings().get("sort_order", "newest")
+
+
+def get_launch_on_startup():
+    return load_settings().get("launch_on_startup", False)
+
+
+def get_show_hotkey():
+    return load_settings().get("show_hotkey", "<ctrl>+<shift>+v")
+
+
+def get_capture_hotkey():
+    return load_settings().get("capture_hotkey", "<ctrl>+<alt>+v")
 
 
 os.makedirs(DATA_DIR, exist_ok=True)
