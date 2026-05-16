@@ -24,7 +24,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.6"
+APP_VERSION = "v1.1.7"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -1135,6 +1135,10 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
 # ========== 消息卡片 ==========
 class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
+    CONTENT_PAD_X = 14
+    CONTENT_TOP_PAD = 10
+    CONTENT_GAP_Y = 10
+
     def __init__(self, parent, item, view_mode, callbacks):
         HoverPreviewMixin.__init__(self)
         msg_id, text_content, image_filenames, created_at = item
@@ -1158,7 +1162,11 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
             ctk.CTkLabel(
                 self, text="（空消息）",
                 font=ctk.CTkFont(size=12), text_color=COLORS["text_hint"]
-            ).pack(padx=14, pady=(10, 4), anchor="w")
+            ).pack(
+                padx=self.CONTENT_PAD_X,
+                pady=(self.CONTENT_TOP_PAD, 4),
+                anchor="w"
+            )
 
         self._render_footer(view_mode)
 
@@ -1169,7 +1177,11 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         max_display = max_per_row * max_rows
 
         img_container = ctk.CTkFrame(self, fg_color="transparent")
-        img_container.pack(fill="x", padx=10, pady=(8, 0))
+        img_container.pack(
+            fill="x",
+            padx=self.CONTENT_PAD_X,
+            pady=(self.CONTENT_TOP_PAD, 0)
+        )
 
         for idx, img_file in enumerate(self.image_filenames[:max_display]):
             image_path = db.get_image_path(img_file)
@@ -1218,11 +1230,15 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
     def _render_text(self):
         text_bg = ctk.CTkFrame(self, fg_color=COLORS["tag_bg"], corner_radius=6)
-        text_bg.pack(fill="x", padx=14, pady=(0, 10))
+        text_bg.pack(
+            fill="x",
+            padx=self.CONTENT_PAD_X,
+            pady=(self.CONTENT_GAP_Y, 10)
+        )
         preview_text = _wrap_preview_text(self.text_content)
         text_label = ctk.CTkLabel(
             text_bg, text=preview_text,
-            wraplength=470, justify="left", anchor="w",
+            wraplength=450, justify="left", anchor="w",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"],
             cursor="hand2", width=1
         )
@@ -1235,7 +1251,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
     def _render_footer(self, view_mode):
         footer = ctk.CTkFrame(self, fg_color="transparent", height=28)
-        footer.pack(fill="x", padx=10, pady=(0, 8))
+        footer.pack(fill="x", padx=self.CONTENT_PAD_X, pady=(0, 8))
         footer.pack_propagate(False)
 
         time_str = str(self.created_at).split(".")[0] if self.created_at else ""
