@@ -24,7 +24,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.8"
+APP_VERSION = "v1.1.9"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -607,6 +607,8 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self.settings = load_settings()
         self._hotkey_capture_key = None
+        self._hotkey_capture_listener = None
+        self._hotkey_capture_modifiers = set()
 
         frame = ctk.CTkFrame(self, fg_color=COLORS["card"], corner_radius=12)
         frame.pack(fill="both", expand=True, padx=16, pady=16)
@@ -779,28 +781,134 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _bind_hotkey_entry(self, entry, variable, setting_key):
         def arm_capture(event=None):
-            self._hotkey_capture_key = setting_key
-            variable.set("请按下快捷键...")
-            entry.focus_set()
+            self._start_hotkey_capture(entry, variable, setting_key)
             return "break"
 
-        def capture(event):
+        entry.bind("<Button-1>", arm_capture)
+        entry.bind("<FocusIn>", arm_capture)
+        entry.bind("<KeyPress>", lambda event: "break")
+
+    def _start_hotkey_capture(self, entry, variable, setting_key):
+        self._stop_hotkey_capture()
+        if not _load_tray_modules():
+            variable.set("快捷键模块不可用")
+            return
+
+        self._hotkey_capture_key = setting_key
+        self._hotkey_capture_modifiers = set()
+        variable.set("请按下快捷键...")
+        entry.focus_set()
+
+        def finish(hotkey):
             if self._hotkey_capture_key != setting_key:
-                return "break"
-            hotkey = _hotkey_from_event(event)
-            if not hotkey:
-                return "break"
+                return
             self._hotkey_capture_key = None
+            self._hotkey_capture_listener = None
+            self._hotkey_capture_modifiers = set()
             variable.set(hotkey)
             self.settings[setting_key] = hotkey
             save_settings(self.settings)
             if self.on_save:
                 self.on_save()
             self.focus_set()
-            return "break"
 
-        entry.bind("<Button-1>", arm_capture)
-        entry.bind("<KeyPress>", capture)
+        def on_press(key):
+            modifier = self._pynput_modifier_name(key)
+            if modifier:
+                self._hotkey_capture_modifiers.add(modifier)
+                return
+
+            main_key = self._pynput_main_key(key)
+            if not main_key:
+                return
+
+            parts = []
+            for modifier_name in ("<ctrl>", "<shift>", "<alt>", "<cmd>"):
+                if modifier_name in self._hotkey_capture_modifiers:
+                    parts.append(modifier_name)
+            parts.append(main_key)
+            hotkey = "+".join(parts)
+            self.after(0, lambda: finish(hotkey))
+            return False
+
+        def on_release(key):
+            modifier = self._pynput_modifier_name(key)
+            if modifier:
+                self._hotkey_capture_modifiers.discard(modifier)
+
+        self._hotkey_capture_listener = keyboard.Listener(
+            on_press=on_press,
+            on_release=on_release,
+            suppress=False
+        )
+        self._hotkey_capture_listener.start()
+
+    def _stop_hotkey_capture(self):
+        listener = self._hotkey_capture_listener
+        self._hotkey_capture_listener = None
+        self._hotkey_capture_key = None
+        self._hotkey_capture_modifiers = set()
+        if listener:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+
+    def _pynput_modifier_name(self, key):
+        modifier_map = {
+            keyboard.Key.ctrl: "<ctrl>",
+            keyboard.Key.ctrl_l: "<ctrl>",
+            keyboard.Key.ctrl_r: "<ctrl>",
+            keyboard.Key.shift: "<shift>",
+            keyboard.Key.shift_l: "<shift>",
+            keyboard.Key.shift_r: "<shift>",
+            keyboard.Key.alt: "<alt>",
+            keyboard.Key.alt_l: "<alt>",
+            keyboard.Key.alt_r: "<alt>",
+            keyboard.Key.alt_gr: "<alt>",
+            keyboard.Key.cmd: "<cmd>",
+            keyboard.Key.cmd_l: "<cmd>",
+            keyboard.Key.cmd_r: "<cmd>",
+        }
+        return modifier_map.get(key, "")
+
+    def _pynput_main_key(self, key):
+        vk = getattr(key, "vk", None)
+        if isinstance(vk, int):
+            if 65 <= vk <= 90:
+                return chr(vk).lower()
+            if 48 <= vk <= 57:
+                return chr(vk)
+            if 96 <= vk <= 105:
+                return str(vk - 96)
+            if 112 <= vk <= 123:
+                return f"<f{vk - 111}>"
+
+        char = getattr(key, "char", None)
+        if char and char.isprintable() and len(char) == 1:
+            return char.lower()
+
+        key_name = getattr(key, "name", "")
+        aliases = {
+            "space": "<space>",
+            "enter": "<enter>",
+            "esc": "<esc>",
+            "backspace": "<backspace>",
+            "delete": "<delete>",
+            "tab": "<tab>",
+            "insert": "<insert>",
+            "home": "<home>",
+            "end": "<end>",
+            "page_up": "<page_up>",
+            "page_down": "<page_down>",
+            "left": "<left>",
+            "right": "<right>",
+            "up": "<up>",
+            "down": "<down>",
+        }
+        if key_name.startswith("f") and key_name[1:].isdigit():
+            return f"<{key_name}>"
+        return aliases.get(key_name, "")
 
     def _check_updates(self):
         if hasattr(self._parent, "_check_for_updates"):
@@ -833,6 +941,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self._close()
 
     def _close(self):
+        self._stop_hotkey_capture()
         self.grab_release()
         self.destroy()
 
