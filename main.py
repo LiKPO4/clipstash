@@ -9,6 +9,7 @@ import json
 import subprocess
 import textwrap
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 import winreg
@@ -24,7 +25,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.9"
+APP_VERSION = "v1.2.0"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -389,6 +390,19 @@ COLORS = {
 
 
 # ========== 工具函数 ==========
+def _format_local_time(utc_str):
+    """将 UTC 时间字符串转换为本地时区字符串"""
+    if not utc_str:
+        return ""
+    try:
+        dt = datetime.strptime(str(utc_str).split(".")[0], "%Y-%m-%d %H:%M:%S")
+        dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(utc_str)
+
+
 def _resize_keep_ratio(pil_image, max_w, max_h):
     w, h = pil_image.size
     ratio = min(max_w / w, max_h / h, 1.0)
@@ -1435,7 +1449,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         footer.pack(fill="x", padx=self.CONTENT_PAD_X, pady=(0, 8))
         footer.pack_propagate(False)
 
-        time_str = str(self.created_at).split(".")[0] if self.created_at else ""
+        time_str = _format_local_time(self.created_at)
         ctk.CTkLabel(
             footer, text=time_str,
             font=ctk.CTkFont(size=10), text_color=COLORS["text_hint"]
@@ -1507,6 +1521,7 @@ class DemandStashApp(ctk.CTk):
         self._checking_update = False
         self._hotkey_listener = None
         self._return_hwnd = None
+        self._load_items_after_id = None
         _set_launch_on_startup(get_launch_on_startup())
 
         self.bind("<Control-v>", self._on_paste)
@@ -1516,7 +1531,7 @@ class DemandStashApp(ctk.CTk):
         self._create_header()
         self._create_content()
         self._create_footer()
-        self.load_items()
+        self.load_items(immediate=True)
         self._track_foreground_window()
 
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
@@ -1530,7 +1545,8 @@ class DemandStashApp(ctk.CTk):
             self._start_hotkey_listener()
 
     def _create_tray_image(self):
-        return _load_app_icon_image(64)
+        # 使用 256x256 原图，让 Windows 自行缩放到合适的托盘尺寸，避免模糊
+        return _load_app_icon_image(256)
 
     def _setup_tray(self):
         image = self._create_tray_image()
@@ -1998,12 +2014,26 @@ class DemandStashApp(ctk.CTk):
         self.status_bar.configure(text=message)
         self.after(duration, lambda: self.status_bar.configure(text=""))
 
-    def load_items(self):
-        # 安全清理：只销毁 _parent_frame 内的内容，不动 canvas/scrollbar
+    def load_items(self, immediate=False):
+        """渲染消息列表。使用延迟机制避免快速切换时的卡顿和残留。"""
+        # 取消上一次的延迟渲染
+        if self._load_items_after_id:
+            self.after_cancel(self._load_items_after_id)
+            self._load_items_after_id = None
+
+        if immediate:
+            self._do_load_items()
+        else:
+            # 延迟 50ms 渲染，如果期间再次调用会取消旧的
+            self._load_items_after_id = self.after(50, self._do_load_items)
+
+    def _do_load_items(self):
+        """实际执行列表渲染"""
+        self._load_items_after_id = None
+
         parent_frame = self.scroll_frame._parent_frame
         for widget in list(parent_frame.winfo_children()):
             widget.destroy()
-        parent_frame.update_idletasks()
 
         sort_order = get_sort_order()
         items = db.get_all_messages(
@@ -2029,6 +2059,20 @@ class DemandStashApp(ctk.CTk):
         for item in items:
             MessageCard(parent_frame, item, self.view_mode, callbacks)
 
+        # 强制更新滚动区域，确保滚动条正常工作
+        self._update_scroll_region()
+
+    def _update_scroll_region(self):
+        """更新 CTkScrollableFrame 的滚动区域并重置到顶部"""
+        try:
+            canvas = self.scroll_frame._parent_canvas
+            parent_frame = self.scroll_frame._parent_frame
+            parent_frame.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.yview_moveto(0)
+        except Exception:
+            pass
+
     def _render_empty_state(self):
         parent_frame = self.scroll_frame._parent_frame
         empty_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
@@ -2051,6 +2095,8 @@ class DemandStashApp(ctk.CTk):
             empty_frame.bind("<Button-1>", lambda e: self._on_new_message())
             for child in empty_frame.winfo_children():
                 child.bind("<Button-1>", lambda e: self._on_new_message())
+
+        self._update_scroll_region()
 
     def _copy_image(self, image_path):
         try:
