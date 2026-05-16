@@ -21,11 +21,12 @@ from clipboard_utils import (
 from config import (
     load_settings, save_settings,
     get_hover_delay_ms, get_auto_archive_after_import, get_sort_order,
-    get_launch_on_startup, get_show_hotkey, get_capture_hotkey
+    get_launch_on_startup, get_show_hotkey, get_capture_hotkey,
+    get_scroll_speed
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.2.0"
+APP_VERSION = "v1.3.2"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -93,6 +94,131 @@ def _set_windows_app_id():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
     except Exception:
         pass
+
+
+def _hicon_to_pil(hicon, size=64):
+    """将 Windows HICON 转换为 Pillow RGBA Image"""
+    try:
+        import win32gui
+        from PIL import Image
+        import ctypes
+
+        hdc = win32gui.GetDC(0)
+        hdcMem = win32gui.CreateCompatibleDC(hdc)
+
+        bmi = ctypes.create_string_buffer(40)
+        ctypes.memset(bmi, 0, 40)
+        ctypes.memmove(bmi, ctypes.c_int32(40), 4)
+        ctypes.memmove(ctypes.addressof(bmi) + 4, ctypes.c_int32(size), 4)
+        ctypes.memmove(ctypes.addressof(bmi) + 8, ctypes.c_int32(-size), 4)
+        ctypes.memmove(ctypes.addressof(bmi) + 12, ctypes.c_int16(1), 2)
+        ctypes.memmove(ctypes.addressof(bmi) + 14, ctypes.c_int16(32), 2)
+
+        ppvBits = ctypes.c_void_p()
+        hBitmap = ctypes.windll.gdi32.CreateDIBSection(
+            hdcMem, bmi, 0, ctypes.byref(ppvBits), None, 0
+        )
+        ctypes.windll.gdi32.SelectObject(hdcMem, hBitmap)
+        ctypes.windll.user32.DrawIconEx(hdcMem, 0, 0, hicon, size, size, 0, 0, 0x0003)
+
+        buf = ctypes.string_at(ppvBits.value, size * size * 4)
+        img = Image.frombuffer('RGBA', (size, size), buf, 'raw', 'BGRA', 0, 1)
+
+        ctypes.windll.gdi32.DeleteObject(hBitmap)
+        win32gui.DeleteDC(hdcMem)
+        win32gui.ReleaseDC(0, hdc)
+        return img
+    except Exception:
+        return None
+
+
+def _get_icon_from_shfileinfo(path, large=True):
+    """使用 SHGetFileInfo 获取 Windows 资源管理器显示的图标句柄"""
+    try:
+        shell32 = ctypes.windll.shell32
+        SHGFI_ICON = 0x00000100
+        SHGFI_LARGEICON = 0x00000000
+        SHGFI_SMALLICON = 0x00000001
+        
+        class SHFILEINFO(ctypes.Structure):
+            _fields_ = [
+                ("hIcon", ctypes.c_void_p),
+                ("iIcon", ctypes.c_int),
+                ("dwAttributes", ctypes.c_uint),
+                ("szDisplayName", ctypes.c_wchar * 260),
+                ("szTypeName", ctypes.c_wchar * 80),
+            ]
+        
+        sfi = SHFILEINFO()
+        flags = SHGFI_ICON | (SHGFI_LARGEICON if large else SHGFI_SMALLICON)
+        result = shell32.SHGetFileInfoW(path, 0, ctypes.byref(sfi), ctypes.sizeof(sfi), flags)
+        if result and sfi.hIcon:
+            return sfi.hIcon
+    except Exception:
+        pass
+    return None
+
+
+def _set_taskbar_icon(hwnd, icon_path):
+    """设置任务栏图标：优先用 exe 内嵌资源，fallback 从 ICO 文件加载"""
+    log_lines = ["_set_taskbar_icon called"]
+    log_lines.append(f"icon_path: {icon_path}")
+    log_lines.append(f"exists: {os.path.exists(icon_path)}")
+    log_lines.append(f"sys.executable: {sys.executable}")
+    hicon = None
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x00000010
+        WM_SETICON = 0x0080
+        GCLP_HICON = -14
+        GCLP_HICONSM = -34
+
+        # 方法1: 从 exe 内嵌资源加载（最可靠，确保和文件资源管理器一致）
+        try:
+            import win32gui
+            large_icons, small_icons = win32gui.ExtractIconEx(sys.executable, 0)
+            log_lines.append(f"ExtractIconEx: large={len(large_icons)}, small={len(small_icons)}")
+            if large_icons:
+                hicon = large_icons[0]
+                log_lines.append(f"Using ExtractIconEx large[0] = {hicon}")
+        except Exception as e:
+            log_lines.append(f"ExtractIconEx error: {e}")
+
+        # 方法2: 从 ICO 文件加载
+        if not hicon and os.path.exists(icon_path):
+            hicon = user32.LoadImageW(None, icon_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
+            log_lines.append(f"LoadImageW result: {hicon}")
+
+        # 方法3: SHGetFileInfo fallback
+        if not hicon:
+            hicon = _get_icon_from_shfileinfo(sys.executable, large=True)
+            log_lines.append(f"SHGetFileInfo result: {hicon}")
+
+        if hicon:
+            # WM_SETICON 设置窗口自身图标
+            user32.SendMessageW(hwnd, WM_SETICON, 1, hicon)
+            user32.SendMessageW(hwnd, WM_SETICON, 0, hicon)
+            log_lines.append("WM_SETICON sent")
+            # SetClassLongPtr 设置窗口类图标，影响任务栏
+            try:
+                user32.SetClassLongPtrW(hwnd, GCLP_HICON, hicon)
+                user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, hicon)
+                log_lines.append("SetClassLongPtrW sent")
+            except Exception as e:
+                log_lines.append(f"SetClassLongPtrW error: {e}")
+    except Exception as e:
+        log_lines.append(f"Exception: {e}")
+        import traceback
+        log_lines.append(traceback.format_exc())
+    finally:
+        log_path = os.path.join(os.environ.get("TEMP", "C:\\temp"), "clipstash_icon.log")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(log_lines))
+        except Exception:
+            pass
 
 
 def _startup_command():
@@ -336,11 +462,61 @@ def _terminate_window_process(hwnd):
         kernel32.CloseHandle(handle)
 
 
+def _kill_other_clipstash_processes():
+    """通过可执行文件名匹配，终止所有其他 ClipStash / 需求暂存站进程。
+    用于兜底杀死无窗口、无托盘的后台残留实例。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+
+        current_pid = kernel32.GetCurrentProcessId()
+
+        cb_needed = wintypes.DWORD()
+        pids = (wintypes.DWORD * 1024)()
+        if not psapi.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(cb_needed)):
+            return
+
+        num_pids = cb_needed.value // ctypes.sizeof(wintypes.DWORD)
+        killed = 0
+
+        for i in range(num_pids):
+            pid = pids[i]
+            if pid == 0 or pid == current_pid:
+                continue
+
+            h_process = kernel32.OpenProcess(0x0410, False, pid)  # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+            if not h_process:
+                continue
+
+            try:
+                filename = ctypes.create_unicode_buffer(512)
+                size = wintypes.DWORD(512)
+                if kernel32.QueryFullProcessImageNameW(h_process, 0, filename, ctypes.byref(size)):
+                    path = filename.value
+                    name = os.path.basename(path).lower()
+                    if "clipstash" in name or "需求暂存站" in name:
+                        h_terminate = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+                        if h_terminate:
+                            kernel32.TerminateProcess(h_terminate, 0)
+                            kernel32.CloseHandle(h_terminate)
+                            killed += 1
+            finally:
+                kernel32.CloseHandle(h_process)
+
+        if killed:
+            time.sleep(1.0)
+    except Exception:
+        pass
+
+
 # ========== 单例锁（Windows 命名互斥量）==========
 _mutex_handle = None
 
 def _ensure_single_instance():
-    """确保只有一个实例运行；新版可替换后台旧版。"""
+    """确保只有一个实例运行；检测到旧实例时先全部杀死，再启动新实例。"""
     global _mutex_handle
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
@@ -351,21 +527,19 @@ def _ensure_single_instance():
 
     _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
     if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        # 1) 先通过窗口句柄杀（快速路径）
         running_windows = _find_running_app_windows()
-        current_version = _parse_version(APP_VERSION)
-        newest_running = running_windows[0] if running_windows else None
-        if newest_running and current_version > newest_running["version"]:
-            for window in running_windows:
-                _terminate_window_process(window["hwnd"])
-            kernel32.CloseHandle(_mutex_handle)
-            _mutex_handle = None
-            time.sleep(0.8)
-            _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
-            if kernel32.GetLastError() != 183:
-                return True
+        for window in running_windows:
+            _terminate_window_process(window["hwnd"])
+        # 2) 再兜底：通过进程名杀死所有遗漏的旧进程（无窗口/无托盘的后台实例）
+        _kill_other_clipstash_processes()
 
-        if newest_running:
-            _show_window(newest_running["hwnd"])
+        kernel32.CloseHandle(_mutex_handle)
+        _mutex_handle = None
+        _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
+        if kernel32.GetLastError() != 183:
+            return True
+
         if _mutex_handle:
             kernel32.CloseHandle(_mutex_handle)
             _mutex_handle = None
@@ -612,7 +786,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_save=None):
         super().__init__(parent)
         self.title("设置")
-        self.geometry("420x700")
+        self.geometry("420x680")
         self.resizable(False, False)
         self.transient(parent)
         self.configure(fg_color=COLORS["bg"])
@@ -634,14 +808,14 @@ class SettingsDialog(ctk.CTkToplevel):
 
         # 悬浮延迟
         delay_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        delay_frame.pack(fill="x", padx=16, pady=(12, 4))
+        delay_frame.pack(fill="x", padx=16, pady=(8, 2))
         ctk.CTkLabel(
             delay_frame, text="悬浮预览延迟",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"]
         ).pack(side="left")
-        self.delay_var = ctk.DoubleVar(value=self.settings.get("hover_delay_ms", 800) / 1000.0)
+        initial_delay = self.settings.get("hover_delay_ms", 800) / 1000.0
         self.delay_label = ctk.CTkLabel(
-            delay_frame, text=f"{self.delay_var.get():.1f} 秒",
+            delay_frame, text=f"{initial_delay:.1f} 秒",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=COLORS["primary"], width=60
         )
@@ -649,17 +823,45 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self.slider = ctk.CTkSlider(
             frame, from_=0.2, to=3.0, number_of_steps=28,
-            variable=self.delay_var, command=self._on_slider_change
+            command=self._on_slider_change
         )
+        self.slider.set(initial_delay)
         self.slider.pack(fill="x", padx=16, pady=(0, 2))
         ctk.CTkLabel(
             frame, text="鼠标放在图片上多久后显示预览",
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
+        # 滚动速度
+        speed_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        speed_frame.pack(fill="x", padx=16, pady=(8, 2))
+        ctk.CTkLabel(
+            speed_frame, text="滚动速度",
+            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+        ).pack(side="left")
+        self.speed_label = ctk.CTkLabel(
+            speed_frame, text="",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=COLORS["primary"], width=60
+        )
+        self.speed_label.pack(side="right")
+
+        self.speed_slider = ctk.CTkSlider(
+            frame, from_=1, to=5, number_of_steps=4,
+            command=self._on_speed_slider_change
+        )
+        initial_speed = self.settings.get("scroll_speed", 2)
+        self.speed_slider.set(initial_speed)
+        self._on_speed_slider_change(initial_speed)
+        self.speed_slider.pack(fill="x", padx=16, pady=(0, 2))
+        ctk.CTkLabel(
+            frame, text="鼠标滚轮每次滚动的行数",
+            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+        ).pack(padx=16, anchor="w")
+
         # 排序
         sort_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        sort_frame.pack(fill="x", padx=16, pady=(12, 4))
+        sort_frame.pack(fill="x", padx=16, pady=(8, 2))
         ctk.CTkLabel(
             sort_frame, text="消息排序",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"]
@@ -690,7 +892,7 @@ class SettingsDialog(ctk.CTkToplevel):
             button_color=COLORS["primary"],
             button_hover_color=COLORS["primary_hover"],
         )
-        archive_switch.pack(fill="x", padx=16, pady=(12, 0))
+        archive_switch.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(
             frame, text="导入完成后自动将消息移入已归档",
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
@@ -707,7 +909,7 @@ class SettingsDialog(ctk.CTkToplevel):
             button_color=COLORS["primary"],
             button_hover_color=COLORS["primary_hover"],
         )
-        startup_switch.pack(fill="x", padx=16, pady=(12, 0))
+        startup_switch.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(
             frame, text="登录 Windows 后自动启动需求暂存站",
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
@@ -716,7 +918,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             frame, text="呼出界面快捷键",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"]
-        ).pack(fill="x", padx=16, pady=(12, 4), anchor="w")
+        ).pack(fill="x", padx=16, pady=(8, 4), anchor="w")
         self.show_hotkey_var = ctk.StringVar(
             value=self.settings.get("show_hotkey", "<ctrl>+<shift>+v")
         )
@@ -732,7 +934,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             frame, text="导入当前剪切板快捷键",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"]
-        ).pack(fill="x", padx=16, pady=(12, 4), anchor="w")
+        ).pack(fill="x", padx=16, pady=(8, 4), anchor="w")
         self.capture_hotkey_var = ctk.StringVar(
             value=self.settings.get("capture_hotkey", "<ctrl>+<alt>+v")
         )
@@ -756,7 +958,7 @@ class SettingsDialog(ctk.CTkToplevel):
             hover_color=COLORS["border"], corner_radius=8,
             command=self._check_updates
         )
-        self.update_button.pack(fill="x", padx=16, pady=(12, 0))
+        self.update_button.pack(fill="x", padx=16, pady=(8, 0))
         self.update_status_label = ctk.CTkLabel(
             frame, text="",
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"],
@@ -765,7 +967,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
         # 按钮
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(12, 8))
+        btn_frame.pack(fill="x", padx=16, pady=(8, 8))
         ctk.CTkButton(
             btn_frame, text="取消", width=68, height=32,
             font=ctk.CTkFont(size=12),
@@ -780,18 +982,15 @@ class SettingsDialog(ctk.CTkToplevel):
             corner_radius=8, command=self._save
         ).pack(side="right")
 
-        ctk.CTkLabel(
-            frame, text=SAFETY_NOTICE,
-            font=ctk.CTkFont(size=11), text_color=COLORS["danger"],
-            wraplength=340, justify="left"
-        ).pack(fill="x", padx=16, pady=(0, 12), anchor="w")
-
         self.protocol("WM_DELETE_WINDOW", self._close)
         self._place_centered()
         self.grab_set()  # 在窗口显示并居中后再 grab，避免 withdraw/deiconify 破坏 grab 状态
 
     def _on_slider_change(self, value):
         self.delay_label.configure(text=f"{value:.1f} 秒")
+
+    def _on_speed_slider_change(self, value):
+        self.speed_label.configure(text=f"{int(value)} 行")
 
     def _bind_hotkey_entry(self, entry, variable, setting_key):
         def arm_capture(event=None):
@@ -942,7 +1141,8 @@ class SettingsDialog(ctk.CTkToplevel):
             return
 
     def _save(self):
-        self.settings["hover_delay_ms"] = int(self.delay_var.get() * 1000)
+        self.settings["hover_delay_ms"] = int(self.slider.get() * 1000)
+        self.settings["scroll_speed"] = int(self.speed_slider.get())
         self.settings["auto_archive_after_import"] = self.archive_var.get()
         self.settings["sort_order"] = SORT_VALUES.get(self.sort_var.get(), "newest")
         self.settings["launch_on_startup"] = self.startup_var.get()
@@ -1504,7 +1704,20 @@ class DemandStashApp(ctk.CTk):
         # 设置任务栏和窗口图标
         try:
             icon_path = _ensure_app_icon()
-            self.after(100, lambda: self.iconbitmap(icon_path))
+            self.after(100, lambda: self._apply_icon(icon_path))
+        except Exception:
+            pass
+
+    def _apply_icon(self, icon_path):
+        """应用图标到窗口和任务栏"""
+        try:
+            self.iconbitmap(icon_path)
+        except Exception:
+            pass
+        try:
+            hwnd = self.winfo_id()
+            if hwnd:
+                _set_taskbar_icon(hwnd, icon_path)
         except Exception:
             pass
 
@@ -1545,18 +1758,79 @@ class DemandStashApp(ctk.CTk):
             self._start_hotkey_listener()
 
     def _create_tray_image(self):
-        # 使用 256x256 原图，让 Windows 自行缩放到合适的托盘尺寸，避免模糊
+        # 优先从当前 exe 自身提取图标，避免 onefile 运行时 assets 路径问题
+        try:
+            import win32gui
+            large, small = win32gui.ExtractIconEx(sys.executable, 0)
+            if large:
+                img = _hicon_to_pil(large[0], 64)
+                # 释放多余的句柄
+                for h in large[1:]:
+                    win32gui.DestroyIcon(h)
+                if small:
+                    for h in small:
+                        win32gui.DestroyIcon(h)
+                if img:
+                    return img
+        except Exception:
+            pass
         return _load_app_icon_image(256)
 
     def _setup_tray(self):
-        image = self._create_tray_image()
-        menu = pystray.Menu(
-            pystray.MenuItem("显示", self._show_from_tray, default=True),
-            pystray.MenuItem("检查更新", self._check_for_updates),
-            pystray.MenuItem("退出", self._quit_from_tray),
-        )
-        self._tray_icon = pystray.Icon(APP_NAME, image, APP_NAME, menu=menu)
-        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        log_lines = ["_setup_tray called"]
+        try:
+            # Monkey-patch pystray to avoid PNG-in-ICO serialization issue
+            # pystray internally saves PIL Image as ICO using Pillow,
+            # which produces PNG-in-ICO that Windows LoadImage cannot load.
+            # We patch _assert_icon_handle to extract HICON directly from exe.
+            import pystray._win32 as pw
+            _orig_assert = pw.Icon._assert_icon_handle
+
+            def _patched_assert_icon_handle(self2):
+                if self2._icon_handle:
+                    return
+                try:
+                    # 使用 ctypes 调用 ExtractIconExW，获取纯整数句柄，
+                    # 避免 pywin32 的 PyGdiHANDLE 与 ctypes 结构体不兼容的问题
+                    shell32 = ctypes.windll.shell32
+                    large_arr = (ctypes.c_void_p * 1)()
+                    small_arr = (ctypes.c_void_p * 1)()
+                    count = shell32.ExtractIconExW(sys.executable, 0, large_arr, small_arr, 1)
+                    log_lines.append(f"ExtractIconExW: count={count}, large=0x{large_arr[0]:x}, small=0x{small_arr[0]:x}")
+                    if count > 0 and large_arr[0]:
+                        self2._icon_handle = large_arr[0]
+                        log_lines.append("Set _icon_handle from ExtractIconExW")
+                        return
+                except Exception as e:
+                    log_lines.append(f"Patched assert error: {e}")
+                # Fallback to original (will likely fail due to PNG-in-ICO)
+                _orig_assert(self2)
+
+            pw.Icon._assert_icon_handle = _patched_assert_icon_handle
+
+            image = self._create_tray_image()
+            log_lines.append(f"_create_tray_image: {image}, size={image.size if image else 'None'}")
+            menu = pystray.Menu(
+                pystray.MenuItem("显示", self._show_from_tray, default=True),
+                pystray.MenuItem("检查更新", lambda icon, item: self._check_for_updates()),
+                pystray.MenuItem("退出", self._quit_from_tray),
+            )
+            self._tray_icon = pystray.Icon(APP_NAME, image, APP_NAME, menu=menu)
+            self._tray_icon.run_detached()
+            log_lines.append("run_detached called")
+        except Exception as e:
+            import traceback
+            log_lines.append(f"Tray setup error: {e}")
+            log_lines.append(traceback.format_exc())
+        finally:
+            log_path = os.path.join(
+                os.environ.get("TEMP", "C:\\temp"), "clipstash_tray.log"
+            )
+            try:
+                with open(log_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(log_lines))
+            except Exception:
+                pass
 
     def _start_hotkey_listener(self):
         if not _load_tray_modules():
@@ -1622,17 +1896,30 @@ class DemandStashApp(ctk.CTk):
         self.after(0, self._quit_app)
 
     def _quit_app(self):
+        # 1. 停止全局热键监听（pynput）
         if self._hotkey_listener:
             try:
                 self._hotkey_listener.stop()
             except Exception:
                 pass
+            self._hotkey_listener = None
+
+        # 2. 停止托盘图标（pystray）
         if self._tray_icon:
             try:
                 self._tray_icon.stop()
             except Exception:
                 pass
-        self.destroy()
+            self._tray_icon = None
+
+        # 3. 销毁主窗口并退出事件循环
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+        # 4. 强制退出进程（兜底）
+        self.after(200, lambda: os._exit(0))
 
     # ---------- UI 组件 ----------
     def _create_header(self):
@@ -1651,7 +1938,8 @@ class DemandStashApp(ctk.CTk):
 
         self.count_label = ctk.CTkLabel(
             btn_frame, text="总计 0 条消息",
-            font=ctk.CTkFont(size=12), text_color=COLORS["text_hint"]
+            font=ctk.CTkFont(size=12), text_color=COLORS["text_hint"],
+            width=90
         )
         self.count_label.pack(side="left", padx=(0, 10))
 
@@ -1708,10 +1996,21 @@ class DemandStashApp(ctk.CTk):
 
         self.scroll_frame = ctk.CTkScrollableFrame(
             content_frame, fg_color="transparent",
-            scrollbar_button_color=COLORS["border"],
-            scrollbar_button_hover_color=COLORS["text_hint"]
+            scrollbar_fg_color=COLORS["bg"],          # 轨道与背景融合，去掉方形阴影
+            scrollbar_button_color=COLORS["primary"], # thumb 用主题色
+            scrollbar_button_hover_color=COLORS["primary_hover"]
         )
         self.scroll_frame.pack(fill="both", expand=True)
+
+        # 应用滚动速度
+        self._apply_scroll_speed(get_scroll_speed())
+
+    def _apply_scroll_speed(self, speed):
+        """应用滚动速度到 CTkScrollableFrame 的 canvas"""
+        try:
+            self.scroll_frame._parent_canvas.configure(yscrollincrement=speed)
+        except Exception:
+            pass
 
     def _create_footer(self):
         self.footer = ctk.CTkFrame(self, fg_color=COLORS["card"], height=36)
@@ -1746,6 +2045,7 @@ class DemandStashApp(ctk.CTk):
         self.load_items()
         self._start_hotkey_listener()
         self._refresh_hotkey_hint()
+        self._apply_scroll_speed(get_scroll_speed())
         self._show_status("设置已保存")
 
     def _refresh_hotkey_hint(self):
@@ -1817,15 +2117,11 @@ class DemandStashApp(ctk.CTk):
     def _switch_view(self, mode):
         self.view_mode = mode
         if mode == "active":
-            self.tab_active.configure(fg_color=COLORS["primary"], text_color="white",
-                                      font=ctk.CTkFont(size=12, weight="bold"))
-            self.tab_archived.configure(fg_color="transparent", text_color=COLORS["text_secondary"],
-                                        font=ctk.CTkFont(size=12))
+            self.tab_active.configure(fg_color=COLORS["primary"], text_color="white")
+            self.tab_archived.configure(fg_color="transparent", text_color=COLORS["text_secondary"])
         else:
-            self.tab_active.configure(fg_color="transparent", text_color=COLORS["text_secondary"],
-                                      font=ctk.CTkFont(size=12))
-            self.tab_archived.configure(fg_color=COLORS["primary"], text_color="white",
-                                        font=ctk.CTkFont(size=12, weight="bold"))
+            self.tab_active.configure(fg_color="transparent", text_color=COLORS["text_secondary"])
+            self.tab_archived.configure(fg_color=COLORS["primary"], text_color="white")
         self.load_items()
 
     def _open_editor(self, on_save, title="新建消息", text_content="", images=None):
@@ -2031,6 +2327,7 @@ class DemandStashApp(ctk.CTk):
         """实际执行列表渲染"""
         self._load_items_after_id = None
 
+        # 获取 CTkScrollableFrame 的内部 frame（正确的父容器）
         parent_frame = self.scroll_frame._parent_frame
         for widget in list(parent_frame.winfo_children()):
             widget.destroy()
@@ -2068,6 +2365,8 @@ class DemandStashApp(ctk.CTk):
             canvas = self.scroll_frame._parent_canvas
             parent_frame = self.scroll_frame._parent_frame
             parent_frame.update_idletasks()
+
+            # 让 canvas 的窗口 item 自动适应内容高度
             canvas.configure(scrollregion=canvas.bbox("all"))
             canvas.yview_moveto(0)
         except Exception:
@@ -2133,7 +2432,7 @@ def insert_test_data():
 
 
 if __name__ == "__main__":
-    _set_windows_app_id()
+    _set_windows_app_id()  # 必须在创建窗口前设置 AUMID
     if not _ensure_single_instance():
         sys.exit(0)
     try:

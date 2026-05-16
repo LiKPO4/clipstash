@@ -17,6 +17,7 @@ DEFAULT_SETTINGS = {
     "launch_on_startup": False,
     "show_hotkey": "<ctrl>+<shift>+v",
     "capture_hotkey": "<ctrl>+<alt>+v",
+    "scroll_speed": 2,
 }
 
 _settings = None
@@ -74,6 +75,10 @@ def get_show_hotkey():
 
 def get_capture_hotkey():
     return load_settings().get("capture_hotkey", "<ctrl>+<alt>+v")
+
+
+def get_scroll_speed():
+    return load_settings().get("scroll_speed", 2)
 
 
 os.makedirs(DATA_DIR, exist_ok=True)
