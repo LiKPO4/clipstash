@@ -24,7 +24,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.7"
+APP_VERSION = "v1.1.8"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -143,37 +143,90 @@ def _normalize_hotkey(text):
     return "+".join(parts)
 
 
-def _hotkey_from_event(event):
-    modifier_keys = {
-        "control_l", "control_r", "shift_l", "shift_r",
-        "alt_l", "alt_r", "win_l", "win_r", "super_l", "super_r",
-    }
-    key = str(getattr(event, "keysym", "") or "").lower()
-    if not key or key in modifier_keys:
-        return ""
-    key_aliases = {
-        "return": "<enter>",
-        "escape": "<esc>",
-        "space": "<space>",
-        "backspace": "<backspace>",
-        "delete": "<delete>",
-        "tab": "<tab>",
-    }
-    if len(key) == 1:
-        key_text = key
-    elif key.startswith("f") and key[1:].isdigit():
-        key_text = f"<{key}>"
-    else:
-        key_text = key_aliases.get(key, key)
+MODIFIER_KEYSYMS = {
+    "control_l", "control_r", "shift_l", "shift_r",
+    "alt_l", "alt_r", "win_l", "win_r", "super_l", "super_r",
+    "meta_l", "meta_r", "caps_lock", "num_lock", "scroll_lock",
+}
+MODIFIER_KEYCODES = {16, 17, 18, 91, 92}
+KEY_ALIASES = {
+    "return": "<enter>",
+    "escape": "<esc>",
+    "space": "<space>",
+    "backspace": "<backspace>",
+    "delete": "<delete>",
+    "tab": "<tab>",
+    "insert": "<insert>",
+    "home": "<home>",
+    "end": "<end>",
+    "prior": "<page_up>",
+    "next": "<page_down>",
+    "left": "<left>",
+    "right": "<right>",
+    "up": "<up>",
+    "down": "<down>",
+}
+VK_ALIASES = {
+    8: "<backspace>",
+    9: "<tab>",
+    13: "<enter>",
+    27: "<esc>",
+    32: "<space>",
+    33: "<page_up>",
+    34: "<page_down>",
+    35: "<end>",
+    36: "<home>",
+    37: "<left>",
+    38: "<up>",
+    39: "<right>",
+    40: "<down>",
+    45: "<insert>",
+    46: "<delete>",
+}
 
+
+def _event_keycode(event):
+    try:
+        return int(getattr(event, "keycode", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _main_key_from_event(event):
+    key = str(getattr(event, "keysym", "") or "").lower()
+    if key and key not in MODIFIER_KEYSYMS and key not in {"??", "unknown"}:
+        if len(key) == 1:
+            return key
+        if key.startswith("f") and key[1:].isdigit():
+            return f"<{key}>"
+        return KEY_ALIASES.get(key, key)
+
+    keycode = _event_keycode(event)
+    if keycode in MODIFIER_KEYCODES:
+        return ""
+    if 65 <= keycode <= 90:
+        return chr(keycode).lower()
+    if 48 <= keycode <= 57:
+        return chr(keycode)
+    if 112 <= keycode <= 123:
+        return f"<f{keycode - 111}>"
+    if 96 <= keycode <= 105:
+        return str(keycode - 96)
+    return VK_ALIASES.get(keycode, "")
+
+
+def _hotkey_from_event(event):
+    key_text = _main_key_from_event(event)
+    if not key_text:
+        return ""
     state = getattr(event, "state", 0)
     parts = []
     if state & 0x0004:
         parts.append("<ctrl>")
-    if state & 0x0008:
-        parts.append("<alt>")
     if state & 0x0001:
         parts.append("<shift>")
+    if state & 0x20000 or state & 0x40000:
+        parts.append("<alt>")
     if state & 0x0040:
         parts.append("<cmd>")
     parts.append(key_text)
@@ -680,23 +733,23 @@ class SettingsDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
-        ctk.CTkButton(
+        self.update_button = ctk.CTkButton(
             frame, text="检查更新", height=32,
             font=ctk.CTkFont(size=12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
             hover_color=COLORS["border"], corner_radius=8,
             command=self._check_updates
-        ).pack(fill="x", padx=16, pady=(12, 0))
-
-        ctk.CTkLabel(
-            frame, text=SAFETY_NOTICE,
-            font=ctk.CTkFont(size=11), text_color=COLORS["danger"],
-            wraplength=340, justify="left"
-        ).pack(fill="x", padx=16, pady=(10, 0), anchor="w")
+        )
+        self.update_button.pack(fill="x", padx=16, pady=(12, 0))
+        self.update_status_label = ctk.CTkLabel(
+            frame, text="",
+            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"],
+        )
+        self.update_status_label.pack(fill="x", padx=16, pady=(2, 0), anchor="w")
 
         # 按钮
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(10, 12))
+        btn_frame.pack(fill="x", padx=16, pady=(12, 8))
         ctk.CTkButton(
             btn_frame, text="取消", width=68, height=32,
             font=ctk.CTkFont(size=12),
@@ -710,6 +763,12 @@ class SettingsDialog(ctk.CTkToplevel):
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=self._save
         ).pack(side="right")
+
+        ctk.CTkLabel(
+            frame, text=SAFETY_NOTICE,
+            font=ctk.CTkFont(size=11), text_color=COLORS["danger"],
+            wraplength=340, justify="left"
+        ).pack(fill="x", padx=16, pady=(0, 12), anchor="w")
 
         self.protocol("WM_DELETE_WINDOW", self._close)
         self._place_centered()
@@ -745,7 +804,20 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _check_updates(self):
         if hasattr(self._parent, "_check_for_updates"):
-            self._parent._check_for_updates(parent=self)
+            self._set_update_status("正在检查更新...", checking=True)
+            self._parent._check_for_updates(parent=self, status_callback=self._set_update_status)
+
+    def _set_update_status(self, message, checking=False):
+        try:
+            if not self.winfo_exists():
+                return
+            self.update_status_label.configure(text=message or "")
+            self.update_button.configure(
+                text="正在检查..." if checking else "检查更新",
+                state="disabled" if checking else "normal"
+            )
+        except Exception:
+            return
 
     def _save(self):
         self.settings["hover_delay_ms"] = int(self.delay_var.get() * 1000)
@@ -1555,39 +1627,67 @@ class DemandStashApp(ctk.CTk):
         if hasattr(self, "hotkey_hint_label"):
             self.hotkey_hint_label.configure(text=f"{get_show_hotkey()} 呼出")
 
-    def _check_for_updates(self, icon=None, item=None, parent=None):
+    def _check_for_updates(self, icon=None, item=None, parent=None, status_callback=None):
         if self._checking_update:
             self.after(0, lambda: self._show_status("正在检查更新..."))
+            if status_callback:
+                self.after(0, lambda: status_callback("正在检查更新...", checking=True))
             return
         self._checking_update = True
         self.after(0, lambda: self._show_status("正在检查更新..."))
+        if status_callback:
+            self.after(0, lambda: status_callback("正在检查更新...", checking=True))
 
         def worker():
             try:
                 release = _fetch_latest_release()
                 latest_version = release.get("tag_name", "")
                 has_update = _parse_version(latest_version) > _parse_version(APP_VERSION)
-                self.after(0, lambda: self._finish_update_check(release, has_update, parent=parent))
+                self.after(
+                    0,
+                    lambda: self._finish_update_check(
+                        release, has_update, parent=parent, status_callback=status_callback
+                    )
+                )
             except urllib.error.HTTPError as e:
                 message = "未找到 GitHub Release" if e.code == 404 else f"检查更新失败: HTTP {e.code}"
-                self.after(0, lambda: self._finish_update_check(None, False, message, parent=parent))
+                self.after(
+                    0,
+                    lambda: self._finish_update_check(
+                        None, False, message, parent=parent, status_callback=status_callback
+                    )
+                )
             except Exception as e:
                 message = f"检查更新失败: {e}"
-                self.after(0, lambda: self._finish_update_check(None, False, message, parent=parent))
+                self.after(
+                    0,
+                    lambda: self._finish_update_check(
+                        None, False, message, parent=parent, status_callback=status_callback
+                    )
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_update_check(self, release, has_update, message=None, parent=None):
+    def _finish_update_check(self, release, has_update, message=None, parent=None, status_callback=None):
         self._checking_update = False
         if message:
             self._show_status(message)
+            if status_callback:
+                status_callback(message, checking=False)
             return
         if has_update:
-            self._show_status(f"发现新版本 {release.get('tag_name', '')}")
+            latest_version = release.get("tag_name", "")
+            message = f"发现新版本 {latest_version}"
+            self._show_status(message)
+            if status_callback:
+                status_callback(message, checking=False)
             UpdateDialog(parent or self, release)
         else:
             latest_version = release.get("tag_name", APP_VERSION) if release else APP_VERSION
-            self._show_status(f"已是最新版本 {latest_version}")
+            message = f"已是最新版本 {latest_version}"
+            self._show_status(message)
+            if status_callback:
+                status_callback(message, checking=False)
 
     def _switch_view(self, mode):
         self.view_mode = mode
