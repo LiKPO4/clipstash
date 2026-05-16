@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.2"
+APP_VERSION = "v1.3.3"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -823,7 +823,12 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self.slider = ctk.CTkSlider(
             frame, from_=0.2, to=3.0, number_of_steps=28,
-            command=self._on_slider_change
+            command=self._on_slider_change,
+            height=18, button_length=18,
+            fg_color=COLORS["border"],
+            progress_color=COLORS["primary"],
+            button_color=COLORS["primary"],
+            button_hover_color=COLORS["primary_hover"],
         )
         self.slider.set(initial_delay)
         self.slider.pack(fill="x", padx=16, pady=(0, 2))
@@ -848,7 +853,12 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self.speed_slider = ctk.CTkSlider(
             frame, from_=1, to=5, number_of_steps=4,
-            command=self._on_speed_slider_change
+            command=self._on_speed_slider_change,
+            height=18, button_length=18,
+            fg_color=COLORS["border"],
+            progress_color=COLORS["primary"],
+            button_color=COLORS["primary"],
+            button_hover_color=COLORS["primary_hover"],
         )
         initial_speed = self.settings.get("scroll_speed", 2)
         self.speed_slider.set(initial_speed)
@@ -1735,6 +1745,8 @@ class DemandStashApp(ctk.CTk):
         self._hotkey_listener = None
         self._return_hwnd = None
         self._load_items_after_id = None
+        self._scroll_region_after_ids = []
+        self._scroll_speed = get_scroll_speed()
         _set_launch_on_startup(get_launch_on_startup())
 
         self.bind("<Control-v>", self._on_paste)
@@ -2001,16 +2013,35 @@ class DemandStashApp(ctk.CTk):
             scrollbar_button_hover_color=COLORS["primary_hover"]
         )
         self.scroll_frame.pack(fill="both", expand=True)
+        self.bind_all("<MouseWheel>", self._on_mouse_wheel, add="+")
 
         # 应用滚动速度
         self._apply_scroll_speed(get_scroll_speed())
 
     def _apply_scroll_speed(self, speed):
-        """应用滚动速度到 CTkScrollableFrame 的 canvas"""
+        """保存滚动速度。不要改 yscrollincrement，否则滚轮会像失效一样变慢。"""
         try:
-            self.scroll_frame._parent_canvas.configure(yscrollincrement=speed)
+            self._scroll_speed = max(1, min(5, int(speed)))
+            self.scroll_frame._parent_canvas.configure(yscrollincrement=0)
         except Exception:
-            pass
+            self._scroll_speed = 2
+
+    def _on_mouse_wheel(self, event):
+        """在 CTkScrollableFrame 默认滚动基础上追加滚动，实现速度设置。"""
+        try:
+            if not self.scroll_frame.check_if_master_is_canvas(event.widget):
+                return
+            canvas = self.scroll_frame._parent_canvas
+            if canvas.yview() == (0.0, 1.0):
+                return
+            extra_speed = max(0, int(getattr(self, "_scroll_speed", 2)) - 1)
+            if extra_speed <= 0:
+                return
+            steps = -int(event.delta / 6) * extra_speed
+            if steps:
+                canvas.yview("scroll", steps, "units")
+        except Exception:
+            return
 
     def _create_footer(self):
         self.footer = ctk.CTkFrame(self, fg_color=COLORS["card"], height=36)
@@ -2122,7 +2153,7 @@ class DemandStashApp(ctk.CTk):
         else:
             self.tab_active.configure(fg_color="transparent", text_color=COLORS["text_secondary"])
             self.tab_archived.configure(fg_color=COLORS["primary"], text_color="white")
-        self.load_items()
+        self.load_items(immediate=True)
 
     def _open_editor(self, on_save, title="新建消息", text_content="", images=None):
         """统一管理编辑器窗口：确保只有一个，且关闭后清空引用"""
@@ -2326,11 +2357,14 @@ class DemandStashApp(ctk.CTk):
     def _do_load_items(self):
         """实际执行列表渲染"""
         self._load_items_after_id = None
+        self._cancel_scroll_region_updates()
 
-        # 获取 CTkScrollableFrame 的内部 frame（正确的父容器）
-        parent_frame = self.scroll_frame._parent_frame
+        # CTkScrollableFrame 自身才是 canvas 内部的内容 frame。
+        # _parent_frame 是外壳，里面有 canvas/scrollbar，不能往里面塞消息或销毁子控件。
+        parent_frame = self.scroll_frame
         for widget in list(parent_frame.winfo_children()):
             widget.destroy()
+        parent_frame.update_idletasks()
 
         sort_order = get_sort_order()
         items = db.get_all_messages(
@@ -2357,14 +2391,31 @@ class DemandStashApp(ctk.CTk):
             MessageCard(parent_frame, item, self.view_mode, callbacks)
 
         # 强制更新滚动区域，确保滚动条正常工作
-        self._update_scroll_region()
+        self._schedule_scroll_region_update()
+
+    def _cancel_scroll_region_updates(self):
+        for after_id in self._scroll_region_after_ids:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._scroll_region_after_ids = []
+
+    def _schedule_scroll_region_update(self):
+        self._cancel_scroll_region_updates()
+        self._scroll_region_after_ids = [
+            self.after_idle(self._update_scroll_region),
+            self.after(80, self._update_scroll_region),
+        ]
 
     def _update_scroll_region(self):
         """更新 CTkScrollableFrame 的滚动区域并重置到顶部"""
         try:
+            self._scroll_region_after_ids = []
             canvas = self.scroll_frame._parent_canvas
-            parent_frame = self.scroll_frame._parent_frame
+            parent_frame = self.scroll_frame
             parent_frame.update_idletasks()
+            canvas.update_idletasks()
 
             # 让 canvas 的窗口 item 自动适应内容高度
             canvas.configure(scrollregion=canvas.bbox("all"))
@@ -2373,7 +2424,7 @@ class DemandStashApp(ctk.CTk):
             pass
 
     def _render_empty_state(self):
-        parent_frame = self.scroll_frame._parent_frame
+        parent_frame = self.scroll_frame
         empty_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
         empty_frame.pack(fill="both", expand=True, pady=80)
 
@@ -2395,7 +2446,7 @@ class DemandStashApp(ctk.CTk):
             for child in empty_frame.winfo_children():
                 child.bind("<Button-1>", lambda e: self._on_new_message())
 
-        self._update_scroll_region()
+        self._schedule_scroll_region_update()
 
     def _copy_image(self, image_path):
         try:
