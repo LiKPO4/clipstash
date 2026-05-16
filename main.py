@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.3"
+APP_VERSION = "v1.3.4"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -43,6 +43,7 @@ SAFETY_NOTICE = (
 pystray = None
 keyboard = None
 HAS_TRAY = None
+_THUMBNAIL_CACHE = {}
 
 
 def _parse_version(version_text):
@@ -593,6 +594,24 @@ def _pil_to_ctk(pil_image, max_w=100, max_h=100):
     thumb = _resize_keep_ratio(pil_image, max_w, max_h)
     w, h = thumb.size
     return ctk.CTkImage(light_image=thumb, size=(w, h))
+
+
+def _cached_ctk_image(image_path, max_w=100, max_h=100):
+    """缓存列表缩略图，避免切换队列时重复解码和缩放图片。"""
+    try:
+        stat = os.stat(image_path)
+        key = (image_path, max_w, max_h, stat.st_mtime_ns, stat.st_size)
+        cached = _THUMBNAIL_CACHE.get(key)
+        if cached:
+            return cached
+        with Image.open(image_path) as pil_image:
+            ctk_img = _pil_to_ctk(pil_image, max_w, max_h)
+        if len(_THUMBNAIL_CACHE) > 128:
+            _THUMBNAIL_CACHE.pop(next(iter(_THUMBNAIL_CACHE)))
+        _THUMBNAIL_CACHE[key] = ctk_img
+        return ctk_img
+    except Exception:
+        return None
 
 
 def center_window(window, parent):
@@ -1592,8 +1611,9 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
             image_path = db.get_image_path(img_file)
             if image_path and os.path.exists(image_path):
                 try:
-                    pil_image = Image.open(image_path)
-                    ctk_img = _pil_to_ctk(pil_image, 120, 100)
+                    ctk_img = _cached_ctk_image(image_path, 120, 100)
+                    if not ctk_img:
+                        continue
 
                     # 圆角边框容器
                     row = idx // max_per_row
@@ -1747,6 +1767,15 @@ class DemandStashApp(ctk.CTk):
         self._load_items_after_id = None
         self._scroll_region_after_ids = []
         self._scroll_speed = get_scroll_speed()
+        self._view_frames = {}
+        self._view_dirty = {"active": True, "archived": True}
+        self._view_counts = {"active": 0, "archived": 0}
+        self._view_build_tokens = {"active": 0, "archived": 0}
+        self._render_batch_after_ids = []
+        self._view_items = {"active": [], "archived": []}
+        self._view_callbacks = {}
+        self._view_rendered_count = {"active": 0, "archived": 0}
+        self._view_render_complete = {"active": False, "archived": False}
         _set_launch_on_startup(get_launch_on_startup())
 
         self.bind("<Control-v>", self._on_paste)
@@ -2032,14 +2061,20 @@ class DemandStashApp(ctk.CTk):
             if not self.scroll_frame.check_if_master_is_canvas(event.widget):
                 return
             canvas = self.scroll_frame._parent_canvas
-            if canvas.yview() == (0.0, 1.0):
+            yview = canvas.yview()
+            if yview == (0.0, 1.0):
+                self._render_more_for_current_view()
                 return
             extra_speed = max(0, int(getattr(self, "_scroll_speed", 2)) - 1)
             if extra_speed <= 0:
+                if yview[1] > 0.82:
+                    self._render_more_for_current_view()
                 return
             steps = -int(event.delta / 6) * extra_speed
             if steps:
                 canvas.yview("scroll", steps, "units")
+            if canvas.yview()[1] > 0.82:
+                self._render_more_for_current_view()
         except Exception:
             return
 
@@ -2073,6 +2108,7 @@ class DemandStashApp(ctk.CTk):
         SettingsDialog(self, on_save=self._on_settings_saved)
 
     def _on_settings_saved(self):
+        self._mark_views_dirty()
         self.load_items()
         self._start_hotkey_listener()
         self._refresh_hotkey_hint()
@@ -2175,6 +2211,7 @@ class DemandStashApp(ctk.CTk):
     def _on_new_message(self):
         def on_save(text, images_data):
             db.add_message(text_content=text, images_data=images_data if images_data else None)
+            self._mark_views_dirty("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
@@ -2188,6 +2225,7 @@ class DemandStashApp(ctk.CTk):
             text = get_clipboard_text()
             if text:
                 db.add_message(text_content=text)
+                self._mark_views_dirty("active")
                 if self.view_mode != "active":
                     self._switch_view("active")
                 else:
@@ -2199,6 +2237,7 @@ class DemandStashApp(ctk.CTk):
 
         def on_save(text, images_data):
             db.add_message(text_content=text, images_data=images_data)
+            self._mark_views_dirty("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
@@ -2217,6 +2256,7 @@ class DemandStashApp(ctk.CTk):
             buf = BytesIO()
             img.save(buf, format="PNG")
             db.add_message(images_data=[buf.getvalue()])
+            self._mark_views_dirty("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
@@ -2227,6 +2267,7 @@ class DemandStashApp(ctk.CTk):
         text = get_clipboard_text()
         if text:
             db.add_message(text_content=text)
+            self._mark_views_dirty("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
@@ -2256,6 +2297,7 @@ class DemandStashApp(ctk.CTk):
             db.delete_message_images(msg_id)
             for img_data in new_images_data:
                 db.add_image_to_message(msg_id, img_data)
+            self._mark_views_dirty(self.view_mode)
             self.load_items()
             self._show_status("已更新")
 
@@ -2311,6 +2353,7 @@ class DemandStashApp(ctk.CTk):
             if get_auto_archive_after_import() and self._import_msg_id:
                 db.toggle_archive(self._import_msg_id)
                 self._import_msg_id = None
+                self._mark_views_dirty("active", "archived")
                 self.load_items()
             return
 
@@ -2329,11 +2372,13 @@ class DemandStashApp(ctk.CTk):
 
     def _on_archive(self, msg_id: int):
         new_val = db.toggle_archive(msg_id)
+        self._mark_views_dirty("active", "archived")
         self.load_items()
         self._show_status("已归档" if new_val else "已恢复")
 
     def _delete_message(self, msg_id: int):
         db.delete_message(msg_id)
+        self._mark_views_dirty("archived")
         self.load_items()
         self._show_status("已删除")
 
@@ -2342,40 +2387,69 @@ class DemandStashApp(ctk.CTk):
         self.after(duration, lambda: self.status_bar.configure(text=""))
 
     def load_items(self, immediate=False):
-        """渲染消息列表。使用延迟机制避免快速切换时的卡顿和残留。"""
+        """渲染消息列表。缓存两个队列的内容 frame，切换时避免整页重建。"""
         # 取消上一次的延迟渲染
         if self._load_items_after_id:
             self.after_cancel(self._load_items_after_id)
             self._load_items_after_id = None
 
         if immediate:
-            self._do_load_items()
+            self._show_or_build_current_view()
         else:
             # 延迟 50ms 渲染，如果期间再次调用会取消旧的
-            self._load_items_after_id = self.after(50, self._do_load_items)
+            self._load_items_after_id = self.after(50, self._show_or_build_current_view)
 
-    def _do_load_items(self):
+    def _mark_views_dirty(self, *modes):
+        if not modes:
+            modes = ("active", "archived")
+        for mode in modes:
+            self._view_dirty[mode] = True
+            self._view_build_tokens[mode] += 1
+        self._cancel_render_batches()
+
+    def _get_view_frame(self, mode):
+        frame = self._view_frames.get(mode)
+        if frame is None or not frame.winfo_exists():
+            frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+            self._view_frames[mode] = frame
+            self._view_dirty[mode] = True
+        return frame
+
+    def _show_or_build_current_view(self):
         """实际执行列表渲染"""
         self._load_items_after_id = None
         self._cancel_scroll_region_updates()
+        self._cancel_render_batches()
 
-        # CTkScrollableFrame 自身才是 canvas 内部的内容 frame。
-        # _parent_frame 是外壳，里面有 canvas/scrollbar，不能往里面塞消息或销毁子控件。
-        parent_frame = self.scroll_frame
+        mode = self.view_mode
+        for frame_mode, frame in list(self._view_frames.items()):
+            if frame_mode != mode and frame.winfo_exists():
+                frame.pack_forget()
+
+        parent_frame = self._get_view_frame(mode)
+        parent_frame.pack(fill="x", expand=True)
+
+        if not self._view_dirty.get(mode, True):
+            self.count_label.configure(text=f"总计 {self._view_counts.get(mode, 0)} 条消息")
+            self._schedule_scroll_region_update(reset=True)
+            return
+
         for widget in list(parent_frame.winfo_children()):
             widget.destroy()
         parent_frame.update_idletasks()
 
         sort_order = get_sort_order()
         items = db.get_all_messages(
-            archived=(self.view_mode == "archived"),
+            archived=(mode == "archived"),
             sort_order=sort_order
         )
         count = len(items)
+        self._view_counts[mode] = count
         self.count_label.configure(text=f"总计 {count} 条消息")
 
         if not items:
-            self._render_empty_state()
+            self._render_empty_state(parent_frame, mode)
+            self._view_dirty[mode] = False
             return
 
         callbacks = {
@@ -2386,12 +2460,55 @@ class DemandStashApp(ctk.CTk):
             "archive": self._on_archive,
             "delete": self._delete_message,
         }
+        self._view_items[mode] = items
+        self._view_callbacks[mode] = callbacks
+        self._view_rendered_count[mode] = 0
+        self._view_render_complete[mode] = False
 
-        for item in items:
-            MessageCard(parent_frame, item, self.view_mode, callbacks)
+        token = self._view_build_tokens[mode] + 1
+        self._view_build_tokens[mode] = token
+        self._render_message_batch(parent_frame, items, mode, callbacks, token, start=0)
 
-        # 强制更新滚动区域，确保滚动条正常工作
-        self._schedule_scroll_region_update()
+    def _cancel_render_batches(self):
+        for after_id in self._render_batch_after_ids:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._render_batch_after_ids = []
+
+    def _render_message_batch(self, parent_frame, items, mode, callbacks, token, start=0):
+        if self._view_build_tokens.get(mode) != token:
+            return
+
+        batch_size = 8
+        end = min(start + batch_size, len(items))
+        for item in items[start:end]:
+            MessageCard(parent_frame, item, mode, callbacks)
+        self._view_rendered_count[mode] = end
+
+        self._schedule_scroll_region_update(reset=(start == 0))
+
+        self._view_dirty[mode] = False
+        self._view_render_complete[mode] = end >= len(items)
+
+    def _render_more_for_current_view(self):
+        mode = self.view_mode
+        if self._view_dirty.get(mode, True) or self._view_render_complete.get(mode, False):
+            return
+        frame = self._view_frames.get(mode)
+        if not frame or not frame.winfo_exists():
+            return
+        items = self._view_items.get(mode) or []
+        callbacks = self._view_callbacks.get(mode)
+        if not callbacks:
+            return
+        start = self._view_rendered_count.get(mode, 0)
+        if start >= len(items):
+            self._view_render_complete[mode] = True
+            return
+        token = self._view_build_tokens[mode]
+        self._render_message_batch(frame, items, mode, callbacks, token, start=start)
 
     def _cancel_scroll_region_updates(self):
         for after_id in self._scroll_region_after_ids:
@@ -2401,14 +2518,14 @@ class DemandStashApp(ctk.CTk):
                 pass
         self._scroll_region_after_ids = []
 
-    def _schedule_scroll_region_update(self):
+    def _schedule_scroll_region_update(self, reset=False):
         self._cancel_scroll_region_updates()
         self._scroll_region_after_ids = [
-            self.after_idle(self._update_scroll_region),
-            self.after(80, self._update_scroll_region),
+            self.after_idle(lambda: self._update_scroll_region(reset=reset)),
+            self.after(80, lambda: self._update_scroll_region(reset=reset)),
         ]
 
-    def _update_scroll_region(self):
+    def _update_scroll_region(self, reset=False):
         """更新 CTkScrollableFrame 的滚动区域并重置到顶部"""
         try:
             self._scroll_region_after_ids = []
@@ -2419,16 +2536,16 @@ class DemandStashApp(ctk.CTk):
 
             # 让 canvas 的窗口 item 自动适应内容高度
             canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.yview_moveto(0)
+            if reset:
+                canvas.yview_moveto(0)
         except Exception:
             pass
 
-    def _render_empty_state(self):
-        parent_frame = self.scroll_frame
+    def _render_empty_state(self, parent_frame, mode):
         empty_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
         empty_frame.pack(fill="both", expand=True, pady=80)
 
-        if self.view_mode == "archived":
+        if mode == "archived":
             icon, title, desc = "📦", "没有归档消息", "归档的消息会显示在这里"
         else:
             icon, title, desc = "📋", "还没有消息", "Ctrl+V 粘贴截图，或点击「+ 新建」"
@@ -2441,12 +2558,12 @@ class DemandStashApp(ctk.CTk):
                      font=ctk.CTkFont(size=13),
                      text_color=COLORS["text_hint"]).pack()
 
-        if self.view_mode != "archived":
+        if mode != "archived":
             empty_frame.bind("<Button-1>", lambda e: self._on_new_message())
             for child in empty_frame.winfo_children():
                 child.bind("<Button-1>", lambda e: self._on_new_message())
 
-        self._schedule_scroll_region_update()
+        self._schedule_scroll_region_update(reset=True)
 
     def _copy_image(self, image_path):
         try:
