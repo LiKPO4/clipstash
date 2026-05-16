@@ -24,7 +24,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.1.5"
+APP_VERSION = "v1.1.6"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -34,6 +34,10 @@ SORT_LABELS = {
     "oldest": "最早优先",
 }
 SORT_VALUES = {label: value for value, label in SORT_LABELS.items()}
+SAFETY_NOTICE = (
+    "避坑提醒：购买 Plus 会员请务必远离账号贩子。"
+    "所谓质保、低价、共享号风险很高，失效后可能拒绝补号、退款甚至拉黑；建议只通过官方渠道购买。"
+)
 pystray = None
 keyboard = None
 HAS_TRAY = None
@@ -541,7 +545,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_save=None):
         super().__init__(parent)
         self.title("设置")
-        self.geometry("420x640")
+        self.geometry("420x700")
         self.resizable(False, False)
         self.transient(parent)
         self.configure(fg_color=COLORS["bg"])
@@ -549,6 +553,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self._parent = parent
 
         self.settings = load_settings()
+        self._hotkey_capture_key = None
 
         frame = ctk.CTkFrame(self, fg_color=COLORS["card"], corner_radius=12)
         frame.pack(fill="both", expand=True, padx=16, pady=16)
@@ -683,9 +688,15 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self._check_updates
         ).pack(fill="x", padx=16, pady=(12, 0))
 
+        ctk.CTkLabel(
+            frame, text=SAFETY_NOTICE,
+            font=ctk.CTkFont(size=11), text_color=COLORS["danger"],
+            wraplength=340, justify="left"
+        ).pack(fill="x", padx=16, pady=(10, 0), anchor="w")
+
         # 按钮
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(12, 12))
+        btn_frame.pack(fill="x", padx=16, pady=(10, 12))
         ctk.CTkButton(
             btn_frame, text="取消", width=68, height=32,
             font=ctk.CTkFont(size=12),
@@ -709,29 +720,32 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _bind_hotkey_entry(self, entry, variable, setting_key):
         def arm_capture(event=None):
+            self._hotkey_capture_key = setting_key
             variable.set("请按下快捷键...")
             entry.focus_set()
             return "break"
 
         def capture(event):
+            if self._hotkey_capture_key != setting_key:
+                return "break"
             hotkey = _hotkey_from_event(event)
             if not hotkey:
                 return "break"
+            self._hotkey_capture_key = None
             variable.set(hotkey)
             self.settings[setting_key] = hotkey
             save_settings(self.settings)
             if self.on_save:
                 self.on_save()
+            self.focus_set()
             return "break"
 
         entry.bind("<Button-1>", arm_capture)
-        entry.bind("<FocusIn>", arm_capture)
         entry.bind("<KeyPress>", capture)
 
     def _check_updates(self):
-        self._close()
         if hasattr(self._parent, "_check_for_updates"):
-            self._parent._check_for_updates()
+            self._parent._check_for_updates(parent=self)
 
     def _save(self):
         self.settings["hover_delay_ms"] = int(self.delay_var.get() * 1000)
@@ -861,9 +875,19 @@ class UpdateDialog(ctk.CTkToplevel):
         try:
             subprocess.Popen([target_path], cwd=os.path.dirname(target_path))
             self._close()
-            self._parent._quit_app()
+            app = self._get_app()
+            if app:
+                app._quit_app()
         except Exception as e:
             self._install_failed(f"启动新版失败: {e}")
+
+    def _get_app(self):
+        parent = self._parent
+        while parent is not None:
+            if hasattr(parent, "_quit_app"):
+                return parent
+            parent = getattr(parent, "_parent", None)
+        return None
 
     def _install_failed(self, message):
         self.status_label.configure(text=message)
@@ -1194,15 +1218,15 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
     def _render_text(self):
         text_bg = ctk.CTkFrame(self, fg_color=COLORS["tag_bg"], corner_radius=6)
-        text_bg.pack(fill="x", padx=10, pady=(0, 10))
+        text_bg.pack(fill="x", padx=14, pady=(0, 10))
         preview_text = _wrap_preview_text(self.text_content)
         text_label = ctk.CTkLabel(
             text_bg, text=preview_text,
-            wraplength=520, justify="left", anchor="w",
+            wraplength=470, justify="left", anchor="w",
             font=ctk.CTkFont(size=13), text_color=COLORS["text"],
             cursor="hand2", width=1
         )
-        text_label.pack(fill="x", padx=10, pady=8, anchor="w")
+        text_label.pack(fill="x", padx=12, pady=8, anchor="w")
 
         def on_click(e, txt=self.text_content):
             self.callbacks["copy_text"](txt)
@@ -1515,7 +1539,7 @@ class DemandStashApp(ctk.CTk):
         if hasattr(self, "hotkey_hint_label"):
             self.hotkey_hint_label.configure(text=f"{get_show_hotkey()} 呼出")
 
-    def _check_for_updates(self, icon=None, item=None):
+    def _check_for_updates(self, icon=None, item=None, parent=None):
         if self._checking_update:
             self.after(0, lambda: self._show_status("正在检查更新..."))
             return
@@ -1527,24 +1551,24 @@ class DemandStashApp(ctk.CTk):
                 release = _fetch_latest_release()
                 latest_version = release.get("tag_name", "")
                 has_update = _parse_version(latest_version) > _parse_version(APP_VERSION)
-                self.after(0, lambda: self._finish_update_check(release, has_update))
+                self.after(0, lambda: self._finish_update_check(release, has_update, parent=parent))
             except urllib.error.HTTPError as e:
                 message = "未找到 GitHub Release" if e.code == 404 else f"检查更新失败: HTTP {e.code}"
-                self.after(0, lambda: self._finish_update_check(None, False, message))
+                self.after(0, lambda: self._finish_update_check(None, False, message, parent=parent))
             except Exception as e:
                 message = f"检查更新失败: {e}"
-                self.after(0, lambda: self._finish_update_check(None, False, message))
+                self.after(0, lambda: self._finish_update_check(None, False, message, parent=parent))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_update_check(self, release, has_update, message=None):
+    def _finish_update_check(self, release, has_update, message=None, parent=None):
         self._checking_update = False
         if message:
             self._show_status(message)
             return
         if has_update:
             self._show_status(f"发现新版本 {release.get('tag_name', '')}")
-            UpdateDialog(self, release)
+            UpdateDialog(parent or self, release)
         else:
             latest_version = release.get("tag_name", APP_VERSION) if release else APP_VERSION
             self._show_status(f"已是最新版本 {latest_version}")
