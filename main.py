@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.4"
+APP_VERSION = "v1.3.5"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -507,8 +507,6 @@ def _kill_other_clipstash_processes():
             finally:
                 kernel32.CloseHandle(h_process)
 
-        if killed:
-            time.sleep(1.0)
     except Exception:
         pass
 
@@ -535,11 +533,21 @@ def _ensure_single_instance():
         # 2) 再兜底：通过进程名杀死所有遗漏的旧进程（无窗口/无托盘的后台实例）
         _kill_other_clipstash_processes()
 
-        kernel32.CloseHandle(_mutex_handle)
-        _mutex_handle = None
-        _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
-        if kernel32.GetLastError() != 183:
-            return True
+        if _mutex_handle:
+            kernel32.CloseHandle(_mutex_handle)
+            _mutex_handle = None
+
+        deadline = time.time() + 1.0
+        while True:
+            _mutex_handle = kernel32.CreateMutexW(None, False, "ClipStash_SingleInstance_Mutex")
+            if kernel32.GetLastError() != 183:
+                return True
+            if _mutex_handle:
+                kernel32.CloseHandle(_mutex_handle)
+                _mutex_handle = None
+            if time.time() >= deadline:
+                break
+            time.sleep(0.05)
 
         if _mutex_handle:
             kernel32.CloseHandle(_mutex_handle)
@@ -1726,33 +1734,13 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 # ========== 主窗口 ==========
 class DemandStashApp(ctk.CTk):
     def __init__(self):
+        ctk.set_appearance_mode("System")
+        ctk.set_default_color_theme("blue")
         super().__init__()
         self.title(f"{APP_NAME} {APP_VERSION}  @linjianglu")
         self.geometry("420x720")
         self.minsize(380, 520)
 
-        # 设置任务栏和窗口图标
-        try:
-            icon_path = _ensure_app_icon()
-            self.after(100, lambda: self._apply_icon(icon_path))
-        except Exception:
-            pass
-
-    def _apply_icon(self, icon_path):
-        """应用图标到窗口和任务栏"""
-        try:
-            self.iconbitmap(icon_path)
-        except Exception:
-            pass
-        try:
-            hwnd = self.winfo_id()
-            if hwnd:
-                _set_taskbar_icon(hwnd, icon_path)
-        except Exception:
-            pass
-
-        ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("blue")
         self.configure(fg_color=COLORS["bg"])
 
         self.view_mode = "active"
@@ -1776,7 +1764,6 @@ class DemandStashApp(ctk.CTk):
         self._view_callbacks = {}
         self._view_rendered_count = {"active": 0, "archived": 0}
         self._view_render_complete = {"active": False, "archived": False}
-        _set_launch_on_startup(get_launch_on_startup())
 
         self.bind("<Control-v>", self._on_paste)
         self.bind("<Control-V>", self._on_paste)
@@ -1785,12 +1772,31 @@ class DemandStashApp(ctk.CTk):
         self._create_header()
         self._create_content()
         self._create_footer()
-        self.load_items(immediate=True)
-        self._track_foreground_window()
 
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
-        self.after(100, self._do_show)
-        self.after(200, self._setup_background_features)
+        self.after_idle(self._do_show)
+        self.after(120, lambda: self.load_items(immediate=True))
+        self.after(700, self._apply_icon)
+        self.after(1500, self._track_foreground_window)
+        self.after(2000, lambda: _set_launch_on_startup(get_launch_on_startup()))
+        self.after(2500, self._setup_background_features)
+
+    def _apply_icon(self):
+        """延后应用图标，避免图标提取和 Win32 图标设置阻塞首屏。"""
+        try:
+            icon_path = _ensure_app_icon()
+            self.iconbitmap(icon_path)
+        except Exception:
+            return
+        self.after(500, lambda: self._apply_taskbar_icon(icon_path))
+
+    def _apply_taskbar_icon(self, icon_path):
+        try:
+            hwnd = self.winfo_id()
+            if hwnd:
+                _set_taskbar_icon(hwnd, icon_path)
+        except Exception:
+            pass
 
     # ---------- 托盘 & 快捷键 ----------
     def _setup_background_features(self):
@@ -2481,7 +2487,7 @@ class DemandStashApp(ctk.CTk):
         if self._view_build_tokens.get(mode) != token:
             return
 
-        batch_size = 8
+        batch_size = len(items) if len(items) <= 8 else 8
         end = min(start + batch_size, len(items))
         for item in items[start:end]:
             MessageCard(parent_frame, item, mode, callbacks)
