@@ -35,7 +35,7 @@ SORT_LABELS = {
 }
 SORT_VALUES = {label: value for value, label in SORT_LABELS.items()}
 SAFETY_NOTICE = (
-    "避坑提醒：购买 Plus 会员请务必远离账号贩子。"
+    "避坑提醒：购买 Plus 会员请务必远离账号贩子，如xu166295906。"
     "所谓质保、低价、共享号风险很高，失效后可能拒绝补号、退款甚至拉黑；建议只通过官方渠道购买。"
 )
 pystray = None
