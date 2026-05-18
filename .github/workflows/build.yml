@@ -34,20 +34,7 @@ jobs:
           pip install pyinstaller
 
       - name: Install Inno Setup
-        shell: pwsh
-        run: |
-          choco install innosetup -y
-          $exe = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup 6","${env:ProgramFiles}\Inno Setup 6" -Filter "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) {
-            $exe = Get-ChildItem -Path "C:\Program Files*" -Filter "ISCC.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if ($exe) {
-            echo $exe.DirectoryName >> $env:GITHUB_PATH
-            Write-Host "Found ISCC at: $($exe.FullName)"
-          } else {
-            Write-Error "ISCC.exe not found after choco install"
-            exit 1
-          }
+        run: choco install innosetup -y
 
       - name: Resolve version
         id: version
@@ -62,20 +49,93 @@ jobs:
           Write-Output "value=$ver" >> $env:GITHUB_OUTPUT
           Write-Host "Build version: $ver"
 
-      - name: Sync version to source
+      - name: Build installer
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $ver = '${{ steps.version.outputs.value }}'
-          # main.py
+
+          # Sync version to main.py
           (Get-Content main.py) -replace 'APP_VERSION = "v[\d.]+"', "APP_VERSION = `"v$ver`"" | Set-Content main.py
-          # build.ps1 default param
+
+          # Sync version to build.ps1 (for local consistency)
           (Get-Content setup/build.ps1) -replace '\$Version = "[\d.]+"', "`$Version = `"$ver`"" | Set-Content setup/build.ps1
 
-      - name: Build with PyInstaller + Inno Setup
-        shell: pwsh
-        run: |
-          cd setup
-          .\build.ps1 -Version "${{ steps.version.outputs.value }}"
+          # 1. Clean old output
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "dist\ClipStash", "build"
+
+          # 2. PyInstaller
+          Write-Host "[1/3] PyInstaller --onedir ..." -ForegroundColor Cyan
+          python -m PyInstaller `
+            --noconfirm `
+            --onedir `
+            --windowed `
+            --name ClipStash `
+            --icon assets\app_icon.ico `
+            --add-data "assets;assets" `
+            --exclude-module PyQt5 `
+            --exclude-module PyQt6 `
+            --exclude-module PySide2 `
+            --exclude-module PySide6 `
+            main.py
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+
+          # 3. Update ISS version
+          Write-Host "[2/3] Sync version to ISS script ..." -ForegroundColor Cyan
+          $issPath = Join-Path $PWD "setup\ClipStash.iss"
+          $iss = Get-Content $issPath -Raw
+          $iss = $iss -replace '#define MyAppVersion "[\d.]+"', "#define MyAppVersion `"$ver`""
+          Set-Content $issPath $iss -NoNewline
+
+          # 4. Locate ISCC.exe (robust fallback)
+          Write-Host "[3/3] Locate ISCC.exe ..." -ForegroundColor Cyan
+          $iscc = $null
+
+          # 4a. Try PATH
+          $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if ($cmd) { $iscc = $cmd.Source }
+
+          # 4b. Try standard install locations
+          if (-not $iscc) {
+            $candidates = @(
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+              "C:\Program Files\Inno Setup 6\ISCC.exe"
+            )
+            foreach ($c in $candidates) {
+              if (Test-Path $c) { $iscc = (Resolve-Path $c).Path; break }
+            }
+          }
+
+          # 4c. Search C:\ProgramData (choco sometimes installs here)
+          if (-not $iscc) {
+            $found = Get-ChildItem -Path "C:\ProgramData" -Filter "ISCC.exe" -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $iscc = $found.FullName }
+          }
+
+          # 4d. Last resort: search entire C: drive with limited depth
+          if (-not $iscc) {
+            Write-Host "Searching C:\ for ISCC.exe (this may take a few seconds)..."
+            $found = Get-ChildItem -Path "C:\" -Filter "ISCC.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $iscc = $found.FullName }
+          }
+
+          if (-not $iscc) {
+            Write-Error "ISCC.exe not found after choco install. Checked: PATH, Program Files, ProgramData, C:\ drive (depth 4)."
+            exit 1
+          }
+          Write-Host "Found ISCC.exe at: $iscc" -ForegroundColor Green
+
+          # 5. Build installer
+          & $iscc $issPath
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compiler failed" }
+
+          Write-Host "`nBuild complete!" -ForegroundColor Green
+          $artifact = Get-ChildItem "dist\ClipStash-Setup-v*.exe" | Select-Object -First 1
+          if ($artifact) {
+            Write-Host "Artifact: $($artifact.FullName)" -ForegroundColor Yellow
+          }
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
