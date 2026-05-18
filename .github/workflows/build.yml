@@ -34,7 +34,20 @@ jobs:
           pip install pyinstaller
 
       - name: Install Inno Setup
-        run: choco install innosetup -y
+        shell: pwsh
+        run: |
+          choco install innosetup -y
+          $exe = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup 6","${env:ProgramFiles}\Inno Setup 6" -Filter "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path "C:\Program Files*" -Filter "ISCC.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if ($exe) {
+            echo $exe.DirectoryName >> $env:GITHUB_PATH
+            Write-Host "Found ISCC at: $($exe.FullName)"
+          } else {
+            Write-Error "ISCC.exe not found after choco install"
+            exit 1
+          }
 
       - name: Resolve version
         id: version
