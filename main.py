@@ -374,6 +374,17 @@ def _app_dir():
     return os.getcwd()
 
 
+def _is_onefile_bundle():
+    """检测当前是否为 PyInstaller --onefile 模式。"""
+    if not getattr(sys, "frozen", False):
+        return False
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return False
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.normcase(meipass) != os.path.normcase(exe_dir)
+
+
 def _load_tray_modules():
     global pystray, keyboard, HAS_TRAY
     if HAS_TRAY is not None:
@@ -1226,8 +1237,18 @@ class UpdateDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text"]
         ).pack(padx=16, pady=(16, 6), anchor="w")
 
+        self._is_onefile = _is_onefile_bundle()
+        if self._is_onefile:
+            hint = f"当前版本 {APP_VERSION}，点击一键安装会下载新版到应用所在目录。"
+            install_text = "一键安装"
+            install_cmd = self._install_update
+        else:
+            hint = f"当前版本 {APP_VERSION}。安装版请前往下载页面获取最新安装包。"
+            install_text = "去下载页面"
+            install_cmd = self._open_release_page
+
         ctk.CTkLabel(
-            frame, text=f"当前版本 {APP_VERSION}，点击一键安装会下载新版到应用所在目录。",
+            frame, text=hint,
             font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"],
             wraplength=320, justify="left"
         ).pack(padx=16, anchor="w")
@@ -1258,10 +1279,10 @@ class UpdateDialog(ctk.CTkToplevel):
             command=self._close
         ).pack(side="right", padx=(6, 0))
         self.install_btn = ctk.CTkButton(
-            btn_frame, text="一键安装", width=108, height=32,
+            btn_frame, text=install_text, width=108, height=32,
             font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
-            corner_radius=8, command=self._install_update
+            corner_radius=8, command=install_cmd
         )
         self.install_btn.pack(side="right")
 
@@ -1324,6 +1345,16 @@ class UpdateDialog(ctk.CTkToplevel):
     def _install_failed(self, message):
         self.status_label.configure(text=message)
         self.install_btn.configure(state="normal", text="一键安装")
+
+    def _open_release_page(self):
+        """安装版/onedir：打开浏览器到 GitHub Release 页面，让用户手动下载安装包。"""
+        import webbrowser
+        url = self.release.get("html_url", f"https://github.com/{APP_REPOSITORY}/releases")
+        try:
+            webbrowser.open(url)
+            self.status_label.configure(text="已在浏览器中打开下载页面")
+        except Exception as e:
+            self.status_label.configure(text=f"无法打开浏览器: {e}")
 
     def _close(self):
         self.grab_release()
