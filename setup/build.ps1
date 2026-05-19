@@ -1,9 +1,9 @@
 # ClipStash 打包脚本
 # 先执行 PyInstaller (--onedir)，再用 Inno Setup 打包为安装程序
-# 要求: Python + PyInstaller + Inno Setup 已安装且 ISCC.exe 在 PATH 中
+# 要求: Python + PyInstaller + Inno Setup 6
 
 param(
-    [string]$Version = "1.3.5"
+    [string]$Version = "1.3.6"
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,11 +44,28 @@ Set-Content $IssPath $IssContent -NoNewline
 
 # 4. Inno Setup 打包
 Write-Host "[4/4] Inno Setup 生成安装包..." -ForegroundColor Cyan
-$ISCC = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-if (-not $ISCC) {
-    $ISCC = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+$ISCC = $null
+$Cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+if ($Cmd) {
+    $ISCC = $Cmd.Source
 }
-if (-not (Test-Path $ISCC)) {
+
+if (-not $ISCC) {
+    $Candidates = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe"
+    )
+    foreach ($Candidate in $Candidates) {
+        if (Test-Path $Candidate) {
+            $ISCC = (Resolve-Path $Candidate).Path
+            break
+        }
+    }
+}
+
+if (-not $ISCC) {
     Write-Error "找不到 ISCC.exe，请安装 Inno Setup 并确保其在 PATH 中"
     exit 1
 }

@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.5"
+APP_VERSION = "v1.3.6"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -474,6 +474,21 @@ def _terminate_window_process(hwnd):
         kernel32.CloseHandle(handle)
 
 
+def _window_process_id(hwnd):
+    if not hwnd:
+        return 0
+    try:
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value
+    except Exception:
+        return 0
+
+
+def _is_own_window(hwnd):
+    return bool(hwnd) and _window_process_id(hwnd) == os.getpid()
+
+
 def _kill_other_clipstash_processes():
     """通过可执行文件名匹配，终止所有其他 ClipStash / 需求暂存站进程。
     用于兜底杀死无窗口、无托盘的后台残留实例。"""
@@ -575,11 +590,12 @@ COLORS = {
     "danger_hover": "#DC2626",
     "bg": "#F8FAFC",
     "card": "#FFFFFF",
-    "text": "#1E293B",
-    "text_secondary": "#64748B",
-    "text_hint": "#94A3B8",
-    "border": "#E2E8F0",
+    "text": "#0F172A",
+    "text_secondary": "#475569",
+    "text_hint": "#64748B",
+    "border": "#CBD5E1",
     "tag_bg": "#F1F5F9",
+    "tab_hover": "#E8F0FE",
 }
 
 
@@ -1732,7 +1748,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
                 footer, text="×", width=24, height=24,
                 font=ctk.CTkFont(size=12, weight="bold"),
                 fg_color="transparent", text_color=COLORS["text_hint"],
-                hover_color=COLORS["danger"], corner_radius=6,
+                hover_color=COLORS["tag_bg"], corner_radius=6,
                 command=lambda: self.callbacks["delete"](self.msg_id)
             ).pack(side="right", padx=(4, 0))
 
@@ -1740,7 +1756,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
             footer, text=archive_text, width=52, height=24,
             font=ctk.CTkFont(size=11),
             fg_color="transparent", text_color=COLORS["text_secondary"],
-            hover_color=COLORS["tag_bg"], corner_radius=6,
+            hover_color=COLORS["tab_hover"], corner_radius=6,
             command=lambda: self.callbacks["archive"](self.msg_id)
         ).pack(side="right")
 
@@ -1783,6 +1799,8 @@ class DemandStashApp(ctk.CTk):
         self._checking_update = False
         self._hotkey_listener = None
         self._return_hwnd = None
+        self._last_external_hwnd = None
+        self._restore_after_import = False
         self._load_items_after_id = None
         self._scroll_region_after_ids = []
         self._scroll_speed = get_scroll_speed()
@@ -1943,7 +1961,10 @@ class DemandStashApp(ctk.CTk):
         threading.Thread(target=listen, daemon=True).start()
 
     def _show_from_tray(self, icon=None, item=None):
-        self._return_hwnd = _get_foreground_hwnd()
+        hwnd = _get_foreground_hwnd()
+        if hwnd and not _is_own_window(hwnd):
+            self._return_hwnd = hwnd
+            self._last_external_hwnd = hwnd
         self.after(0, self._do_show)
 
     def _do_show(self):
@@ -1954,8 +1975,9 @@ class DemandStashApp(ctk.CTk):
     def _track_foreground_window(self):
         hwnd = _get_foreground_hwnd()
         try:
-            if hwnd and hwnd != self.winfo_id() and ctypes.windll.user32.IsWindow(hwnd):
+            if hwnd and not _is_own_window(hwnd) and ctypes.windll.user32.IsWindow(hwnd):
                 self._return_hwnd = hwnd
+                self._last_external_hwnd = hwnd
         except Exception:
             pass
         self.after(500, self._track_foreground_window)
@@ -1965,7 +1987,10 @@ class DemandStashApp(ctk.CTk):
 
     def _toggle_show_hide(self):
         if self.state() == "withdrawn":
-            self._return_hwnd = _get_foreground_hwnd()
+            hwnd = _get_foreground_hwnd()
+            if hwnd and not _is_own_window(hwnd):
+                self._return_hwnd = hwnd
+                self._last_external_hwnd = hwnd
             self._do_show()
         else:
             self._hide_to_tray()
@@ -2004,48 +2029,65 @@ class DemandStashApp(ctk.CTk):
         self.header = ctk.CTkFrame(self, fg_color=COLORS["card"], corner_radius=0, height=56)
         self.header.pack(fill="x")
         self.header.pack_propagate(False)
+        self.header.bind("<Configure>", self._adjust_header_layout)
 
         title_frame = ctk.CTkFrame(self.header, fg_color="transparent")
-        title_frame.pack(side="left", padx=16, pady=10)
-        ctk.CTkLabel(title_frame, text=APP_NAME,
-                     font=ctk.CTkFont(size=18, weight="bold"),
-                     text_color=COLORS["primary"]).pack(side="left")
+        title_frame.pack(side="left", padx=(14, 8), pady=10)
+        self.title_label = ctk.CTkLabel(
+            title_frame, text=APP_NAME,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=17, weight="bold"),
+            text_color=COLORS["primary"]
+        )
+        self.title_label.pack(side="left")
 
         btn_frame = ctk.CTkFrame(self.header, fg_color="transparent")
-        btn_frame.pack(side="right", padx=16, pady=10)
+        btn_frame.pack(side="right", padx=(6, 10), pady=10)
 
         self.count_label = ctk.CTkLabel(
             btn_frame, text="总计 0 条消息",
-            font=ctk.CTkFont(size=12), text_color=COLORS["text_hint"],
-            width=90
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11), text_color=COLORS["text_hint"],
+            width=78
         )
-        self.count_label.pack(side="left", padx=(0, 10))
+        self.count_label.pack(side="left", padx=(0, 6))
 
         self.pin_btn = ctk.CTkButton(
-            btn_frame, text="置顶", width=48, height=30,
-            font=ctk.CTkFont(size=11),
+            btn_frame, text="置顶", width=40, height=30,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11),
             fg_color="transparent", text_color=COLORS["text_hint"],
-            hover_color=COLORS["tag_bg"], corner_radius=6,
+            hover_color=COLORS["tab_hover"], corner_radius=6,
             command=self._toggle_always_on_top
         )
-        self.pin_btn.pack(side="left", padx=(0, 4))
+        self.pin_btn.pack(side="left", padx=(0, 2))
 
         self.settings_btn = ctk.CTkButton(
-            btn_frame, text="设置", width=48, height=30,
-            font=ctk.CTkFont(size=11),
+            btn_frame, text="设置", width=40, height=30,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11),
             fg_color="transparent", text_color=COLORS["text_hint"],
-            hover_color=COLORS["tag_bg"], corner_radius=6,
+            hover_color=COLORS["tab_hover"], corner_radius=6,
             command=self._open_settings
         )
         self.settings_btn.pack(side="left", padx=(0, 4))
 
         self.new_msg_btn = ctk.CTkButton(
-            btn_frame, text="+ 新建", width=80, height=32,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            btn_frame, text="+ 新建", width=82, height=32,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=self._on_new_message,
         )
         self.new_msg_btn.pack(side="left")
+
+    def _adjust_header_layout(self, event=None):
+        if not hasattr(self, "count_label"):
+            return
+        width = event.width if event else self.winfo_width()
+        if width < 405:
+            self.count_label.configure(width=42, text=f"{self._view_counts.get(self.view_mode, 0)} 条")
+            self.title_label.configure(font=ctk.CTkFont(family="Microsoft YaHei UI", size=15, weight="bold"))
+            self.new_msg_btn.configure(width=76)
+        else:
+            self.count_label.configure(width=78, text=f"总计 {self._view_counts.get(self.view_mode, 0)} 条消息")
+            self.title_label.configure(font=ctk.CTkFont(family="Microsoft YaHei UI", size=17, weight="bold"))
+            self.new_msg_btn.configure(width=82)
 
     def _create_content(self):
         content_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -2056,7 +2098,7 @@ class DemandStashApp(ctk.CTk):
 
         self.tab_active = ctk.CTkButton(
             self.tab_frame, text="消息", width=80, height=32,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12, weight="bold"),
             fg_color=COLORS["primary"], text_color="white",
             hover_color=COLORS["primary_hover"], corner_radius=8,
             command=lambda: self._switch_view("active")
@@ -2065,9 +2107,9 @@ class DemandStashApp(ctk.CTk):
 
         self.tab_archived = ctk.CTkButton(
             self.tab_frame, text="已归档", width=80, height=32,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12),
             fg_color="transparent", text_color=COLORS["text_secondary"],
-            hover_color=COLORS["tag_bg"], corner_radius=8,
+            hover_color=COLORS["tab_hover"], corner_radius=8,
             command=lambda: self._switch_view("archived")
         )
         self.tab_archived.pack(side="left", padx=(0, 8), pady=8)
@@ -2079,7 +2121,7 @@ class DemandStashApp(ctk.CTk):
             scrollbar_button_hover_color=COLORS["primary_hover"]
         )
         self.scroll_frame.pack(fill="both", expand=True)
-        self.bind_all("<MouseWheel>", self._on_mouse_wheel, add="+")
+        self.bind_all("<MouseWheel>", self._on_mouse_wheel)
 
         # 应用滚动速度
         self._apply_scroll_speed(get_scroll_speed())
@@ -2093,7 +2135,7 @@ class DemandStashApp(ctk.CTk):
             self._scroll_speed = 2
 
     def _on_mouse_wheel(self, event):
-        """在 CTkScrollableFrame 默认滚动基础上追加滚动，实现速度设置。"""
+        """接管滚轮事件，让滚动速度设置真正生效。"""
         try:
             if not self.scroll_frame.check_if_master_is_canvas(event.widget):
                 return
@@ -2101,19 +2143,16 @@ class DemandStashApp(ctk.CTk):
             yview = canvas.yview()
             if yview == (0.0, 1.0):
                 self._render_more_for_current_view()
-                return
-            extra_speed = max(0, int(getattr(self, "_scroll_speed", 2)) - 1)
-            if extra_speed <= 0:
-                if yview[1] > 0.82:
-                    self._render_more_for_current_view()
-                return
-            steps = -int(event.delta / 6) * extra_speed
+                return "break"
+            speed = max(1, min(5, int(getattr(self, "_scroll_speed", 2))))
+            steps = -int(event.delta / 120) * speed * 3
             if steps:
                 canvas.yview("scroll", steps, "units")
             if canvas.yview()[1] > 0.82:
                 self._render_more_for_current_view()
+            return "break"
         except Exception:
-            return
+            return "break"
 
     def _create_footer(self):
         self.footer = ctk.CTkFrame(self, fg_color=COLORS["card"], height=36)
@@ -2221,11 +2260,24 @@ class DemandStashApp(ctk.CTk):
     def _switch_view(self, mode):
         self.view_mode = mode
         if mode == "active":
-            self.tab_active.configure(fg_color=COLORS["primary"], text_color="white")
-            self.tab_archived.configure(fg_color="transparent", text_color=COLORS["text_secondary"])
+            self.tab_active.configure(
+                fg_color=COLORS["primary"], text_color="white",
+                hover_color=COLORS["primary_hover"]
+            )
+            self.tab_archived.configure(
+                fg_color="transparent", text_color=COLORS["text_secondary"],
+                hover_color=COLORS["tab_hover"]
+            )
         else:
-            self.tab_active.configure(fg_color="transparent", text_color=COLORS["text_secondary"])
-            self.tab_archived.configure(fg_color=COLORS["primary"], text_color="white")
+            self.tab_active.configure(
+                fg_color="transparent", text_color=COLORS["text_secondary"],
+                hover_color=COLORS["tab_hover"]
+            )
+            self.tab_archived.configure(
+                fg_color=COLORS["primary"], text_color="white",
+                hover_color=COLORS["primary_hover"]
+            )
+        self._adjust_header_layout()
         self.load_items(immediate=True)
 
     def _open_editor(self, on_save, title="新建消息", text_content="", images=None):
@@ -2366,21 +2418,30 @@ class DemandStashApp(ctk.CTk):
 
         self._import_msg_id = msg_id
         if not self._focus_return_window():
-            self._show_status("请先呼出窗口，再点击导入")
+            self._show_status("未找到外部输入窗口，已取消导入")
             return
         self._show_status("正在导入...")
-        self.after(300, self._do_import_step)
+        self.after(350, self._do_import_step)
 
     def _focus_return_window(self):
-        hwnd = self._return_hwnd
+        hwnd = self._return_hwnd or self._last_external_hwnd
         if not hwnd:
             return False
         try:
             user32 = ctypes.windll.user32
-            if not user32.IsWindow(hwnd) or hwnd == self.winfo_id():
+            if not user32.IsWindow(hwnd) or _is_own_window(hwnd):
                 return False
+            current = user32.GetForegroundWindow()
+            if current and _is_own_window(current) and not self._last_external_hwnd:
+                return False
+            self._return_hwnd = hwnd
+            self._last_external_hwnd = hwnd
+            self._restore_after_import = self.state() != "withdrawn"
+            self.withdraw()
+            self.update_idletasks()
             user32.ShowWindow(hwnd, 9)
-            return bool(user32.SetForegroundWindow(hwnd))
+            user32.SetForegroundWindow(hwnd)
+            return user32.GetForegroundWindow() == hwnd or bool(user32.IsWindow(hwnd))
         except Exception:
             return False
 
@@ -2392,6 +2453,9 @@ class DemandStashApp(ctk.CTk):
                 self._import_msg_id = None
                 self._mark_views_dirty("active", "archived")
                 self.load_items()
+            if self._restore_after_import:
+                self._restore_after_import = False
+                self.after(300, self._do_show)
             return
 
         item_type, data = self._import_queue.pop(0)
@@ -2467,7 +2531,7 @@ class DemandStashApp(ctk.CTk):
         parent_frame.pack(fill="x", expand=True)
 
         if not self._view_dirty.get(mode, True):
-            self.count_label.configure(text=f"总计 {self._view_counts.get(mode, 0)} 条消息")
+            self._adjust_header_layout()
             self._schedule_scroll_region_update(reset=True)
             return
 
@@ -2482,7 +2546,7 @@ class DemandStashApp(ctk.CTk):
         )
         count = len(items)
         self._view_counts[mode] = count
-        self.count_label.configure(text=f"总计 {count} 条消息")
+        self._adjust_header_layout()
 
         if not items:
             self._render_empty_state(parent_frame, mode)
