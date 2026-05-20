@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.7"
+APP_VERSION = "v1.3.8"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -1462,6 +1462,7 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         self.grab_set()
         self.configure(fg_color=COLORS["bg"])
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._saving = False
 
         self.images = []
         if images:
@@ -1524,9 +1525,13 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         self.bind("<Control-v>", self._on_paste)
         self.bind("<Control-V>", self._on_paste)
         self.bind("<Shift-Insert>", self._on_paste)
+        self.bind("<Control-s>", self._on_save_shortcut)
+        self.bind("<Control-S>", self._on_save_shortcut)
         self.textbox.bind("<Control-v>", self._on_paste)
         self.textbox.bind("<Control-V>", self._on_paste)
         self.textbox.bind("<Shift-Insert>", self._on_paste)
+        self.textbox.bind("<Control-s>", self._on_save_shortcut)
+        self.textbox.bind("<Control-S>", self._on_save_shortcut)
 
         if self.images:
             self._render_thumbnails()
@@ -1661,12 +1666,19 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
     def _save(self):
         """保存并关闭，延迟执行以避免鼠标释放事件传播到新渲染的按钮上"""
+        if self._saving:
+            return "break"
+        self._saving = True
         text = self.textbox.get("1.0", "end-1c").strip()
         images_data = [data for _, data in self.images]
         self._saved_text = text if text else None
         self._saved_images = images_data
         # 先禁用按钮防止重复点击
         self.after(50, self._do_save_and_close)
+        return "break"
+
+    def _on_save_shortcut(self, event=None):
+        return self._save()
 
     def _do_save_and_close(self):
         """实际执行保存和关闭"""

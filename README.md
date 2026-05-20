@@ -32,10 +32,10 @@ python main.py
 
 ```powershell
 cd setup
-.\build.ps1 -Version "1.3.7"
+.\build.ps1 -Version "1.3.8"
 ```
 
-生成文件位于 `dist/ClipStash-Setup-v1.3.7.exe`。
+生成文件位于 `dist/ClipStash-Setup-v1.3.8.exe`。
 
 ### 手动分步打包
 
