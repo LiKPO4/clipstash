@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import uuid
+from datetime import datetime, timezone
 from config import DB_PATH, IMAGES_DIR
 
 
@@ -42,6 +43,12 @@ def init_db():
     if "archived" not in columns:
         cursor.execute("ALTER TABLE messages ADD COLUMN archived INTEGER DEFAULT 0")
         print("[Migrate] Added 'archived' column to messages")
+    if "archived_at" not in columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN archived_at TIMESTAMP")
+        cursor.execute(
+            "UPDATE messages SET archived_at = created_at WHERE archived = 1 AND archived_at IS NULL"
+        )
+        print("[Migrate] Added 'archived_at' column to messages")
 
     # 新表：消息关联的图片
     cursor.execute("""
@@ -120,8 +127,9 @@ def get_all_messages(archived: bool = False, sort_order: str = "newest") -> list
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     order = "DESC" if sort_order == "newest" else "ASC"
+    sort_column = "COALESCE(archived_at, created_at)" if archived else "created_at"
     cursor.execute(
-        f"SELECT id, text_content, created_at FROM messages WHERE archived = ? ORDER BY created_at {order}",
+        f"SELECT id, text_content, created_at FROM messages WHERE archived = ? ORDER BY {sort_column} {order}, id {order}",
         (1 if archived else 0,)
     )
     results = []
@@ -206,10 +214,17 @@ def toggle_archive(msg_id: int) -> bool:
         conn.close()
         return False
     new_val = 0 if row[0] else 1
-    cursor.execute(
-        "UPDATE messages SET archived = ? WHERE id = ?",
-        (new_val, msg_id)
-    )
+    if new_val:
+        archived_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE messages SET archived = ?, archived_at = ? WHERE id = ?",
+            (new_val, archived_at, msg_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE messages SET archived = ?, archived_at = NULL WHERE id = ?",
+            (new_val, msg_id)
+        )
     conn.commit()
     conn.close()
     return new_val

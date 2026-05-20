@@ -22,11 +22,11 @@ from config import (
     load_settings, save_settings,
     get_hover_delay_ms, get_auto_archive_after_import, get_sort_order,
     get_launch_on_startup, get_show_hotkey, get_capture_hotkey,
-    get_scroll_speed
+    get_scroll_speed, get_app_font_size_delta
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.6"
+APP_VERSION = "v1.3.7"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -598,6 +598,16 @@ COLORS = {
     "tab_hover": "#E8F0FE",
 }
 
+APP_FONT_FAMILY = "Microsoft YaHei UI"
+
+
+def _font(size=12, weight=None, family=APP_FONT_FAMILY):
+    adjusted_size = max(8, int(size) + int(get_app_font_size_delta()))
+    kwargs = {"family": family, "size": adjusted_size}
+    if weight:
+        kwargs["weight"] = weight
+    return ctk.CTkFont(**kwargs)
+
 
 # ========== 工具函数 ==========
 def _format_local_time(utc_str):
@@ -798,15 +808,15 @@ class DiagnoseDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             frame, text="剪贴板诊断信息",
-            font=ctk.CTkFont(size=15, weight="bold"), text_color=COLORS["text"]
+            font=_font(15, weight="bold"), text_color=COLORS["text"]
         ).pack(padx=12, pady=(12, 8), anchor="w")
         ctk.CTkLabel(
             frame, text="未能识别剪贴板中的图片，以下是详细诊断：",
-            font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]
+            font=_font(12), text_color=COLORS["text_secondary"]
         ).pack(padx=12, anchor="w")
 
         textbox = ctk.CTkTextbox(
-            frame, wrap="word", font=ctk.CTkFont(size=11),
+            frame, wrap="word", font=_font(11),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"]
         )
         textbox.pack(fill="both", expand=True, padx=12, pady=8)
@@ -815,7 +825,7 @@ class DiagnoseDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             frame, text="关闭", width=80, height=32,
-            font=ctk.CTkFont(size=12),
+            font=_font(12),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=self._close
         ).pack(pady=(0, 12))
@@ -852,12 +862,21 @@ class SettingsDialog(ctk.CTkToplevel):
         self._hotkey_capture_listener = None
         self._hotkey_capture_modifiers = set()
 
-        frame = ctk.CTkFrame(self, fg_color=COLORS["card"], corner_radius=12)
-        frame.pack(fill="both", expand=True, padx=16, pady=16)
+        outer_frame = ctk.CTkFrame(self, fg_color=COLORS["card"], corner_radius=12)
+        outer_frame.pack(fill="both", expand=True, padx=16, pady=16)
+        self._settings_outer_frame = outer_frame
+
+        frame = ctk.CTkScrollableFrame(
+            outer_frame,
+            fg_color="transparent",
+            scrollbar_button_color=COLORS["primary"],
+            scrollbar_button_hover_color=COLORS["primary_hover"],
+        )
+        frame.pack(fill="both", expand=True, padx=0, pady=(0, 4))
 
         ctk.CTkLabel(
             frame, text="设置",
-            font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text"]
+            font=_font(16, weight="bold"), text_color=COLORS["text"]
         ).pack(padx=16, pady=(16, 0), anchor="w")
 
         # 悬浮延迟
@@ -865,12 +884,12 @@ class SettingsDialog(ctk.CTkToplevel):
         delay_frame.pack(fill="x", padx=16, pady=(8, 2))
         ctk.CTkLabel(
             delay_frame, text="悬浮预览延迟",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+            font=_font(13), text_color=COLORS["text"]
         ).pack(side="left")
         initial_delay = self.settings.get("hover_delay_ms", 800) / 1000.0
         self.delay_label = ctk.CTkLabel(
             delay_frame, text=f"{initial_delay:.1f} 秒",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=_font(13, weight="bold"),
             text_color=COLORS["primary"], width=60
         )
         self.delay_label.pack(side="right")
@@ -888,7 +907,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.slider.pack(fill="x", padx=16, pady=(0, 2))
         ctk.CTkLabel(
             frame, text="鼠标放在图片上多久后显示预览",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
         # 滚动速度
@@ -896,11 +915,11 @@ class SettingsDialog(ctk.CTkToplevel):
         speed_frame.pack(fill="x", padx=16, pady=(8, 2))
         ctk.CTkLabel(
             speed_frame, text="滚动速度",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+            font=_font(13), text_color=COLORS["text"]
         ).pack(side="left")
         self.speed_label = ctk.CTkLabel(
             speed_frame, text="",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=_font(13, weight="bold"),
             text_color=COLORS["primary"], width=60
         )
         self.speed_label.pack(side="right")
@@ -920,7 +939,39 @@ class SettingsDialog(ctk.CTkToplevel):
         self.speed_slider.pack(fill="x", padx=16, pady=(0, 2))
         ctk.CTkLabel(
             frame, text="鼠标滚轮每次滚动的行数",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
+        ).pack(padx=16, anchor="w")
+
+        # 应用内文字大小
+        font_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        font_frame.pack(fill="x", padx=16, pady=(8, 2))
+        ctk.CTkLabel(
+            font_frame, text="应用内文字大小",
+            font=_font(13), text_color=COLORS["text"]
+        ).pack(side="left")
+        self.font_size_label = ctk.CTkLabel(
+            font_frame, text="",
+            font=_font(13, weight="bold"),
+            text_color=COLORS["primary"], width=60
+        )
+        self.font_size_label.pack(side="right")
+
+        self.font_size_slider = ctk.CTkSlider(
+            frame, from_=-2, to=4, number_of_steps=6,
+            command=self._on_font_size_slider_change,
+            height=18, button_length=18,
+            fg_color=COLORS["border"],
+            progress_color=COLORS["primary"],
+            button_color=COLORS["primary"],
+            button_hover_color=COLORS["primary_hover"],
+        )
+        initial_font_delta = self.settings.get("app_font_size_delta", 0)
+        self.font_size_slider.set(initial_font_delta)
+        self._on_font_size_slider_change(initial_font_delta)
+        self.font_size_slider.pack(fill="x", padx=16, pady=(0, 2))
+        ctk.CTkLabel(
+            frame, text="调整消息列表、按钮和状态栏文字",
+            font=_font(11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
         # 排序
@@ -928,14 +979,14 @@ class SettingsDialog(ctk.CTkToplevel):
         sort_frame.pack(fill="x", padx=16, pady=(8, 2))
         ctk.CTkLabel(
             sort_frame, text="消息排序",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+            font=_font(13), text_color=COLORS["text"]
         ).pack(side="left")
         sort_value = self.settings.get("sort_order", "newest")
         self.sort_var = ctk.StringVar(value=SORT_LABELS.get(sort_value, "最新优先"))
         sort_menu = ctk.CTkOptionMenu(
             sort_frame, variable=self.sort_var,
             values=list(SORT_VALUES.keys()), width=120, height=28,
-            font=ctk.CTkFont(size=12),
+            font=_font(12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             button_color=COLORS["primary"], button_hover_color=COLORS["primary_hover"],
             dropdown_fg_color=COLORS["card"],
@@ -951,7 +1002,7 @@ class SettingsDialog(ctk.CTkToplevel):
         archive_switch = ctk.CTkSwitch(
             frame, text="快速导入后自动归档",
             variable=self.archive_var,
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"],
+            font=_font(13), text_color=COLORS["text"],
             progress_color=COLORS["primary"],
             button_color=COLORS["primary"],
             button_hover_color=COLORS["primary_hover"],
@@ -959,7 +1010,7 @@ class SettingsDialog(ctk.CTkToplevel):
         archive_switch.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(
             frame, text="导入完成后自动将消息移入已归档",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
         self.startup_var = ctk.BooleanVar(
@@ -968,7 +1019,7 @@ class SettingsDialog(ctk.CTkToplevel):
         startup_switch = ctk.CTkSwitch(
             frame, text="开机自启动",
             variable=self.startup_var,
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"],
+            font=_font(13), text_color=COLORS["text"],
             progress_color=COLORS["primary"],
             button_color=COLORS["primary"],
             button_hover_color=COLORS["primary_hover"],
@@ -976,19 +1027,19 @@ class SettingsDialog(ctk.CTkToplevel):
         startup_switch.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(
             frame, text="登录 Windows 后自动启动需求暂存站",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
         ctk.CTkLabel(
             frame, text="呼出界面快捷键",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+            font=_font(13), text_color=COLORS["text"]
         ).pack(fill="x", padx=16, pady=(8, 4), anchor="w")
         self.show_hotkey_var = ctk.StringVar(
             value=self.settings.get("show_hotkey", "<ctrl>+<shift>+v")
         )
         self.show_hotkey_entry = ctk.CTkEntry(
             frame, textvariable=self.show_hotkey_var,
-            font=ctk.CTkFont(size=12), height=30,
+            font=_font(12), height=30,
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             border_color=COLORS["border"], corner_radius=8,
         )
@@ -997,14 +1048,14 @@ class SettingsDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             frame, text="导入当前剪切板快捷键",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"]
+            font=_font(13), text_color=COLORS["text"]
         ).pack(fill="x", padx=16, pady=(8, 4), anchor="w")
         self.capture_hotkey_var = ctk.StringVar(
             value=self.settings.get("capture_hotkey", "<ctrl>+<alt>+v")
         )
         self.capture_hotkey_entry = ctk.CTkEntry(
             frame, textvariable=self.capture_hotkey_var,
-            font=ctk.CTkFont(size=12), height=30,
+            font=_font(12), height=30,
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             border_color=COLORS["border"], corner_radius=8,
         )
@@ -1012,12 +1063,12 @@ class SettingsDialog(ctk.CTkToplevel):
         self._bind_hotkey_entry(self.capture_hotkey_entry, self.capture_hotkey_var, "capture_hotkey")
         ctk.CTkLabel(
             frame, text="点击输入框后直接按下组合键，会立即保存",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         ).pack(padx=16, anchor="w")
 
         self.update_button = ctk.CTkButton(
             frame, text="检查更新", height=32,
-            font=ctk.CTkFont(size=12),
+            font=_font(12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
             hover_color=COLORS["border"], corner_radius=8,
             command=self._check_updates
@@ -1025,23 +1076,23 @@ class SettingsDialog(ctk.CTkToplevel):
         self.update_button.pack(fill="x", padx=16, pady=(8, 0))
         self.update_status_label = ctk.CTkLabel(
             frame, text="",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"],
+            font=_font(11), text_color=COLORS["text_hint"],
         )
         self.update_status_label.pack(fill="x", padx=16, pady=(2, 0), anchor="w")
 
         # 按钮
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(8, 8))
+        btn_frame = ctk.CTkFrame(self._settings_outer_frame, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=16, pady=(4, 12))
         ctk.CTkButton(
             btn_frame, text="取消", width=68, height=32,
-            font=ctk.CTkFont(size=12),
+            font=_font(12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
             hover_color=COLORS["border"], corner_radius=8,
             command=self._close
         ).pack(side="right", padx=(6, 0))
         ctk.CTkButton(
             btn_frame, text="保存", width=68, height=32,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=_font(12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=self._save
         ).pack(side="right")
@@ -1055,6 +1106,16 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _on_speed_slider_change(self, value):
         self.speed_label.configure(text=f"{int(value)} 行")
+
+    def _on_font_size_slider_change(self, value):
+        delta = int(value)
+        if delta == 0:
+            text = "标准"
+        elif delta > 0:
+            text = f"+{delta}"
+        else:
+            text = str(delta)
+        self.font_size_label.configure(text=text)
 
     def _bind_hotkey_entry(self, entry, variable, setting_key):
         def arm_capture(event=None):
@@ -1207,6 +1268,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def _save(self):
         self.settings["hover_delay_ms"] = int(self.slider.get() * 1000)
         self.settings["scroll_speed"] = int(self.speed_slider.get())
+        self.settings["app_font_size_delta"] = int(self.font_size_slider.get())
         self.settings["auto_archive_after_import"] = self.archive_var.get()
         self.settings["sort_order"] = SORT_VALUES.get(self.sort_var.get(), "newest")
         self.settings["launch_on_startup"] = self.startup_var.get()
@@ -1250,7 +1312,7 @@ class UpdateDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             frame, text=f"发现新版本 {latest_version}",
-            font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text"]
+            font=_font(16, weight="bold"), text_color=COLORS["text"]
         ).pack(padx=16, pady=(16, 6), anchor="w")
 
         self._is_onefile = _is_onefile_bundle()
@@ -1265,13 +1327,13 @@ class UpdateDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             frame, text=hint,
-            font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"],
+            font=_font(12), text_color=COLORS["text_secondary"],
             wraplength=320, justify="left"
         ).pack(padx=16, anchor="w")
 
         notes = (release.get("body") or "该版本没有填写更新说明。").strip()
         textbox = ctk.CTkTextbox(
-            frame, height=80, wrap="word", font=ctk.CTkFont(size=11),
+            frame, height=80, wrap="word", font=_font(11),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             border_width=0, corner_radius=8
         )
@@ -1281,7 +1343,7 @@ class UpdateDialog(ctk.CTkToplevel):
 
         self.status_label = ctk.CTkLabel(
             frame, text="",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         )
         self.status_label.pack(fill="x", padx=16, pady=(8, 0), anchor="w")
 
@@ -1289,14 +1351,14 @@ class UpdateDialog(ctk.CTkToplevel):
         btn_frame.pack(fill="x", padx=16, pady=(8, 12))
         ctk.CTkButton(
             btn_frame, text="稍后", width=72, height=32,
-            font=ctk.CTkFont(size=12),
+            font=_font(12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
             hover_color=COLORS["border"], corner_radius=8,
             command=self._close
         ).pack(side="right", padx=(6, 0))
         self.install_btn = ctk.CTkButton(
             btn_frame, text=install_text, width=108, height=32,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=_font(12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=install_cmd
         )
@@ -1415,7 +1477,7 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
         ctk.CTkLabel(
             main, text=title,
-            font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text"]
+            font=_font(16, weight="bold"), text_color=COLORS["text"]
         ).pack(padx=16, pady=(16, 8), anchor="w")
 
         # 图片区域（上方）
@@ -1427,7 +1489,7 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         # 文字输入（下方）
         self.textbox = ctk.CTkTextbox(
             main, height=150, wrap="word",
-            font=ctk.CTkFont(size=13),
+            font=_font(13),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text"],
             corner_radius=8
         )
@@ -1441,20 +1503,20 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
         self.hint_label = ctk.CTkLabel(
             toolbar, text="Ctrl+V 或 Shift+Insert 粘贴图片",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         )
         self.hint_label.pack(side="left")
 
         ctk.CTkButton(
             toolbar, text="取消", width=68, height=34,
-            font=ctk.CTkFont(size=12),
+            font=_font(12),
             fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
             hover_color=COLORS["border"], corner_radius=8,
             command=self._on_close
         ).pack(side="right", padx=(6, 0))
         ctk.CTkButton(
             toolbar, text="保存", width=68, height=34,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=_font(12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=self._save
         ).pack(side="right")
@@ -1518,11 +1580,11 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         header.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(
             header, text=f"已添加 {len(self.images)} 张图片",
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text"]
+            font=_font(12, weight="bold"), text_color=COLORS["text"]
         ).pack(side="left")
         ctk.CTkLabel(
             header, text="Ctrl+V 继续添加",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         ).pack(side="right")
 
         container = ctk.CTkFrame(self.img_frame, fg_color=COLORS["tag_bg"], corner_radius=8)
@@ -1566,7 +1628,7 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
             del_lbl = ctk.CTkLabel(
                 del_bg, text="×",
-                font=ctk.CTkFont(size=11, weight="bold"),
+                font=_font(11, weight="bold"),
                 text_color="white", width=18, height=18
             )
             del_lbl.place(relx=0.5, rely=0.5, anchor="center")
@@ -1608,8 +1670,12 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
     def _do_save_and_close(self):
         """实际执行保存和关闭"""
-        self.on_save(self._saved_text, self._saved_images)
+        on_save = self.on_save
+        saved_text = self._saved_text
+        saved_images = self._saved_images
+        parent = self._parent
         self._on_close()
+        parent.after_idle(lambda: on_save(saved_text, saved_images))
 
 
 # ========== 消息卡片 ==========
@@ -1633,14 +1699,13 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         )
         self.pack(fill="x", pady=6, padx=4)
 
-        if image_filenames:
-            self._render_images()
+        rendered_images = self._render_images() if image_filenames else False
         if text_content:
             self._render_text()
-        elif not image_filenames:
+        elif not rendered_images:
             ctk.CTkLabel(
                 self, text="（空消息）",
-                font=ctk.CTkFont(size=12), text_color=COLORS["text_hint"]
+                font=_font(12), text_color=COLORS["text_hint"]
             ).pack(
                 padx=self.CONTENT_PAD_X,
                 pady=(self.CONTENT_TOP_PAD, 4),
@@ -1654,6 +1719,16 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         max_per_row = 3
         max_rows = 3
         max_display = max_per_row * max_rows
+        renderable_images = []
+        for img_file in self.image_filenames[:max_display]:
+            image_path = db.get_image_path(img_file)
+            if not image_path or not os.path.exists(image_path):
+                continue
+            ctk_img = _cached_ctk_image(image_path, 120, 100)
+            if ctk_img:
+                renderable_images.append((image_path, ctk_img))
+        if not renderable_images:
+            return False
 
         img_container = ctk.CTkFrame(self, fg_color="transparent")
         img_container.pack(
@@ -1661,42 +1736,35 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
             padx=self.CONTENT_PAD_X,
             pady=(self.CONTENT_TOP_PAD, 0)
         )
+        row_count = min(max_rows, (len(renderable_images) + max_per_row - 1) // max_per_row)
 
-        for idx, img_file in enumerate(self.image_filenames[:max_display]):
-            image_path = db.get_image_path(img_file)
-            if image_path and os.path.exists(image_path):
-                try:
-                    ctk_img = _cached_ctk_image(image_path, 120, 100)
-                    if not ctk_img:
-                        continue
+        for idx, (image_path, ctk_img) in enumerate(renderable_images):
+            row = idx // max_per_row
+            col = idx % max_per_row
+            frame = ctk.CTkFrame(
+                img_container,
+                fg_color=COLORS["tag_bg"],
+                corner_radius=8,
+                border_width=1,
+                border_color=COLORS["border"],
+                width=132,
+                height=82
+            )
+            frame.grid(
+                row=row, column=col,
+                padx=(0, 6) if col < 2 else 0,
+                pady=(0, 6) if row < row_count - 1 else 0,
+                sticky="nsew"
+            )
 
-                    # 圆角边框容器
-                    row = idx // max_per_row
-                    col = idx % max_per_row
-                    frame = ctk.CTkFrame(
-                        img_container,
-                        fg_color=COLORS["tag_bg"],
-                        corner_radius=8,
-                        border_width=1,
-                        border_color=COLORS["border"]
-                    )
-                    frame.grid(
-                        row=row, column=col,
-                        padx=(0, 6) if col < 2 else 0,
-                        pady=(0, 6) if row < 2 else 0,
-                        sticky="nsew"
-                    )
-
-                    lbl = ctk.CTkLabel(frame, image=ctk_img, text="", cursor="hand2")
-                    lbl.pack(padx=4, pady=4)
-                    lbl.image = ctk_img
-                    self.bind_hover_preview(lbl, image_path)
-                    lbl.bind(
-                        "<Button-1>",
-                        lambda e, p=image_path: self.callbacks["copy_image"](p)
-                    )
-                except Exception:
-                    pass
+            lbl = ctk.CTkLabel(frame, image=ctk_img, text="", cursor="hand2")
+            lbl.pack(padx=4, pady=4)
+            lbl.image = ctk_img
+            self.bind_hover_preview(lbl, image_path)
+            lbl.bind(
+                "<Button-1>",
+                lambda e, p=image_path: self.callbacks["copy_image"](p)
+            )
 
         for c in range(max_per_row):
             img_container.grid_columnconfigure(c, weight=1)
@@ -1705,8 +1773,9 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
             ctk.CTkLabel(
                 img_container,
                 text=f"还有 {len(self.image_filenames) - max_display} 张图片...",
-                font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+                font=_font(11), text_color=COLORS["text_hint"]
             ).grid(row=max_rows, column=0, columnspan=max_per_row, sticky="w", pady=(2, 0))
+        return True
 
     def _render_text(self):
         text_bg = ctk.CTkFrame(self, fg_color=COLORS["tag_bg"], corner_radius=6)
@@ -1719,7 +1788,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         text_label = ctk.CTkLabel(
             text_bg, text=preview_text,
             wraplength=450, justify="left", anchor="w",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text"],
+            font=_font(13), text_color=COLORS["text"],
             cursor="hand2", width=1
         )
         text_label.pack(fill="x", padx=12, pady=8, anchor="w")
@@ -1737,7 +1806,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         time_str = _format_local_time(self.created_at)
         ctk.CTkLabel(
             footer, text=time_str,
-            font=ctk.CTkFont(size=10), text_color=COLORS["text_hint"]
+            font=_font(10), text_color=COLORS["text_hint"]
         ).pack(side="left")
 
         archive_text = "恢复" if view_mode == "archived" else "归档"
@@ -1746,7 +1815,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         if view_mode == "archived":
             ctk.CTkButton(
                 footer, text="×", width=24, height=24,
-                font=ctk.CTkFont(size=12, weight="bold"),
+                font=_font(12, weight="bold"),
                 fg_color="transparent", text_color=COLORS["text_hint"],
                 hover_color=COLORS["tag_bg"], corner_radius=6,
                 command=lambda: self.callbacks["delete"](self.msg_id)
@@ -1754,7 +1823,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
         ctk.CTkButton(
             footer, text=archive_text, width=52, height=24,
-            font=ctk.CTkFont(size=11),
+            font=_font(11),
             fg_color="transparent", text_color=COLORS["text_secondary"],
             hover_color=COLORS["tab_hover"], corner_radius=6,
             command=lambda: self.callbacks["archive"](self.msg_id)
@@ -1763,7 +1832,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         if view_mode == "active":
             ctk.CTkButton(
                 footer, text="编辑", width=42, height=24,
-                font=ctk.CTkFont(size=11),
+                font=_font(11),
                 fg_color=COLORS["tag_bg"], text_color=COLORS["text_secondary"],
                 hover_color=COLORS["border"], corner_radius=6,
                 command=lambda: self.callbacks["edit"](self.msg_id)
@@ -1771,7 +1840,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
             ctk.CTkButton(
                 footer, text="导入", width=42, height=24,
-                font=ctk.CTkFont(size=11),
+                font=_font(11),
                 fg_color=COLORS["primary"], text_color="white",
                 hover_color=COLORS["primary_hover"], corner_radius=6,
                 command=lambda: self.callbacks["import_message"](self.msg_id)
@@ -2035,7 +2104,7 @@ class DemandStashApp(ctk.CTk):
         title_frame.pack(side="left", padx=(14, 8), pady=10)
         self.title_label = ctk.CTkLabel(
             title_frame, text=APP_NAME,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=17, weight="bold"),
+            font=_font(17, weight="bold"),
             text_color=COLORS["primary"]
         )
         self.title_label.pack(side="left")
@@ -2045,14 +2114,14 @@ class DemandStashApp(ctk.CTk):
 
         self.count_label = ctk.CTkLabel(
             btn_frame, text="总计 0 条消息",
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11), text_color=COLORS["text_hint"],
+            font=_font(11), text_color=COLORS["text_hint"],
             width=78
         )
         self.count_label.pack(side="left", padx=(0, 6))
 
         self.pin_btn = ctk.CTkButton(
             btn_frame, text="置顶", width=40, height=30,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11),
+            font=_font(11),
             fg_color="transparent", text_color=COLORS["text_hint"],
             hover_color=COLORS["tab_hover"], corner_radius=6,
             command=self._toggle_always_on_top
@@ -2061,7 +2130,7 @@ class DemandStashApp(ctk.CTk):
 
         self.settings_btn = ctk.CTkButton(
             btn_frame, text="设置", width=40, height=30,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=11),
+            font=_font(11),
             fg_color="transparent", text_color=COLORS["text_hint"],
             hover_color=COLORS["tab_hover"], corner_radius=6,
             command=self._open_settings
@@ -2070,7 +2139,7 @@ class DemandStashApp(ctk.CTk):
 
         self.new_msg_btn = ctk.CTkButton(
             btn_frame, text="+ 新建", width=82, height=32,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12, weight="bold"),
+            font=_font(12, weight="bold"),
             fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"],
             corner_radius=8, command=self._on_new_message,
         )
@@ -2080,14 +2149,25 @@ class DemandStashApp(ctk.CTk):
         if not hasattr(self, "count_label"):
             return
         width = event.width if event else self.winfo_width()
+        self._refresh_count_label(width)
+        if event is None:
+            return
         if width < 405:
-            self.count_label.configure(width=42, text=f"{self._view_counts.get(self.view_mode, 0)} 条")
-            self.title_label.configure(font=ctk.CTkFont(family="Microsoft YaHei UI", size=15, weight="bold"))
+            self.title_label.configure(font=_font(15, weight="bold"))
             self.new_msg_btn.configure(width=76)
         else:
-            self.count_label.configure(width=78, text=f"总计 {self._view_counts.get(self.view_mode, 0)} 条消息")
-            self.title_label.configure(font=ctk.CTkFont(family="Microsoft YaHei UI", size=17, weight="bold"))
+            self.title_label.configure(font=_font(17, weight="bold"))
             self.new_msg_btn.configure(width=82)
+
+    def _refresh_count_label(self, width=None):
+        if not hasattr(self, "count_label"):
+            return
+        width = width if width is not None else self.winfo_width()
+        count = self._view_counts.get(self.view_mode, 0)
+        if width < 405:
+            self.count_label.configure(width=42, text=f"{count} 条")
+        else:
+            self.count_label.configure(width=78, text=f"总计 {count} 条消息")
 
     def _create_content(self):
         content_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -2098,7 +2178,7 @@ class DemandStashApp(ctk.CTk):
 
         self.tab_active = ctk.CTkButton(
             self.tab_frame, text="消息", width=80, height=32,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12, weight="bold"),
+            font=_font(12, weight="bold"),
             fg_color=COLORS["primary"], text_color="white",
             hover_color=COLORS["primary_hover"], corner_radius=8,
             command=lambda: self._switch_view("active")
@@ -2107,7 +2187,7 @@ class DemandStashApp(ctk.CTk):
 
         self.tab_archived = ctk.CTkButton(
             self.tab_frame, text="已归档", width=80, height=32,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12),
+            font=_font(12),
             fg_color="transparent", text_color=COLORS["text_secondary"],
             hover_color=COLORS["tab_hover"], corner_radius=8,
             command=lambda: self._switch_view("archived")
@@ -2160,12 +2240,12 @@ class DemandStashApp(ctk.CTk):
         self.footer.pack_propagate(False)
         self.status_bar = ctk.CTkLabel(
             self.footer, text="",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]
+            font=_font(11), text_color=COLORS["text_secondary"]
         )
         self.status_bar.pack(side="left", padx=16)
         self.hotkey_hint_label = ctk.CTkLabel(
             self.footer, text="Ctrl+Shift+V 呼出",
-            font=ctk.CTkFont(size=11), text_color=COLORS["text_hint"]
+            font=_font(11), text_color=COLORS["text_hint"]
         )
         self.hotkey_hint_label.pack(side="right", padx=16)
         self._refresh_hotkey_hint()
@@ -2184,12 +2264,32 @@ class DemandStashApp(ctk.CTk):
         SettingsDialog(self, on_save=self._on_settings_saved)
 
     def _on_settings_saved(self):
+        self._refresh_main_fonts()
         self._mark_views_dirty()
-        self.load_items()
+        self.load_items(immediate=True)
         self._start_hotkey_listener()
         self._refresh_hotkey_hint()
         self._apply_scroll_speed(get_scroll_speed())
         self._show_status("设置已保存")
+
+    def _refresh_main_fonts(self):
+        if hasattr(self, "count_label"):
+            self.count_label.configure(font=_font(11))
+        if hasattr(self, "pin_btn"):
+            self.pin_btn.configure(font=_font(11))
+        if hasattr(self, "settings_btn"):
+            self.settings_btn.configure(font=_font(11))
+        if hasattr(self, "new_msg_btn"):
+            self.new_msg_btn.configure(font=_font(12, weight="bold"))
+        if hasattr(self, "tab_active"):
+            self.tab_active.configure(font=_font(12, weight="bold"))
+        if hasattr(self, "tab_archived"):
+            self.tab_archived.configure(font=_font(12))
+        if hasattr(self, "status_bar"):
+            self.status_bar.configure(font=_font(11))
+        if hasattr(self, "hotkey_hint_label"):
+            self.hotkey_hint_label.configure(font=_font(11))
+        self._adjust_header_layout()
 
     def _refresh_hotkey_hint(self):
         if hasattr(self, "hotkey_hint_label"):
@@ -2277,7 +2377,7 @@ class DemandStashApp(ctk.CTk):
                 fg_color=COLORS["primary"], text_color="white",
                 hover_color=COLORS["primary_hover"]
             )
-        self._adjust_header_layout()
+        self._refresh_count_label()
         self.load_items(immediate=True)
 
     def _open_editor(self, on_save, title="新建消息", text_content="", images=None):
@@ -2300,11 +2400,11 @@ class DemandStashApp(ctk.CTk):
     def _on_new_message(self):
         def on_save(text, images_data):
             db.add_message(text_content=text, images_data=images_data if images_data else None)
-            self._mark_views_dirty("active")
+            self._reset_view_cache("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
-                self.load_items()
+                self.load_items(immediate=True)
             self._show_status("已保存")
         self._open_editor(on_save)
 
@@ -2314,11 +2414,11 @@ class DemandStashApp(ctk.CTk):
             text = get_clipboard_text()
             if text:
                 db.add_message(text_content=text)
-                self._mark_views_dirty("active")
+                self._reset_view_cache("active")
                 if self.view_mode != "active":
                     self._switch_view("active")
                 else:
-                    self.load_items()
+                    self.load_items(immediate=True)
                 self._show_status("已保存文字")
                 return "break"
             DiagnoseDialog(self, diagnostics)
@@ -2326,11 +2426,11 @@ class DemandStashApp(ctk.CTk):
 
         def on_save(text, images_data):
             db.add_message(text_content=text, images_data=images_data)
-            self._mark_views_dirty("active")
+            self._reset_view_cache("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
-                self.load_items()
+                self.load_items(immediate=True)
             self._show_status("已保存")
 
         dialog = self._open_editor(on_save)
@@ -2345,22 +2445,22 @@ class DemandStashApp(ctk.CTk):
             buf = BytesIO()
             img.save(buf, format="PNG")
             db.add_message(images_data=[buf.getvalue()])
-            self._mark_views_dirty("active")
+            self._reset_view_cache("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
-                self.load_items()
+                self.load_items(immediate=True)
             self._show_status("已导入剪切板图片")
             return
 
         text = get_clipboard_text()
         if text:
             db.add_message(text_content=text)
-            self._mark_views_dirty("active")
+            self._reset_view_cache("active")
             if self.view_mode != "active":
                 self._switch_view("active")
             else:
-                self.load_items()
+                self.load_items(immediate=True)
             self._show_status("已导入剪切板文字")
             return
 
@@ -2386,8 +2486,8 @@ class DemandStashApp(ctk.CTk):
             db.delete_message_images(msg_id)
             for img_data in new_images_data:
                 db.add_image_to_message(msg_id, img_data)
-            self._mark_views_dirty(self.view_mode)
-            self.load_items()
+            self._reset_view_cache(self.view_mode)
+            self.load_items(immediate=True)
             self._show_status("已更新")
 
         self._open_editor(
@@ -2451,8 +2551,8 @@ class DemandStashApp(ctk.CTk):
             if get_auto_archive_after_import() and self._import_msg_id:
                 db.toggle_archive(self._import_msg_id)
                 self._import_msg_id = None
-                self._mark_views_dirty("active", "archived")
-                self.load_items()
+                self._reset_view_cache("active", "archived")
+                self.load_items(immediate=True)
             if self._restore_after_import:
                 self._restore_after_import = False
                 self.after(300, self._do_show)
@@ -2473,14 +2573,12 @@ class DemandStashApp(ctk.CTk):
 
     def _on_archive(self, msg_id: int):
         new_val = db.toggle_archive(msg_id)
-        self._mark_views_dirty("active", "archived")
-        self.load_items()
+        self.after_idle(lambda: self._reload_views("active", "archived"))
         self._show_status("已归档" if new_val else "已恢复")
 
     def _delete_message(self, msg_id: int):
         db.delete_message(msg_id)
-        self._mark_views_dirty("archived")
-        self.load_items()
+        self.after_idle(lambda: self._reload_views("archived"))
         self._show_status("已删除")
 
     def _show_status(self, message, duration=2000):
@@ -2508,6 +2606,31 @@ class DemandStashApp(ctk.CTk):
             self._view_build_tokens[mode] += 1
         self._cancel_render_batches()
 
+    def _reload_views(self, *modes):
+        self._reset_view_cache(*modes)
+        self.load_items(immediate=True)
+
+    def _reset_view_cache(self, *modes):
+        if not modes:
+            modes = ("active", "archived")
+        self._cancel_scroll_region_updates()
+        self._cancel_render_batches()
+        if self._load_items_after_id:
+            self.after_cancel(self._load_items_after_id)
+            self._load_items_after_id = None
+        for mode in modes:
+            frame = self._view_frames.get(mode)
+            if frame and frame.winfo_exists():
+                for widget in list(frame.winfo_children()):
+                    widget.destroy()
+                frame.pack_forget()
+            self._view_dirty[mode] = True
+            self._view_build_tokens[mode] += 1
+            self._view_items[mode] = []
+            self._view_callbacks[mode] = {}
+            self._view_rendered_count[mode] = 0
+            self._view_render_complete[mode] = False
+
     def _get_view_frame(self, mode):
         frame = self._view_frames.get(mode)
         if frame is None or not frame.winfo_exists():
@@ -2528,10 +2651,11 @@ class DemandStashApp(ctk.CTk):
                 frame.pack_forget()
 
         parent_frame = self._get_view_frame(mode)
+        parent_frame.update_idletasks()
         parent_frame.pack(fill="x", expand=True)
 
         if not self._view_dirty.get(mode, True):
-            self._adjust_header_layout()
+            self._refresh_count_label()
             self._schedule_scroll_region_update(reset=True)
             return
 
@@ -2546,7 +2670,7 @@ class DemandStashApp(ctk.CTk):
         )
         count = len(items)
         self._view_counts[mode] = count
-        self._adjust_header_layout()
+        self._refresh_count_label()
 
         if not items:
             self._render_empty_state(parent_frame, mode)
@@ -2587,6 +2711,7 @@ class DemandStashApp(ctk.CTk):
         for item in items[start:end]:
             MessageCard(parent_frame, item, mode, callbacks)
         self._view_rendered_count[mode] = end
+        parent_frame.update_idletasks()
 
         self._schedule_scroll_region_update(reset=(start == 0))
 
@@ -2653,10 +2778,10 @@ class DemandStashApp(ctk.CTk):
 
         ctk.CTkLabel(empty_frame, text=icon, font=ctk.CTkFont(size=48)).pack(pady=(0, 12))
         ctk.CTkLabel(empty_frame, text=title,
-                     font=ctk.CTkFont(size=16, weight="bold"),
+                     font=_font(16, weight="bold"),
                      text_color=COLORS["text"]).pack(pady=(0, 8))
         ctk.CTkLabel(empty_frame, text=desc,
-                     font=ctk.CTkFont(size=13),
+                     font=_font(13),
                      text_color=COLORS["text_hint"]).pack()
 
         if mode != "archived":

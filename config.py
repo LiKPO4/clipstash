@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     "show_hotkey": "<ctrl>+<shift>+v",
     "capture_hotkey": "<ctrl>+<alt>+v",
     "scroll_speed": 2,
+    "app_font_size_delta": 0,
 }
 
 _settings = None
@@ -79,6 +80,10 @@ def get_capture_hotkey():
 
 def get_scroll_speed():
     return load_settings().get("scroll_speed", 2)
+
+
+def get_app_font_size_delta():
+    return load_settings().get("app_font_size_delta", 0)
 
 
 os.makedirs(DATA_DIR, exist_ok=True)
