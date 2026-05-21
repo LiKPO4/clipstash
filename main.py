@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.8"
+APP_VERSION = "v1.3.9"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -1748,38 +1748,36 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
             padx=self.CONTENT_PAD_X,
             pady=(self.CONTENT_TOP_PAD, 0)
         )
-        row_count = min(max_rows, (len(renderable_images) + max_per_row - 1) // max_per_row)
+        rows = [
+            renderable_images[i:i + max_per_row]
+            for i in range(0, len(renderable_images), max_per_row)
+        ]
 
-        for idx, (image_path, ctk_img) in enumerate(renderable_images):
-            row = idx // max_per_row
-            col = idx % max_per_row
-            frame = ctk.CTkFrame(
-                img_container,
-                fg_color=COLORS["tag_bg"],
-                corner_radius=8,
-                border_width=1,
-                border_color=COLORS["border"],
-                width=132,
-                height=82
-            )
-            frame.grid(
-                row=row, column=col,
-                padx=(0, 6) if col < 2 else 0,
-                pady=(0, 6) if row < row_count - 1 else 0,
-                sticky="nsew"
-            )
+        for row_idx, row_items in enumerate(rows):
+            row_frame = ctk.CTkFrame(img_container, fg_color="transparent")
+            row_frame.pack(fill="x", pady=(0, 6) if row_idx < len(rows) - 1 else 0)
 
-            lbl = ctk.CTkLabel(frame, image=ctk_img, text="", cursor="hand2")
-            lbl.pack(padx=4, pady=4)
-            lbl.image = ctk_img
-            self.bind_hover_preview(lbl, image_path)
-            lbl.bind(
-                "<Button-1>",
-                lambda e, p=image_path: self.callbacks["copy_image"](p)
-            )
+            for col_idx, (image_path, ctk_img) in enumerate(row_items):
+                frame = ctk.CTkFrame(
+                    row_frame,
+                    fg_color=COLORS["tag_bg"],
+                    corner_radius=8,
+                    border_width=1,
+                    border_color=COLORS["border"],
+                    width=132,
+                    height=82
+                )
+                frame.pack(side="left", padx=(0, 6) if col_idx < len(row_items) - 1 else 0)
+                frame.pack_propagate(False)
 
-        for c in range(max_per_row):
-            img_container.grid_columnconfigure(c, weight=1)
+                lbl = ctk.CTkLabel(frame, image=ctk_img, text="", cursor="hand2")
+                lbl.pack(padx=4, pady=4)
+                lbl.image = ctk_img
+                self.bind_hover_preview(lbl, image_path)
+                lbl.bind(
+                    "<Button-1>",
+                    lambda e, p=image_path: self.callbacks["copy_image"](p)
+                )
 
         if len(self.image_filenames) > max_display:
             ctk.CTkLabel(
