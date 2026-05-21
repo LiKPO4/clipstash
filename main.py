@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.9"
+APP_VERSION = "v1.3.10"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -1744,7 +1744,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
         img_container = ctk.CTkFrame(self, fg_color="transparent")
         img_container.pack(
-            fill="x",
+            anchor="w",
             padx=self.CONTENT_PAD_X,
             pady=(self.CONTENT_TOP_PAD, 0)
         )
@@ -1755,7 +1755,7 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
 
         for row_idx, row_items in enumerate(rows):
             row_frame = ctk.CTkFrame(img_container, fg_color="transparent")
-            row_frame.pack(fill="x", pady=(0, 6) if row_idx < len(rows) - 1 else 0)
+            row_frame.pack(anchor="w", pady=(0, 6) if row_idx < len(rows) - 1 else 0)
 
             for col_idx, (image_path, ctk_img) in enumerate(row_items):
                 frame = ctk.CTkFrame(
