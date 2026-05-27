@@ -3,7 +3,7 @@
 
 #define MyAppName "ClipStash"
 #define MyAppNameCn "需求暂存站"
-#define MyAppVersion "1.3.10"
+#define MyAppVersion "1.3.11"
 #define MyAppPublisher "LiKPO4"
 #define MyAppExeName "ClipStash.exe"
 #define MyAppId "LiKPO4.ClipStash"

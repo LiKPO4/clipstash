@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.10"
+APP_VERSION = "v1.3.11"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -225,7 +225,11 @@ def _set_taskbar_icon(hwnd, icon_path):
 def _startup_command():
     if getattr(sys, "frozen", False):
         return subprocess.list2cmdline([sys.executable])
-    return subprocess.list2cmdline([sys.executable, os.path.abspath(__file__)])
+    python_exe = sys.executable
+    pythonw_exe = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
+    if os.path.exists(pythonw_exe):
+        python_exe = pythonw_exe
+    return subprocess.list2cmdline([python_exe, os.path.abspath(__file__)])
 
 
 def _set_launch_on_startup(enabled):
@@ -2212,9 +2216,21 @@ class DemandStashApp(ctk.CTk):
         )
         self.scroll_frame.pack(fill="both", expand=True)
         self.bind_all("<MouseWheel>", self._on_mouse_wheel)
+        self._bind_blank_new_message(self.scroll_frame)
+        try:
+            self._bind_blank_new_message(self.scroll_frame._parent_canvas)
+        except Exception:
+            pass
 
         # 应用滚动速度
         self._apply_scroll_speed(get_scroll_speed())
+
+    def _bind_blank_new_message(self, widget):
+        widget.bind("<Double-Button-1>", self._on_blank_double_click, add="+")
+
+    def _on_blank_double_click(self, event=None):
+        self._on_new_message()
+        return "break"
 
     def _apply_scroll_speed(self, speed):
         """保存滚动速度。不要改 yscrollincrement，否则滚轮会像失效一样变慢。"""
@@ -2645,6 +2661,7 @@ class DemandStashApp(ctk.CTk):
         frame = self._view_frames.get(mode)
         if frame is None or not frame.winfo_exists():
             frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+            self._bind_blank_new_message(frame)
             self._view_frames[mode] = frame
             self._view_dirty[mode] = True
         return frame
@@ -2779,12 +2796,13 @@ class DemandStashApp(ctk.CTk):
 
     def _render_empty_state(self, parent_frame, mode):
         empty_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        self._bind_blank_new_message(empty_frame)
         empty_frame.pack(fill="both", expand=True, pady=80)
 
         if mode == "archived":
             icon, title, desc = "📦", "没有归档消息", "归档的消息会显示在这里"
         else:
-            icon, title, desc = "📋", "还没有消息", "Ctrl+V 粘贴截图，或点击「+ 新建」"
+            icon, title, desc = "📋", "还没有消息", "Ctrl+V 粘贴截图，点击「+ 新建」，或双击空白处创建"
 
         ctk.CTkLabel(empty_frame, text=icon, font=ctk.CTkFont(size=48)).pack(pady=(0, 12))
         ctk.CTkLabel(empty_frame, text=title,
@@ -2794,10 +2812,8 @@ class DemandStashApp(ctk.CTk):
                      font=_font(13),
                      text_color=COLORS["text_hint"]).pack()
 
-        if mode != "archived":
-            empty_frame.bind("<Button-1>", lambda e: self._on_new_message())
-            for child in empty_frame.winfo_children():
-                child.bind("<Button-1>", lambda e: self._on_new_message())
+        for child in empty_frame.winfo_children():
+            self._bind_blank_new_message(child)
 
         self._schedule_scroll_region_update(reset=True)
 
