@@ -3,7 +3,7 @@
 # 要求: Python + PyInstaller + Inno Setup 6
 
 param(
-    [string]$Version = "1.3.11"
+    [string]$Version = "1.3.12"
 )
 
 $ErrorActionPreference = "Stop"

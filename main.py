@@ -26,7 +26,7 @@ from config import (
 )
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.11"
+APP_VERSION = "v1.3.12"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -2248,14 +2248,11 @@ class DemandStashApp(ctk.CTk):
             canvas = self.scroll_frame._parent_canvas
             yview = canvas.yview()
             if yview == (0.0, 1.0):
-                self._render_more_for_current_view()
                 return "break"
             speed = max(1, min(5, int(getattr(self, "_scroll_speed", 2))))
             steps = -int(event.delta / 120) * speed * 3
             if steps:
                 canvas.yview("scroll", steps, "units")
-            if canvas.yview()[1] > 0.82:
-                self._render_more_for_current_view()
             return "break"
         except Exception:
             return "break"
@@ -2733,7 +2730,10 @@ class DemandStashApp(ctk.CTk):
         if self._view_build_tokens.get(mode) != token:
             return
 
-        batch_size = len(items) if len(items) <= 8 else 8
+        # Render the current view in one pass. Incremental rendering while the
+        # scrollbar is being dragged can leave CTk's canvas with stale item
+        # heights, which visually compresses cards into thin rows.
+        batch_size = len(items)
         end = min(start + batch_size, len(items))
         for item in items[start:end]:
             MessageCard(parent_frame, item, mode, callbacks)
