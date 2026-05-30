@@ -4,3 +4,4 @@ pyperclip
 pystray
 pynput
 pywin32
+tkinterdnd2

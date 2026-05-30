@@ -3,7 +3,7 @@
 # 要求: Python + PyInstaller + Inno Setup 6
 
 param(
-    [string]$Version = "1.3.12"
+    [string]$Version = "1.3.41"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +24,7 @@ python -m PyInstaller `
     --name ClipStash `
     --icon assets\app_icon.ico `
     --add-data "assets;assets" `
+    --collect-data tkinterdnd2 `
     --exclude-module PyQt5 `
     --exclude-module PyQt6 `
     --exclude-module PySide2 `

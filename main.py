@@ -1,5 +1,6 @@
 import customtkinter as ctk
-from PIL import Image, ImageDraw
+import tkinter as tk
+from PIL import Image, ImageDraw, ImageTk
 import db
 import os
 import sys
@@ -9,6 +10,7 @@ import json
 import subprocess
 import textwrap
 import time
+import logging
 from datetime import datetime, timezone
 import urllib.error
 import urllib.request
@@ -25,8 +27,27 @@ from config import (
     get_scroll_speed, get_app_font_size_delta
 )
 
+# 配置日志
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler('debug.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+try:
+    from tkinterdnd2 import COPY, DND_FILES, TkinterDnD
+    HAS_FILE_DND = True
+except Exception:
+    COPY = "copy"
+    DND_FILES = None
+    TkinterDnD = None
+    HAS_FILE_DND = False
+
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.12"
+APP_VERSION = "v1.3.41"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -44,6 +65,11 @@ pystray = None
 keyboard = None
 HAS_TRAY = None
 _THUMBNAIL_CACHE = {}
+IMAGE_DROP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
+LIST_INITIAL_RENDER_COUNT = 12
+LIST_RENDER_BATCH_SIZE = 8
+LIST_RENDER_BATCH_DELAY_MS = 20
+LIST_RENDER_PREFETCH_YVIEW = 0.72
 
 
 def _parse_version(version_text):
@@ -72,6 +98,69 @@ def _fetch_latest_release():
     )
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _ensure_file_drop_enabled(root) -> bool:
+    if not HAS_FILE_DND:
+        return False
+    if getattr(root, "_clipstash_dnd_ready", False):
+        return True
+    try:
+        root.TkdndVersion = TkinterDnD._require(root)
+        root._clipstash_dnd_ready = True
+        return True
+    except Exception:
+        root._clipstash_dnd_ready = False
+        return False
+
+
+def _register_file_drop(widget, callback) -> bool:
+    if not HAS_FILE_DND:
+        return False
+    try:
+        root = widget.winfo_toplevel()
+        if not _ensure_file_drop_enabled(root):
+            return False
+        widget.drop_target_register(DND_FILES)
+        widget.dnd_bind("<<Drop>>", callback, add="+")
+        return True
+    except Exception:
+        return False
+
+
+def _drop_event_paths(widget, data):
+    try:
+        raw_paths = widget.tk.splitlist(data)
+    except Exception:
+        raw_paths = str(data or "").split()
+    paths = []
+    for raw in raw_paths:
+        path = str(raw).strip().strip("{}")
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _load_image_files(paths):
+    images = []
+    skipped = 0
+    for path in paths:
+        if not os.path.isfile(path):
+            skipped += 1
+            continue
+        if os.path.splitext(path)[1].lower() not in IMAGE_DROP_EXTENSIONS:
+            skipped += 1
+            continue
+        try:
+            with Image.open(path) as img:
+                pil = img.copy()
+            buf = BytesIO()
+            pil.save(buf, format="PNG")
+            images.append((pil, buf.getvalue()))
+        except Exception:
+            skipped += 1
+    return images, skipped
+
 
 def _resource_path(relative_path):
     base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -613,6 +702,13 @@ def _font(size=12, weight=None, family=APP_FONT_FAMILY):
     return ctk.CTkFont(**kwargs)
 
 
+def _tk_font(size=12, weight=None, family=APP_FONT_FAMILY):
+    adjusted_size = max(8, int(size) + int(get_app_font_size_delta()))
+    if weight:
+        return (family, adjusted_size, weight)
+    return (family, adjusted_size)
+
+
 # ========== 工具函数 ==========
 def _format_local_time(utc_str):
     """将 UTC 时间字符串转换为本地时区字符串"""
@@ -633,16 +729,40 @@ def _resize_keep_ratio(pil_image, max_w, max_h):
     return pil_image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
 
 
-def _pil_to_ctk(pil_image, max_w=100, max_h=100):
+def _image_to_rgb(pil_image):
     if pil_image.mode == "RGBA":
         bg = Image.new("RGB", pil_image.size, (255, 255, 255))
         bg.paste(pil_image, mask=pil_image.split()[3])
-        pil_image = bg
-    elif pil_image.mode != "RGB":
-        pil_image = pil_image.convert("RGB")
+        return bg
+    if pil_image.mode != "RGB":
+        return pil_image.convert("RGB")
+    return pil_image
+
+
+def _thumbnail_canvas(pil_image, canvas_w, canvas_h, inset=4, bg_color=(246, 248, 251)):
+    pil_image = _image_to_rgb(pil_image)
+    thumb = _resize_keep_ratio(
+        pil_image,
+        max(1, canvas_w - inset * 2),
+        max(1, canvas_h - inset * 2),
+    )
+    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
+    x = (canvas_w - thumb.width) // 2
+    y = (canvas_h - thumb.height) // 2
+    canvas.paste(thumb, (x, y))
+    return canvas
+
+
+def _pil_to_ctk(pil_image, max_w=100, max_h=100):
+    pil_image = _image_to_rgb(pil_image)
     thumb = _resize_keep_ratio(pil_image, max_w, max_h)
     w, h = thumb.size
     return ctk.CTkImage(light_image=thumb, size=(w, h))
+
+
+def _pil_to_ctk_canvas(pil_image, canvas_w=70, canvas_h=70):
+    thumb = _thumbnail_canvas(pil_image, canvas_w, canvas_h)
+    return ctk.CTkImage(light_image=thumb, size=(canvas_w, canvas_h))
 
 
 def _cached_ctk_image(image_path, max_w=100, max_h=100):
@@ -661,6 +781,60 @@ def _cached_ctk_image(image_path, max_w=100, max_h=100):
         return ctk_img
     except Exception:
         return None
+
+
+def _pil_to_tk(pil_image, max_w=100, max_h=100):
+    pil_image = _image_to_rgb(pil_image)
+    thumb = _resize_keep_ratio(pil_image, max_w, max_h)
+    return ImageTk.PhotoImage(thumb)
+
+
+def _pil_to_tk_canvas(pil_image, canvas_w=100, canvas_h=64):
+    thumb = _thumbnail_canvas(pil_image, canvas_w, canvas_h)
+    return ImageTk.PhotoImage(thumb)
+
+
+def _cached_tk_image(image_path, max_w=100, max_h=100):
+    """列表卡片用 Tk 原生图片，避免 CTkLabel 销毁时偶发 can't delete Tcl command。"""
+    try:
+        stat = os.stat(image_path)
+        key = ("tk", image_path, max_w, max_h, stat.st_mtime_ns, stat.st_size)
+        cached = _THUMBNAIL_CACHE.get(key)
+        if cached:
+            return cached
+        with Image.open(image_path) as pil_image:
+            tk_img = _pil_to_tk_canvas(pil_image, max_w, max_h)
+        if len(_THUMBNAIL_CACHE) > 128:
+            _THUMBNAIL_CACHE.pop(next(iter(_THUMBNAIL_CACHE)))
+        _THUMBNAIL_CACHE[key] = tk_img
+        return tk_img
+    except Exception:
+        return None
+
+
+def _force_destroy_widget(widget):
+    """销毁动态图片网格，绕开 Tkinter destroy 重复删除绑定命令的偶发 TclError。"""
+    try:
+        stack = [widget]
+        while stack:
+            current = stack.pop()
+            try:
+                stack.extend(current.winfo_children())
+            except Exception:
+                pass
+            try:
+                current._tclCommands = None
+            except Exception:
+                pass
+        widget.tk.call("destroy", widget._w)
+        return True
+    except Exception:
+        logging.exception("[_force_destroy_widget] failed")
+        try:
+            widget.pack_forget()
+        except Exception:
+            pass
+        return False
 
 
 def center_window(window, parent):
@@ -724,6 +898,41 @@ class HoverPreview(ctk.CTkToplevel):
 
         self._position_near(trigger_widget)
 
+    def _screen_work_area(self, widget):
+        try:
+            from ctypes import wintypes
+
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG),
+                ]
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", RECT),
+                    ("rcWork", RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
+            user32 = ctypes.windll.user32
+            monitor = user32.MonitorFromPoint(
+                wintypes.POINT(widget.winfo_rootx(), widget.winfo_rooty()),
+                2,  # MONITOR_DEFAULTTONEAREST
+            )
+            info = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+            if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                work = info.rcWork
+                return work.left, work.top, work.right, work.bottom
+        except Exception:
+            pass
+        user32 = ctypes.windll.user32
+        return 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
     def _position_near(self, widget):
         self.update_idletasks()
         pw = self.winfo_width()
@@ -733,18 +942,33 @@ class HoverPreview(ctk.CTkToplevel):
         ww = widget.winfo_width()
         wh = widget.winfo_height()
 
-        user32 = ctypes.windll.user32
-        sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        left, top, right, bottom = self._screen_work_area(widget)
 
-        nx = wx + ww + 10
-        ny = wy
-        if nx + pw > sw:
-            nx = wx
-            ny = wy + wh + 10
-            if ny + ph > sh:
-                ny = wy - ph - 10
-        if ny < 0: ny = 10
-        if nx < 0: nx = 10
+        margin = 10
+
+        def clamp(value, low, high):
+            if high < low:
+                return low
+            return max(low, min(high, value))
+
+        candidates = [
+            (wx + ww + margin, clamp(wy, top + margin, bottom - ph - margin)),
+            (wx - pw - margin, clamp(wy, top + margin, bottom - ph - margin)),
+            (clamp(wx, left + margin, right - pw - margin), wy + wh + margin),
+            (clamp(wx, left + margin, right - pw - margin), wy - ph - margin),
+        ]
+        for nx, ny in candidates:
+            if (
+                left + margin <= nx
+                and nx + pw <= right - margin
+                and top + margin <= ny
+                and ny + ph <= bottom - margin
+            ):
+                self.geometry(f"+{nx}+{ny}")
+                return
+
+        nx = clamp(wx + ww + margin, left + margin, right - pw - margin)
+        ny = clamp(wy, top + margin, bottom - ph - margin)
         self.geometry(f"+{nx}+{ny}")
 
 
@@ -1460,8 +1684,8 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         self._on_close_cb = on_close
         self.title(title)
         self._parent = parent
-        self.geometry("500x520")
-        self.minsize(420, 400)
+        self.geometry("520x560")
+        self.minsize(440, 430)
         self.transient(parent)
         self.grab_set()
         self.configure(fg_color=COLORS["bg"])
@@ -1485,13 +1709,7 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
             font=_font(16, weight="bold"), text_color=COLORS["text"]
         ).pack(padx=16, pady=(16, 8), anchor="w")
 
-        # 图片区域（上方）
-        self.img_frame = ctk.CTkFrame(main, fg_color="transparent")
-        self.img_frame.pack(fill="x", padx=12, pady=(0, 8))
-        if not self.images:
-            self.img_frame.pack_forget()
-
-        # 文字输入（下方）
+        # 文字输入
         self.textbox = ctk.CTkTextbox(
             main, height=150, wrap="word",
             font=_font(13),
@@ -1502,12 +1720,19 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         if text_content:
             self.textbox.insert("1.0", text_content)
 
+        # 图片区域固定在工具栏上方，避免删光/重新添加后被 pack 到底部。
+        self.img_frame = ctk.CTkFrame(main, fg_color="transparent")
+        self.img_frame.pack(fill="x", padx=12, pady=(0, 8))
+
         # 底部工具栏
         toolbar = ctk.CTkFrame(main, fg_color="transparent")
         toolbar.pack(fill="x", padx=12, pady=(0, 12))
 
+        hint_text = "Ctrl+V / Shift+Insert 粘贴图片"
+        if HAS_FILE_DND:
+            hint_text += "，也可拖入图片"
         self.hint_label = ctk.CTkLabel(
-            toolbar, text="Ctrl+V 或 Shift+Insert 粘贴图片",
+            toolbar, text=hint_text,
             font=_font(11), text_color=COLORS["text_hint"]
         )
         self.hint_label.pack(side="left")
@@ -1536,9 +1761,13 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         self.textbox.bind("<Shift-Insert>", self._on_paste)
         self.textbox.bind("<Control-s>", self._on_save_shortcut)
         self.textbox.bind("<Control-S>", self._on_save_shortcut)
+        for widget in (self, main, self.textbox, self.img_frame):
+            _register_file_drop(widget, self._on_drop_images)
 
         if self.images:
             self._render_thumbnails()
+        else:
+            self._render_empty_thumbnails()
         self.after(100, lambda: self.textbox.focus_set())
         self._place_centered()
 
@@ -1575,15 +1804,35 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         self._render_thumbnails()
         return "break"
 
-    def _render_thumbnails(self):
-        self.img_frame.pack(fill="x", padx=12, pady=(0, 8))
-        # 彻底清理旧组件，避免白图残留
+    def _on_drop_images(self, event):
+        paths = _drop_event_paths(self, event.data)
+        images, skipped = _load_image_files(paths)
+        if images:
+            self.images.extend(images)
+            self._render_thumbnails()
+        if skipped and not images:
+            self.hint_label.configure(text="拖入的文件不是可用图片")
+        return COPY
+
+    def _clear_thumbnail_widgets(self):
         for w in list(self.img_frame.winfo_children()):
-            w.pack_forget()
-            for child in w.winfo_children():
-                child.destroy()
             w.destroy()
         self.img_frame.update_idletasks()
+
+    def _render_empty_thumbnails(self):
+        self._clear_thumbnail_widgets()
+        hint_text = "Ctrl+V / Shift+Insert 粘贴图片"
+        if HAS_FILE_DND:
+            hint_text += "，也可拖入图片"
+        self.hint_label.configure(text=hint_text)
+
+    def _render_thumbnails(self):
+        if not self.images:
+            self._render_empty_thumbnails()
+            return
+
+        # 彻底清理旧组件，避免白图残留
+        self._clear_thumbnail_widgets()
 
         header = ctk.CTkFrame(self.img_frame, fg_color="transparent")
         header.pack(fill="x", pady=(0, 6))
@@ -1592,12 +1841,22 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
             font=_font(12, weight="bold"), text_color=COLORS["text"]
         ).pack(side="left")
         ctk.CTkLabel(
-            header, text="Ctrl+V 继续添加",
+            header, text="Ctrl+V 或拖入继续添加" if HAS_FILE_DND else "Ctrl+V 继续添加",
             font=_font(11), text_color=COLORS["text_hint"]
         ).pack(side="right")
 
-        container = ctk.CTkFrame(self.img_frame, fg_color=COLORS["tag_bg"], corner_radius=8)
+        thumb_height = 112 if len(self.images) <= 4 else 196
+        container = ctk.CTkScrollableFrame(
+            self.img_frame,
+            height=thumb_height,
+            fg_color=COLORS["tag_bg"],
+            corner_radius=8,
+            scrollbar_fg_color=COLORS["tag_bg"],
+            scrollbar_button_color=COLORS["border"],
+            scrollbar_button_hover_color=COLORS["text_hint"],
+        )
         container.pack(fill="x")
+        _register_file_drop(container, self._on_drop_images)
 
         for idx, (pil_img, img_bytes) in enumerate(self.images):
             # 图片+删除按钮的整体容器（带边框）
@@ -1609,11 +1868,11 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
                 border_color=COLORS["border"],
                 width=90, height=90
             )
-            item.pack(side="left", padx=6, pady=6)
+            item.grid(row=idx // 4, column=idx % 4, padx=6, pady=6, sticky="w")
             item.pack_propagate(False)
 
             # 图片标签
-            ctk_img = _pil_to_ctk(pil_img, 70, 70)
+            ctk_img = _pil_to_ctk_canvas(pil_img, 70, 70)
             lbl = ctk.CTkLabel(item, image=ctk_img, text="")
             lbl.place(relx=0.5, rely=0.5, anchor="center")
             lbl.image = ctk_img
@@ -1665,16 +1924,18 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
             if self.images:
                 self._render_thumbnails()
             else:
-                self.img_frame.pack_forget()
-                self.hint_label.configure(text="Ctrl+V 粘贴图片")
+                self._render_empty_thumbnails()
 
     def _save(self):
         """保存并关闭，延迟执行以避免鼠标释放事件传播到新渲染的按钮上"""
         if self._saving:
             return "break"
-        self._saving = True
         text = self.textbox.get("1.0", "end-1c").strip()
         images_data = [data for _, data in self.images]
+        if not text and not images_data:
+            self.hint_label.configure(text="请先输入文字或添加图片")
+            return "break"
+        self._saving = True
         self._saved_text = text if text else None
         self._saved_images = images_data
         # 先禁用按钮防止重复点击
@@ -1686,19 +1947,26 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
     def _do_save_and_close(self):
         """实际执行保存和关闭"""
-        on_save = self.on_save
-        saved_text = self._saved_text
-        saved_images = self._saved_images
-        parent = self._parent
+        try:
+            self.on_save(self._saved_text, self._saved_images)
+        except Exception as e:
+            self._saving = False
+            self.hint_label.configure(text=f"保存失败: {e}")
+            return
         self._on_close()
-        parent.after_idle(lambda: on_save(saved_text, saved_images))
 
 
 # ========== 消息卡片 ==========
-class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
+class MessageCard(tk.Frame, HoverPreviewMixin):
     CONTENT_PAD_X = 14
     CONTENT_TOP_PAD = 10
     CONTENT_GAP_Y = 10
+    IMAGE_GAP = 6
+    IMAGE_MAX_WIDTH = 106
+    IMAGE_MIN_WIDTH = 88
+    IMAGE_FRAME_HEIGHT = 72
+    IMAGE_COLUMNS = 3
+    IMAGE_COLLAPSED_ROWS = 2
 
     def __init__(self, parent, item, view_mode, callbacks):
         HoverPreviewMixin.__init__(self)
@@ -1708,13 +1976,29 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         self.image_filenames = image_filenames
         self.created_at = created_at
         self.callbacks = callbacks
+        self._images_expanded = bool(callbacks.get("is_image_expanded", lambda _msg_id: False)(msg_id))
+        self._image_section = None
+        self._image_toggle_button = None
+        self._archive_button = None
+        logging.debug(
+            f"[MessageCard.__init__] view={view_mode}, msg_id={msg_id}, "
+            f"text_len={len(text_content or '')}, image_count={len(image_filenames or [])}, "
+            f"expanded={self._images_expanded}"
+        )
 
         super().__init__(
-            parent, fg_color=COLORS["card"],
-            corner_radius=10, border_width=1, border_color=COLORS["border"]
+            parent,
+            bg=COLORS["card"],
+            highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["border"],
+            highlightthickness=1,
+            bd=0,
         )
         self.pack(fill="x", pady=6, padx=4)
 
+        if image_filenames:
+            self._image_section = tk.Frame(self, bg=COLORS["card"], height=1)
+            self._image_section.pack(fill="x")
         rendered_images = self._render_images() if image_filenames else False
         if text_content:
             self._render_text()
@@ -1731,65 +2015,225 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
         self._render_footer(view_mode)
 
     def _render_images(self):
-        """网格布局：一行三个，最多三行"""
-        max_per_row = 3
-        max_rows = 3
-        max_display = max_per_row * max_rows
+        """渲染图片网格，收起态显示前6张，展开态显示全部。
+        按钮不销毁重建——只更新文字和颜色，避免在点击事件中销毁按钮导致 Tkinter 事件投递异常。"""
+        if not self._image_section:
+            return False
+
+        logging.debug(f"[_render_images] msg_id={self.msg_id}, _images_expanded={self._images_expanded}, total={len(self.image_filenames)}")
+
+        # 先保留旧网格，等新网格完整构建后再替换，避免收起/展开时闪一帧空图片区。
+        old_image_children = list(self._image_section.winfo_children())
+
+        # 计算布局参数
+        try:
+            max_per_row, frame_width = self._image_grid_metrics()
+        except Exception:
+            logging.exception(f"[_render_images] grid metrics failed, msg_id={self.msg_id}")
+            max_per_row = self.IMAGE_COLUMNS
+            frame_width = self.IMAGE_MIN_WIDTH
+        max_collapsed = self.IMAGE_COLUMNS * self.IMAGE_COLLAPSED_ROWS
+        total_images = len(self.image_filenames)
+
+        # 决定显示哪些图片
+        if self._images_expanded:
+            display_filenames = self.image_filenames
+        else:
+            display_filenames = self.image_filenames[:max_collapsed]
+
+        logging.debug(f"[_render_images] max_collapsed={max_collapsed}, display_count={len(display_filenames)}")
+
+        # 加载图片
         renderable_images = []
-        for img_file in self.image_filenames[:max_display]:
+        for img_file in display_filenames:
             image_path = db.get_image_path(img_file)
             if not image_path or not os.path.exists(image_path):
                 continue
-            ctk_img = _cached_ctk_image(image_path, 120, 100)
-            if ctk_img:
-                renderable_images.append((image_path, ctk_img))
+            tk_img = _cached_tk_image(
+                image_path,
+                max(64, frame_width - 10),
+                max(52, self.IMAGE_FRAME_HEIGHT - 8),
+            )
+            if tk_img:
+                renderable_images.append((image_path, tk_img))
+
         if not renderable_images:
+            for child in old_image_children:
+                if not _force_destroy_widget(child):
+                    logging.error(f"[_render_images] destroy child failed, msg_id={self.msg_id}")
+            # 没有可渲染的图片，隐藏按钮
+            if self._image_toggle_button and self._image_toggle_button.winfo_exists():
+                self._image_toggle_button.pack_forget()
             return False
 
-        img_container = ctk.CTkFrame(self, fg_color="transparent")
-        img_container.pack(
-            anchor="w",
-            padx=self.CONTENT_PAD_X,
-            pady=(self.CONTENT_TOP_PAD, 0)
-        )
-        rows = [
-            renderable_images[i:i + max_per_row]
-            for i in range(0, len(renderable_images), max_per_row)
-        ]
+        logging.debug(f"[_render_images] renderable_count={len(renderable_images)}")
 
-        for row_idx, row_items in enumerate(rows):
-            row_frame = ctk.CTkFrame(img_container, fg_color="transparent")
-            row_frame.pack(anchor="w", pady=(0, 6) if row_idx < len(rows) - 1 else 0)
+        # 创建图片网格容器（先不 pack，避免构建期间影响当前可见布局）
+        outer = tk.Frame(self._image_section, bg=COLORS["card"])
 
-            for col_idx, (image_path, ctk_img) in enumerate(row_items):
-                frame = ctk.CTkFrame(
-                    row_frame,
-                    fg_color=COLORS["tag_bg"],
-                    corner_radius=8,
-                    border_width=1,
-                    border_color=COLORS["border"],
-                    width=132,
-                    height=82
-                )
-                frame.pack(side="left", padx=(0, 6) if col_idx < len(row_items) - 1 else 0)
-                frame.pack_propagate(False)
+        img_grid = tk.Frame(outer, bg=COLORS["card"])
+        img_grid.pack(anchor="w", pady=(0, 0))
 
-                lbl = ctk.CTkLabel(frame, image=ctk_img, text="", cursor="hand2")
-                lbl.pack(padx=4, pady=4)
-                lbl.image = ctk_img
-                self.bind_hover_preview(lbl, image_path)
-                lbl.bind(
-                    "<Button-1>",
-                    lambda e, p=image_path: self.callbacks["copy_image"](p)
-                )
+        # 渲染图片
+        for idx, (image_path, tk_img) in enumerate(renderable_images):
+            frame = tk.Frame(
+                img_grid,
+                bg=COLORS["tag_bg"],
+                highlightbackground=COLORS["border"],
+                highlightcolor=COLORS["border"],
+                highlightthickness=1,
+                width=frame_width,
+                height=self.IMAGE_FRAME_HEIGHT
+            )
+            frame.grid(
+                row=idx // max_per_row,
+                column=idx % max_per_row,
+                padx=(0, 0 if idx % max_per_row == max_per_row - 1 else self.IMAGE_GAP),
+                pady=(0, self.IMAGE_GAP),
+                sticky="w",
+            )
+            frame.grid_propagate(False)
 
-        if len(self.image_filenames) > max_display:
-            ctk.CTkLabel(
-                img_container,
-                text=f"还有 {len(self.image_filenames) - max_display} 张图片...",
-                font=_font(11), text_color=COLORS["text_hint"]
-            ).grid(row=max_rows, column=0, columnspan=max_per_row, sticky="w", pady=(2, 0))
+            lbl = tk.Label(
+                frame,
+                image=tk_img,
+                text="",
+                cursor="hand2",
+                bg=COLORS["tag_bg"],
+                bd=0,
+                highlightthickness=0,
+            )
+            lbl.pack(padx=4, pady=4)
+            lbl.image = tk_img
+            self.bind_hover_preview(lbl, image_path)
+            lbl.bind(
+                "<Button-1>",
+                lambda e, p=image_path: self.callbacks["copy_image"](p)
+            )
+
+        for child in old_image_children:
+            if not _force_destroy_widget(child):
+                logging.error(f"[_render_images] destroy child failed, msg_id={self.msg_id}")
+        outer.pack(fill="x", padx=self.CONTENT_PAD_X, pady=(self.CONTENT_TOP_PAD, 0))
+
+        # 按钮：如果不存在则创建，存在则更新文字和颜色
+        if total_images <= max_collapsed:
+            # 图片总数不超过折叠上限，不需要按钮
+            if self._image_toggle_button and self._image_toggle_button.winfo_exists():
+                self._image_toggle_button.pack_forget()
+            return True
+
+        if self._images_expanded:
+            button_text = "收起图片"
+            button_fg = COLORS["text_hint"]
+        else:
+            hidden_count = total_images - max_collapsed
+            button_text = f"展开 {hidden_count} 张图片"
+            button_fg = COLORS["primary"]
+
+        logging.debug(f"[_render_images] button_text={button_text}")
+
+        if self._image_toggle_button is not None:
+            # 按钮已存在，更新文字和颜色（不销毁重建）
+            try:
+                if self._image_toggle_button.winfo_exists():
+                    self._image_toggle_button.configure(
+                        text=button_text,
+                        fg=button_fg,
+                        activeforeground=button_fg,
+                        state="normal",
+                    )
+                    # 确保按钮可见（可能之前被 pack_forget 隐藏了）
+                    self._image_toggle_button.pack(
+                        anchor="w", padx=self.CONTENT_PAD_X, pady=(0, 0), fill="x",
+                    )
+                    self._image_toggle_button.lift()
+            except Exception:
+                # 按钮已失效，标记为 None 触发重建
+                self._image_toggle_button = None
+
+        if self._image_toggle_button is None:
+            # 首次创建按钮（放在 _image_section 外面，作为 MessageCard 的直接子控件）
+            toggle_btn = tk.Button(
+                self,
+                text=button_text,
+                font=_tk_font(11),
+                bg=COLORS["tag_bg"],
+                fg=button_fg,
+                activebackground=COLORS["tab_hover"],
+                activeforeground=button_fg,
+                anchor="w",
+                cursor="hand2",
+                padx=8,
+                pady=7,
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+                command=self._toggle_image_expanded,
+            )
+            toggle_btn.pack(anchor="w", padx=self.CONTENT_PAD_X, pady=(0, 0), fill="x")
+            toggle_btn.bind("<Enter>", lambda _e: toggle_btn.configure(bg=COLORS["tab_hover"]))
+            toggle_btn.bind("<Leave>", lambda _e: toggle_btn.configure(bg=COLORS["tag_bg"]))
+            self._image_toggle_button = toggle_btn
+
         return True
+
+    def _image_grid_metrics(self):
+        parent_width = 0
+        try:
+            parent_width = self.master.winfo_width()
+        except Exception:
+            pass
+        card_width = max(self.winfo_width(), parent_width, 360)
+        available = max(
+            self.IMAGE_MIN_WIDTH,
+            card_width - (self.CONTENT_PAD_X * 2) - 20,
+        )
+        columns = self.IMAGE_COLUMNS
+        frame_width = int((available - (columns - 1) * self.IMAGE_GAP) // columns)
+        frame_width = max(self.IMAGE_MIN_WIDTH, min(self.IMAGE_MAX_WIDTH, frame_width))
+        return columns, frame_width
+
+    def _toggle_image_expanded(self):
+        """点击展开/收起按钮：切换状态并同步渲染。
+        按钮不会被销毁，所以可以直接同步调用 _render_images() 而不会有
+        Tkinter 事件投递异常的问题。"""
+        return self._set_image_expanded(not self._images_expanded)
+
+    def _set_image_expanded(self, expanded):
+        logging.debug(f"[_set_image_expanded] msg_id={self.msg_id}, before={self._images_expanded}, target={expanded}")
+        self._images_expanded = bool(expanded)
+        logging.debug(f"[_set_image_expanded] after update: _images_expanded={self._images_expanded}")
+        # 同步父组件状态，防止重建时状态回退
+        toggle_cb = self.callbacks.get("toggle_images")
+        if toggle_cb:
+            try:
+                toggle_cb(self.msg_id, expanded)
+            except Exception:
+                pass
+        try:
+            self._render_images()
+        except Exception:
+            logging.exception(f"[_set_image_expanded] render failed, msg_id={self.msg_id}")
+        logging.debug(f"[_set_image_expanded] done")
+        return "break"
+
+    def _sync_card_height(self):
+        try:
+            self.update_idletasks()
+            self.update_idletasks()
+        except Exception:
+            pass
+
+    def _refresh_parent_scroll_region(self):
+        try:
+            app = self.winfo_toplevel()
+            if hasattr(app, "_schedule_scroll_region_update"):
+                app._schedule_scroll_region_update(reset=False)
+                app.after(160, lambda: app._schedule_scroll_region_update(reset=False))
+                app.after(320, lambda: app._schedule_scroll_region_update(reset=False))
+        except Exception:
+            pass
 
     def _render_text(self):
         text_bg = ctk.CTkFrame(self, fg_color=COLORS["tag_bg"], corner_radius=6)
@@ -1835,13 +2279,15 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
                 command=lambda: self.callbacks["delete"](self.msg_id)
             ).pack(side="right", padx=(4, 0))
 
-        ctk.CTkButton(
+        archive_btn = ctk.CTkButton(
             footer, text=archive_text, width=52, height=24,
             font=_font(11),
             fg_color="transparent", text_color=COLORS["text_secondary"],
             hover_color=COLORS["tab_hover"], corner_radius=6,
-            command=lambda: self.callbacks["archive"](self.msg_id)
-        ).pack(side="right")
+            command=self._on_archive_click
+        )
+        archive_btn.pack(side="right")
+        self._archive_button = archive_btn
 
         if view_mode == "active":
             ctk.CTkButton(
@@ -1860,6 +2306,18 @@ class MessageCard(ctk.CTkFrame, HoverPreviewMixin):
                 command=lambda: self.callbacks["import_message"](self.msg_id)
             ).pack(side="right", padx=(0, 4))
 
+    def _collapsed_image_limit(self):
+        return self.IMAGE_COLUMNS * self.IMAGE_COLLAPSED_ROWS
+
+    def _on_archive_click(self):
+        logging.debug(f"[MessageCard._on_archive_click] msg_id={self.msg_id}, view_button_disabled={self._archive_button is not None}")
+        if self._archive_button is not None:
+            try:
+                self._archive_button.configure(state="disabled")
+            except Exception:
+                pass
+        return self.callbacks["archive"](self.msg_id)
+
 
 # ========== 主窗口 ==========
 class DemandStashApp(ctk.CTk):
@@ -1867,6 +2325,7 @@ class DemandStashApp(ctk.CTk):
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
         super().__init__()
+        _ensure_file_drop_enabled(self)
         self.title(f"{APP_NAME} {APP_VERSION}  @linjianglu")
         self.geometry("420x720")
         self.minsize(380, 520)
@@ -1892,14 +2351,17 @@ class DemandStashApp(ctk.CTk):
         self._view_counts = {"active": 0, "archived": 0}
         self._view_build_tokens = {"active": 0, "archived": 0}
         self._render_batch_after_ids = []
+        self._view_render_after_ids = {"active": None, "archived": None}
         self._view_items = {"active": [], "archived": []}
         self._view_callbacks = {}
         self._view_rendered_count = {"active": 0, "archived": 0}
         self._view_render_complete = {"active": False, "archived": False}
+        self._expanded_image_messages = set()
 
         self.bind("<Control-v>", self._on_paste)
         self.bind("<Control-V>", self._on_paste)
         self.bind("<Shift-Insert>", self._on_paste)
+        _register_file_drop(self, self._on_drop_images)
 
         self._create_header()
         self._create_content()
@@ -2186,6 +2648,7 @@ class DemandStashApp(ctk.CTk):
     def _create_content(self):
         content_frame = ctk.CTkFrame(self, fg_color="transparent")
         content_frame.pack(fill="both", expand=True, padx=12, pady=12)
+        _register_file_drop(content_frame, self._on_drop_images)
 
         self.tab_frame = ctk.CTkFrame(content_frame, fg_color=COLORS["card"], corner_radius=10)
         self.tab_frame.pack(fill="x", pady=(0, 8))
@@ -2215,10 +2678,12 @@ class DemandStashApp(ctk.CTk):
             scrollbar_button_hover_color=COLORS["primary_hover"]
         )
         self.scroll_frame.pack(fill="both", expand=True)
+        _register_file_drop(self.scroll_frame, self._on_drop_images)
         self.bind_all("<MouseWheel>", self._on_mouse_wheel)
         self._bind_blank_new_message(self.scroll_frame)
         try:
             self._bind_blank_new_message(self.scroll_frame._parent_canvas)
+            _register_file_drop(self.scroll_frame._parent_canvas, self._on_drop_images)
         except Exception:
             pass
 
@@ -2253,6 +2718,7 @@ class DemandStashApp(ctk.CTk):
             steps = -int(event.delta / 120) * speed * 3
             if steps:
                 canvas.yview("scroll", steps, "units")
+                self.after_idle(self._render_more_if_near_bottom)
             return "break"
         except Exception:
             return "break"
@@ -2422,6 +2888,9 @@ class DemandStashApp(ctk.CTk):
 
     def _on_new_message(self):
         def on_save(text, images_data):
+            if not text and not images_data:
+                self._show_status("空消息未保存")
+                return
             db.add_message(text_content=text, images_data=images_data if images_data else None)
             self._reset_view_cache("active")
             if self.view_mode != "active":
@@ -2430,6 +2899,31 @@ class DemandStashApp(ctk.CTk):
                 self.load_items(immediate=True)
             self._show_status("已保存")
         self._open_editor(on_save)
+
+    def _on_drop_images(self, event):
+        paths = _drop_event_paths(self, event.data)
+        images, skipped = _load_image_files(paths)
+        if not images:
+            if skipped:
+                self._show_status("拖入的文件不是可用图片")
+            return COPY
+
+        if self._editor_dialog and self._editor_dialog.winfo_exists():
+            self._editor_dialog.images.extend(images)
+            self._editor_dialog._render_thumbnails()
+            self._editor_dialog.lift()
+            self._editor_dialog.focus_force()
+            self._show_status(f"已添加 {len(images)} 张图片到编辑窗口")
+            return COPY
+
+        db.add_message(images_data=[data for _, data in images])
+        self._reset_view_cache("active")
+        if self.view_mode != "active":
+            self._switch_view("active")
+        else:
+            self.load_items(immediate=True)
+        self._show_status(f"已通过拖拽创建 {len(images)} 张图片消息")
+        return COPY
 
     def _on_paste(self, event=None):
         img, diagnostics = get_clipboard_image()
@@ -2504,6 +2998,9 @@ class DemandStashApp(ctk.CTk):
                     images_data.append(f.read())
 
         def on_save(text, new_images_data):
+            if not text and not new_images_data:
+                self._show_status("空消息未保存")
+                return
             db.update_message_text(msg_id, text)
             # 编辑时总是替换图片（空列表表示清空所有图片）
             db.delete_message_images(msg_id)
@@ -2595,18 +3092,63 @@ class DemandStashApp(ctk.CTk):
         self.after(250, self._do_import_step)
 
     def _on_archive(self, msg_id: int):
+        logging.debug(f"[_on_archive] click msg_id={msg_id}, current_view={self.view_mode}")
+        self._debug_archive_state("before_toggle", msg_id)
         new_val = db.toggle_archive(msg_id)
-        self.after_idle(lambda: self._reload_views("active", "archived"))
+        logging.debug(f"[_on_archive] toggled msg_id={msg_id}, new_archived={new_val}")
+        self._debug_archive_state("after_toggle_before_reset", msg_id)
+        self._reset_view_cache("active", "archived")
+        self._debug_archive_state("after_reset_before_render", msg_id)
+        self.load_items(immediate=True)
+        self._debug_archive_state("after_render", msg_id)
         self._show_status("已归档" if new_val else "已恢复")
 
     def _delete_message(self, msg_id: int):
         db.delete_message(msg_id)
-        self.after_idle(lambda: self._reload_views("archived"))
+        self._reset_view_cache("archived")
+        self.load_items(immediate=True)
         self._show_status("已删除")
 
     def _show_status(self, message, duration=2000):
         self.status_bar.configure(text=message)
         self.after(duration, lambda: self.status_bar.configure(text=""))
+
+    def _debug_archive_state(self, label, msg_id=None):
+        try:
+            active_items = db.get_all_messages(archived=False, sort_order=get_sort_order())
+            archived_items = db.get_all_messages(archived=True, sort_order=get_sort_order())
+            active_ids = [item[0] for item in active_items[:12]]
+            archived_ids = [item[0] for item in archived_items[:12]]
+            target = db.get_message(msg_id) if msg_id is not None else None
+            target_images = len(target[2]) if target else None
+            target_in_active = msg_id in [item[0] for item in active_items] if msg_id is not None else None
+            target_in_archived = msg_id in [item[0] for item in archived_items] if msg_id is not None else None
+            rendered = []
+            frame = self._view_frames.get(self.view_mode)
+            if frame is not None and frame.winfo_exists():
+                for child in frame.winfo_children():
+                    if isinstance(child, MessageCard):
+                        rendered.append(child.msg_id)
+            logging.debug(
+                "[archive_state] %s msg_id=%s view=%s target_exists=%s target_images=%s "
+                "target_in_active=%s target_in_archived=%s active_count=%s archived_count=%s "
+                "active_head=%s archived_head=%s rendered_%s=%s",
+                label,
+                msg_id,
+                self.view_mode,
+                target is not None,
+                target_images,
+                target_in_active,
+                target_in_archived,
+                len(active_items),
+                len(archived_items),
+                active_ids,
+                archived_ids,
+                self.view_mode,
+                rendered,
+            )
+        except Exception:
+            logging.exception(f"[archive_state] failed label={label}, msg_id={msg_id}")
 
     def load_items(self, immediate=False):
         """渲染消息列表。缓存两个队列的内容 frame，切换时避免整页重建。"""
@@ -2633,9 +3175,10 @@ class DemandStashApp(ctk.CTk):
         self._reset_view_cache(*modes)
         self.load_items(immediate=True)
 
-    def _reset_view_cache(self, *modes):
+    def _reset_view_cache(self, *modes, rebuild_frames=False):
         if not modes:
             modes = ("active", "archived")
+        logging.debug(f"[_reset_view_cache] modes={modes}, rebuild_frames={rebuild_frames}, current_view={self.view_mode}")
         self._cancel_scroll_region_updates()
         self._cancel_render_batches()
         if self._load_items_after_id:
@@ -2643,9 +3186,11 @@ class DemandStashApp(ctk.CTk):
             self._load_items_after_id = None
         for mode in modes:
             frame = self._view_frames.get(mode)
+            child_count = len(frame.winfo_children()) if frame is not None and frame.winfo_exists() else None
+            logging.debug(f"[_reset_view_cache] mode={mode}, frame_exists={frame is not None and frame.winfo_exists() if frame is not None else False}, child_count={child_count}")
             if frame and frame.winfo_exists():
                 for widget in list(frame.winfo_children()):
-                    widget.destroy()
+                    _force_destroy_widget(widget)
                 frame.pack_forget()
             self._view_dirty[mode] = True
             self._view_build_tokens[mode] += 1
@@ -2653,6 +3198,12 @@ class DemandStashApp(ctk.CTk):
             self._view_callbacks[mode] = {}
             self._view_rendered_count[mode] = 0
             self._view_render_complete[mode] = False
+            logging.debug(
+                f"[_reset_view_cache] mode_done={mode}, "
+                f"frame_exists={frame is not None and frame.winfo_exists() if frame is not None else False}, "
+                f"child_count={len(frame.winfo_children()) if frame is not None and frame.winfo_exists() else None}, "
+                f"token={self._view_build_tokens[mode]}"
+            )
 
     def _get_view_frame(self, mode):
         frame = self._view_frames.get(mode)
@@ -2667,11 +3218,14 @@ class DemandStashApp(ctk.CTk):
         """实际执行列表渲染"""
         self._load_items_after_id = None
         self._cancel_scroll_region_updates()
-        self._cancel_render_batches()
 
         mode = self.view_mode
+        inactive_modes = [name for name in self._view_render_after_ids if name != mode]
+        self._cancel_render_batches(*inactive_modes)
+        logging.debug(f"[_show_or_build_current_view] start mode={mode}, dirty={self._view_dirty.get(mode)}")
         for frame_mode, frame in list(self._view_frames.items()):
-            if frame_mode != mode and frame.winfo_exists():
+            if frame is not None and frame_mode != mode and frame.winfo_exists():
+                logging.debug(f"[_show_or_build_current_view] hide frame_mode={frame_mode}, child_count={len(frame.winfo_children())}")
                 frame.pack_forget()
 
         parent_frame = self._get_view_frame(mode)
@@ -2681,10 +3235,13 @@ class DemandStashApp(ctk.CTk):
         if not self._view_dirty.get(mode, True):
             self._refresh_count_label()
             self._schedule_scroll_region_update(reset=True)
+            if not self._view_render_complete.get(mode, False):
+                self._schedule_next_render_batch(mode)
             return
 
+        self._cancel_render_batches(mode)
         for widget in list(parent_frame.winfo_children()):
-            widget.destroy()
+            _force_destroy_widget(widget)
         parent_frame.update_idletasks()
 
         sort_order = get_sort_order()
@@ -2695,6 +3252,10 @@ class DemandStashApp(ctk.CTk):
         count = len(items)
         self._view_counts[mode] = count
         self._refresh_count_label()
+        logging.debug(
+            f"[_show_or_build_current_view] fetched mode={mode}, count={count}, "
+            f"head={[ (item[0], len(item[2] or [])) for item in items[:12] ]}"
+        )
 
         if not items:
             self._render_empty_state(parent_frame, mode)
@@ -2708,6 +3269,8 @@ class DemandStashApp(ctk.CTk):
             "import_message": self._on_import_message,
             "archive": self._on_archive,
             "delete": self._delete_message,
+            "is_image_expanded": self._is_message_images_expanded,
+            "toggle_images": self._set_message_images_expanded,
         }
         self._view_items[mode] = items
         self._view_callbacks[mode] = callbacks
@@ -2716,25 +3279,70 @@ class DemandStashApp(ctk.CTk):
 
         token = self._view_build_tokens[mode] + 1
         self._view_build_tokens[mode] = token
-        self._render_message_batch(parent_frame, items, mode, callbacks, token, start=0)
+        self._render_message_batch(
+            parent_frame, items, mode, callbacks, token,
+            start=0, batch_size=LIST_INITIAL_RENDER_COUNT
+        )
 
-    def _cancel_render_batches(self):
+    def _cancel_render_batches(self, *modes):
+        if modes:
+            for mode in modes:
+                after_id = self._view_render_after_ids.get(mode)
+                if after_id is None:
+                    continue
+                try:
+                    self.after_cancel(after_id)
+                except Exception:
+                    pass
+                try:
+                    self._render_batch_after_ids.remove(after_id)
+                except ValueError:
+                    pass
+                self._view_render_after_ids[mode] = None
+            return
+
         for after_id in self._render_batch_after_ids:
             try:
                 self.after_cancel(after_id)
             except Exception:
                 pass
         self._render_batch_after_ids = []
+        for mode in list(self._view_render_after_ids):
+            self._view_render_after_ids[mode] = None
 
-    def _render_message_batch(self, parent_frame, items, mode, callbacks, token, start=0):
+    def _schedule_next_render_batch(self, mode, delay_ms=LIST_RENDER_BATCH_DELAY_MS):
+        if self._view_dirty.get(mode, True) or self._view_render_complete.get(mode, False):
+            return
+        if self._view_render_after_ids.get(mode) is not None:
+            return
+        token = self._view_build_tokens.get(mode)
+
+        def run():
+            after_id = self._view_render_after_ids.get(mode)
+            self._view_render_after_ids[mode] = None
+            try:
+                self._render_batch_after_ids.remove(after_id)
+            except ValueError:
+                pass
+            if mode == self.view_mode:
+                self._render_more_for_view(mode, token)
+
+        after_id = self.after(delay_ms, run)
+        self._view_render_after_ids[mode] = after_id
+        self._render_batch_after_ids.append(after_id)
+
+    def _render_message_batch(self, parent_frame, items, mode, callbacks, token, start=0, batch_size=None):
         if self._view_build_tokens.get(mode) != token:
+            logging.debug(f"[_render_message_batch] skip stale mode={mode}, token={token}, current={self._view_build_tokens.get(mode)}")
             return
 
-        # Render the current view in one pass. Incremental rendering while the
-        # scrollbar is being dragged can leave CTk's canvas with stale item
-        # heights, which visually compresses cards into thin rows.
-        batch_size = len(items)
+        batch_size = batch_size or LIST_RENDER_BATCH_SIZE
         end = min(start + batch_size, len(items))
+        started_at = time.perf_counter()
+        logging.debug(
+            f"[_render_message_batch] mode={mode}, start={start}, end={end}, batch_size={batch_size}, token={token}, "
+            f"ids={[ (item[0], len(item[2] or [])) for item in items[start:end] ]}"
+        )
         for item in items[start:end]:
             MessageCard(parent_frame, item, mode, callbacks)
         self._view_rendered_count[mode] = end
@@ -2744,9 +3352,17 @@ class DemandStashApp(ctk.CTk):
 
         self._view_dirty[mode] = False
         self._view_render_complete[mode] = end >= len(items)
+        logging.debug(
+            f"[_render_message_batch] done mode={mode}, rendered={end}/{len(items)}, "
+            f"complete={self._view_render_complete[mode]}, elapsed_ms={(time.perf_counter() - started_at) * 1000:.1f}"
+        )
+        if not self._view_render_complete[mode] and mode == self.view_mode:
+            self._schedule_next_render_batch(mode)
 
     def _render_more_for_current_view(self):
-        mode = self.view_mode
+        self._render_more_for_view(self.view_mode)
+
+    def _render_more_for_view(self, mode, token=None):
         if self._view_dirty.get(mode, True) or self._view_render_complete.get(mode, False):
             return
         frame = self._view_frames.get(mode)
@@ -2760,8 +3376,109 @@ class DemandStashApp(ctk.CTk):
         if start >= len(items):
             self._view_render_complete[mode] = True
             return
-        token = self._view_build_tokens[mode]
+        token = token if token is not None else self._view_build_tokens[mode]
         self._render_message_batch(frame, items, mode, callbacks, token, start=start)
+
+    def _render_more_if_near_bottom(self):
+        try:
+            canvas = self.scroll_frame._parent_canvas
+            _, bottom = canvas.yview()
+            if bottom >= LIST_RENDER_PREFETCH_YVIEW:
+                self._render_more_for_current_view()
+        except Exception:
+            pass
+
+    def _is_message_images_expanded(self, msg_id):
+        return msg_id in self._expanded_image_messages
+
+    def _toggle_message_images(self, msg_id, anchor_offset=None):
+        return self._set_message_images_expanded(
+            msg_id,
+            expanded=msg_id not in self._expanded_image_messages,
+        )
+
+    def _set_message_images_expanded(self, msg_id, expanded):
+        logging.debug(f"[_set_message_images_expanded] msg_id={msg_id}, expanded={expanded}, before set={msg_id in self._expanded_image_messages}")
+        if expanded:
+            self._expanded_image_messages.add(msg_id)
+        else:
+            self._expanded_image_messages.discard(msg_id)
+        logging.debug(f"[_set_message_images_expanded] after set={msg_id in self._expanded_image_messages}")
+        self._schedule_scroll_region_update(reset=False)
+        return "break"
+
+    def _scroll_message_toggle_to_center(self, msg_id):
+        def restore():
+            try:
+                canvas = self.scroll_frame._parent_canvas
+                self.scroll_frame.update_idletasks()
+                canvas.update_idletasks()
+                canvas.configure(scrollregion=canvas.bbox("all"))
+                card = self._find_message_card(msg_id)
+                if not card:
+                    return
+                target = getattr(card, "_image_toggle_button", None)
+                if not target or not target.winfo_exists():
+                    return
+                desired_offset = int(canvas.winfo_height() * 0.58)
+                delta = target.winfo_rooty() - canvas.winfo_rooty() - desired_offset
+                bbox = canvas.bbox("all")
+                if not bbox:
+                    return
+                content_top = bbox[1]
+                content_height = max(1, bbox[3] - bbox[1])
+                current_top = canvas.canvasy(0) - content_top
+                max_top = max(0, content_height - canvas.winfo_height())
+                new_top = max(0, min(max_top, current_top + delta))
+                canvas.yview_moveto(new_top / content_height)
+            except Exception:
+                pass
+
+        self.after_idle(restore)
+        self.after(90, restore)
+        self.after(180, restore)
+
+    def _scroll_message_to_top(self, msg_id):
+        def restore():
+            try:
+                canvas = self.scroll_frame._parent_canvas
+                self.scroll_frame.update_idletasks()
+                canvas.update_idletasks()
+                canvas.configure(scrollregion=canvas.bbox("all"))
+                card = self._find_message_card(msg_id)
+                if not card:
+                    return
+                delta = card.winfo_rooty() - canvas.winfo_rooty() - 8
+                bbox = canvas.bbox("all")
+                if not bbox:
+                    return
+                content_top = bbox[1]
+                content_height = max(1, bbox[3] - bbox[1])
+                current_top = canvas.canvasy(0) - content_top
+                max_top = max(0, content_height - canvas.winfo_height())
+                new_top = max(0, min(max_top, current_top + delta))
+                canvas.yview_moveto(new_top / content_height)
+            except Exception:
+                pass
+
+        self.after_idle(restore)
+        self.after(90, restore)
+        self.after(180, restore)
+
+    def _find_message_card(self, msg_id):
+        frame = self._view_frames.get(self.view_mode)
+        if not frame or not frame.winfo_exists():
+            return None
+        stack = list(frame.winfo_children())
+        while stack:
+            widget = stack.pop()
+            if isinstance(widget, MessageCard) and widget.msg_id == msg_id:
+                return widget
+            try:
+                stack.extend(widget.winfo_children())
+            except Exception:
+                pass
+        return None
 
     def _cancel_scroll_region_updates(self):
         for after_id in self._scroll_region_after_ids:

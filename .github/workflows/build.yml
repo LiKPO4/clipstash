@@ -73,6 +73,7 @@ jobs:
             --name ClipStash `
             --icon assets\app_icon.ico `
             --add-data "assets;assets" `
+            --collect-data tkinterdnd2 `
             --exclude-module PyQt5 `
             --exclude-module PyQt6 `
             --exclude-module PySide2 `
