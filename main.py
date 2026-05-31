@@ -47,7 +47,7 @@ except Exception:
     HAS_FILE_DND = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.41"
+APP_VERSION = "v1.3.42"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -1774,6 +1774,10 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
     def _on_close(self):
         self._hide_preview()
         try:
+            self.withdraw()
+        except Exception:
+            pass
+        try:
             self.grab_release()
         except Exception:
             pass
@@ -1782,7 +1786,14 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
                 self._on_close_cb()
             except Exception:
                 pass
-        self.destroy()
+        try:
+            self.destroy()
+        except Exception:
+            logging.exception("[MessageEditorDialog._on_close] normal destroy failed")
+            try:
+                self.tk.call("destroy", self._w)
+            except Exception:
+                logging.exception("[MessageEditorDialog._on_close] tcl destroy failed")
 
     def _place_centered(self):
         """隐藏→计算位置→显示，彻底避免闪烁"""
@@ -1948,8 +1959,16 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
     def _do_save_and_close(self):
         """实际执行保存和关闭"""
         try:
+            self.withdraw()
+        except Exception:
+            pass
+        try:
             self.on_save(self._saved_text, self._saved_images)
         except Exception as e:
+            try:
+                self.deiconify()
+            except Exception:
+                pass
             self._saving = False
             self.hint_label.configure(text=f"保存失败: {e}")
             return
