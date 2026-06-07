@@ -47,7 +47,7 @@ except Exception:
     HAS_FILE_DND = False
 
 APP_NAME = "需求暂存站"
-APP_VERSION = "v1.3.42"
+APP_VERSION = "v1.3.43"
 APP_REPOSITORY = "LiKPO4/clipstash"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 WINDOWS_APP_ID = f"LiKPO4.ClipStash.{APP_VERSION.lstrip('v')}"
@@ -891,7 +891,9 @@ class HoverPreview(ctk.CTkToplevel):
             lbl = ctk.CTkLabel(self, image=ctk_img, text="")
             lbl.pack(padx=4, pady=4)
             lbl.image = ctk_img
-            self.geometry(f"{tw + 8}x{th + 8}")
+            self._win_w = tw + 8
+            self._win_h = th + 8
+            self.geometry(f"{self._win_w}x{self._win_h}")
         except Exception:
             self.destroy()
             return
@@ -935,8 +937,8 @@ class HoverPreview(ctk.CTkToplevel):
 
     def _position_near(self, widget):
         self.update_idletasks()
-        pw = self.winfo_width()
-        ph = self.winfo_height()
+        pw = getattr(self, "_win_w", None) or self.winfo_width()
+        ph = getattr(self, "_win_h", None) or self.winfo_height()
         wx = widget.winfo_rootx()
         wy = widget.winfo_rooty()
         ww = widget.winfo_width()
@@ -967,6 +969,7 @@ class HoverPreview(ctk.CTkToplevel):
                 self.geometry(f"+{nx}+{ny}")
                 return
 
+        # 没有完全合适的方位时，强制把窗口夹回工作区，保证整体可见
         nx = clamp(wx + ww + margin, left + margin, right - pw - margin)
         ny = clamp(wy, top + margin, bottom - ph - margin)
         self.geometry(f"+{nx}+{ny}")
