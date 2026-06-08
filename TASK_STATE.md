@@ -199,16 +199,19 @@
 - 已用 SQLite 验证新增图片消息兼容旧结构：`messages.id=115 text_content=None archived=0`，`message_images` 关联图片 `clipstash-next-20260608210945739-23556-0.png`，旧图片目录中文件存在且大小 `70` 字节。
 - 已通过 Tauri UI 删除测试消息 `#115` 完成清理：删除弹层勾选确认后页面显示“已删除 #115”，并显示删除备份 `clipstash.db.bak-20260608-211133`；随后 SQLite 验证 `messages` 和 `message_images` 中 `#115` 均为 0 行，图片文件已从旧 `images/` 目录移除。
 - 已在图片新增/删除 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`，`max_id=114`。
+- 已完成阶段 2 图文新增真实 UI 验收：基线旧库 `normal=11 archived=103 total=114 max_id=114 joined_images=107 orphan_images=0`，通过 Tauri UI 展开“+ 新建”，填写 `[ClipStash Next UI 验收] 图文新增清理测试 2026-06-08`，选择临时 `clipstash-ui-create-mixed.png`，勾选写入确认后提交，页面显示“已写入 #116 / 2026-06-08 13:29:00 · 图片 1”，并显示备份 `clipstash.db.bak-20260608-212900`。
+- 已用 SQLite 验证新增图文消息兼容旧结构：`messages.id=116 text_content=[ClipStash Next UI 验收] 图文新增清理测试 2026-06-08 archived=0`，`message_images` 关联图片 `clipstash-next-20260608212900573-30852-0.png`，旧图片目录中文件存在且大小 `70` 字节。
+- 已通过 Tauri UI 删除测试消息 `#116` 完成清理：删除弹层勾选确认后页面显示“已删除 #116”，SQLite 验证 `messages` 和 `message_images` 中 `#116` 均为 0 行，图片文件已从旧 `images/` 目录移除，删除备份为 `clipstash.db.bak-20260608-212931`。
+- 已在图文新增/删除 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`，`max_id=114`，`#114 archived=0 archived_at=None`。
 
 ## 未完成
 
-- 尚未实现复制、导入等后续阶段功能。
-- 阶段 2 已完成前端纯图片新增入口真实点击写入验收并通过 UI 删除清理；图文新增入口尚未执行真实点击写入验收。
+- 阶段 2 已完成前端纯图片和图文新增入口真实点击写入验收，并均通过 UI 删除清理。
 - 阶段 2 尚未完成图片/图文入口的浏览器截图验收；本轮尝试启动 Vite dev server 做前端真实 UI 验收，日志曾显示 `http://127.0.0.1:1420/` ready，但随后端口无监听；内置浏览器访问 `127.0.0.1:1420` 和 `localhost:1420` 均返回 `net::ERR_BLOCKED_BY_CLIENT`，未获得可用浏览器截图证据。
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 文字复制和图片复制真实应用剪贴板 UI 验收已通过。
-- 用户提供的 UI 参考图原始 png 尚未保存到目录；当前只有 `clipstash-next/design-reference/README.md` 文字参考，需在拿到附件本地路径后补充图片文件。
+- 用户提供的 UI 参考图已保存为 `clipstash-next/design-reference/clipstash-ui-reference.png`；同目录 `tauri-ui-smoke.png` 保留当前 Tauri UI 冒烟截图。
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
 
 ## 阻塞
@@ -237,4 +240,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做阶段 2 图文新增 UI 验收并清理测试消息，或做编辑/删除消息 UI 验收。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做阶段 2 编辑/删除消息 UI 验收，或做归档/恢复 UI 验收并恢复旧库基线。
