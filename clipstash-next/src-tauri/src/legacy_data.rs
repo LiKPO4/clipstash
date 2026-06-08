@@ -2975,6 +2975,43 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes local ClipStash app data; set CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID and CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED"]
+    fn manual_sets_local_legacy_archive_state_with_backup() {
+        let message_id = std::env::var("CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID")
+            .expect("set CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID to an existing message id")
+            .parse::<i64>()
+            .expect("CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID must be a positive integer");
+        assert!(message_id > 0);
+
+        let archived_value = std::env::var("CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED")
+            .expect("set CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED to 0 or 1");
+        let archived = match archived_value.as_str() {
+            "0" | "false" | "False" | "FALSE" => false,
+            "1" | "true" | "True" | "TRUE" => true,
+            _ => panic!("CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED must be 0, 1, false, or true"),
+        };
+
+        let result = set_legacy_message_archived(message_id, archived)
+            .expect("set local legacy archive state");
+        let backup_path = PathBuf::from(&result.backup.backup_path);
+
+        assert!(backup_path.is_file());
+        assert!(result.backup.bytes_copied > 0);
+        assert_eq!(result.message.id, message_id);
+        assert_eq!(result.message.archived, archived);
+        if archived {
+            assert!(result.message.archived_at.is_some());
+        } else {
+            assert!(result.message.archived_at.is_none());
+        }
+
+        eprintln!(
+            "legacy-archive-set-ok id={} archived={} backup={}",
+            message_id, result.message.archived, result.backup.backup_path
+        );
+    }
+
+    #[test]
     #[ignore = "writes system clipboard; set CLIPSTASH_NEXT_COPY_LEGACY_IMAGE_FILENAME"]
     fn manual_copies_local_legacy_image_to_system_clipboard() {
         let filename = std::env::var("CLIPSTASH_NEXT_COPY_LEGACY_IMAGE_FILENAME")
