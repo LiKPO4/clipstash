@@ -3,6 +3,7 @@ import type {
   LegacyCreateImageMessageResult,
   LegacyCreateMixedMessageResult,
   LegacyCreateTextMessageResult,
+  LegacyDeleteMessageResult,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
   LegacyStats,
@@ -64,5 +65,11 @@ export function replaceLegacyMessageImages(messageId: number, imagesData: number
   return invoke<LegacyReplaceImagesResult>("replace_legacy_message_images", {
     messageId,
     imagesData,
+  });
+}
+
+export function deleteLegacyMessage(messageId: number) {
+  return invoke<LegacyDeleteMessageResult>("delete_legacy_message", {
+    messageId,
   });
 }

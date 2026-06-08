@@ -96,6 +96,13 @@ pub struct LegacyReplaceImagesResult {
     pub message: LegacyMessage,
 }
 
+#[derive(Serialize)]
+pub struct LegacyDeleteMessageResult {
+    pub backup: LegacyDbBackup,
+    pub image_backup: Option<LegacyImageFilesBackup>,
+    pub message: LegacyMessage,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -154,6 +161,11 @@ pub fn replace_legacy_message_images(
         message_id,
         images_data,
     )
+}
+
+pub fn delete_legacy_message(message_id: i64) -> Result<LegacyDeleteMessageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    delete_message_with_backup_for_path(&data_dir.join("clipstash.db"), message_id)
 }
 
 pub fn list_legacy_messages(
@@ -382,6 +394,27 @@ fn replace_message_images_with_backup_for_path(
     })
 }
 
+fn delete_message_with_backup_for_path(
+    db_path: &Path,
+    message_id: i64,
+) -> Result<LegacyDeleteMessageResult, String> {
+    let current_message = read_message_for_update_precheck(db_path, message_id)?;
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("删除消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let backup = create_legacy_db_backup_for_path(db_path)?;
+    let image_backup = backup_message_image_files(data_dir, &current_message.images)
+        .map_err(|err| format!("{err}；已创建数据库备份：{}", backup.backup_path))?;
+    let message = delete_message_for_path(db_path, message_id)
+        .map_err(|err| format!("{err}；已创建数据库备份：{}", backup.backup_path))?;
+
+    Ok(LegacyDeleteMessageResult {
+        backup,
+        image_backup,
+        message,
+    })
+}
+
 pub fn create_text_message_for_path(
     db_path: &Path,
     text_content: Option<String>,
@@ -465,6 +498,46 @@ pub fn replace_message_images_for_path(
 
     remove_old_message_image_files(&old_message.images);
     read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
+pub fn delete_message_for_path(db_path: &Path, message_id: i64) -> Result<LegacyMessage, String> {
+    if message_id <= 0 {
+        return Err("删除消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("删除消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("删除消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+    let mut conn =
+        Connection::open(db_path).map_err(|err| format!("打开旧数据库准备删除失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+    let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
+
+    let delete_result = (|| {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启删除消息事务失败：{err}"))?;
+        tx.execute(
+            "DELETE FROM message_images WHERE message_id = ?",
+            params![message_id],
+        )
+        .map_err(|err| format!("删除图片关联失败：{err}"))?;
+        let deleted = tx
+            .execute("DELETE FROM messages WHERE id = ?", params![message_id])
+            .map_err(|err| format!("删除消息失败：{err}"))?;
+        if deleted == 0 {
+            return Err(format!("删除消息失败，消息不存在：{message_id}"));
+        }
+        tx.commit().map_err(|err| format!("提交删除失败：{err}"))
+    })();
+
+    delete_result?;
+    remove_old_message_image_files(&old_message.images);
+    Ok(old_message)
 }
 
 pub fn update_text_message_for_path(
@@ -1527,6 +1600,147 @@ mod tests {
 
         assert!(result.is_err());
         assert!(images_dir.join("only.png").is_file());
+        assert!(!fs::read_dir(&data_dir)
+            .expect("read data dir")
+            .any(|entry| {
+                let name = entry
+                    .expect("read data dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string();
+                name.starts_with("clipstash.db.bak-") || name.starts_with("images.bak-")
+            }));
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn deletes_message_with_db_and_file_backups() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-delete-message-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        let images_dir = data_dir.join("images");
+        fs::create_dir_all(&images_dir).expect("create images dir");
+        fs::write(images_dir.join("delete-a.png"), b"delete-a").expect("write image a");
+        fs::write(images_dir.join("delete-b.png"), b"delete-b").expect("write image b");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('delete me', 0);
+            INSERT INTO messages (text_content, archived) VALUES ('keep me', 0);
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'delete-a.png');
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'delete-b.png');
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result =
+            delete_message_with_backup_for_path(&db_path, 1).expect("delete message with backup");
+
+        assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(result.message.id, 1);
+        assert_eq!(result.message.text_content.as_deref(), Some("delete me"));
+        assert_eq!(result.message.images.len(), 2);
+        let image_backup = result.image_backup.expect("image backup");
+        let image_backup_dir = PathBuf::from(&image_backup.backup_dir);
+        assert_eq!(image_backup.filenames, vec!["delete-a.png", "delete-b.png"]);
+        assert_eq!(
+            fs::read(image_backup_dir.join("delete-a.png")).expect("read image a backup"),
+            b"delete-a"
+        );
+        assert_eq!(
+            fs::read(image_backup_dir.join("delete-b.png")).expect("read image b backup"),
+            b"delete-b"
+        );
+        assert!(!images_dir.join("delete-a.png").exists());
+        assert!(!images_dir.join("delete-b.png").exists());
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            1
+        );
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM message_images").expect("count images"),
+            0
+        );
+        let kept_text: String = conn
+            .query_row(
+                "SELECT text_content FROM messages WHERE id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read kept message");
+        assert_eq!(kept_text, "keep me");
+        drop(conn);
+
+        let backup_conn =
+            Connection::open(&result.backup.backup_path).expect("open backup sqlite fixture");
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM messages")
+                .expect("count backup messages"),
+            2
+        );
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM message_images")
+                .expect("count backup images"),
+            2
+        );
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn rejects_missing_delete_before_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-delete-missing-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = delete_message_with_backup_for_path(&db_path, 404);
+
+        assert!(result.is_err());
         assert!(!fs::read_dir(&data_dir)
             .expect("read data dir")
             .any(|entry| {

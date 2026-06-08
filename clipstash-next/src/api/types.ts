@@ -66,3 +66,5 @@ export type LegacyReplaceImagesResult = {
   image_backup: LegacyImageFilesBackup | null;
   message: LegacyMessage;
 };
+
+export type LegacyDeleteMessageResult = LegacyReplaceImagesResult;

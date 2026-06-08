@@ -49,6 +49,13 @@ fn replace_legacy_message_images(
 }
 
 #[tauri::command]
+fn delete_legacy_message(
+    message_id: i64,
+) -> Result<legacy_data::LegacyDeleteMessageResult, String> {
+    legacy_data::delete_legacy_message(message_id)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -67,6 +74,7 @@ pub fn run() {
             create_legacy_image_message,
             create_legacy_mixed_message,
             create_legacy_text_message,
+            delete_legacy_message,
             get_legacy_stats,
             list_legacy_messages,
             replace_legacy_message_images,
