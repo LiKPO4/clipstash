@@ -956,6 +956,40 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "writes local ClipStash app data; set CLIPSTASH_NEXT_WRITE_LEGACY_TEXT"]
+    fn manual_creates_local_legacy_text_message_with_backup() {
+        let text = std::env::var("CLIPSTASH_NEXT_WRITE_LEGACY_TEXT")
+            .expect("set CLIPSTASH_NEXT_WRITE_LEGACY_TEXT to the text message to create");
+        let result = create_legacy_text_message(text).expect("create local legacy text message");
+        let backup_path = PathBuf::from(&result.backup.backup_path);
+
+        assert!(backup_path.is_file());
+        assert!(result.backup.bytes_copied > 0);
+        assert!(!result.message.archived);
+        assert!(result.message.archived_at.is_none());
+        assert!(result.message.images.is_empty());
+
+        let latest_page =
+            list_legacy_messages(MessageView::Normal, SortOrder::Newest, Some(0), Some(1))
+                .expect("list latest local legacy message");
+        let latest = latest_page
+            .messages
+            .first()
+            .expect("latest local legacy message");
+
+        assert_eq!(latest.id, result.message.id);
+        assert_eq!(latest.text_content, result.message.text_content);
+
+        eprintln!(
+            "legacy-write-ok id={} backup={} bytes={} text={}",
+            result.message.id,
+            result.backup.backup_path,
+            result.backup.bytes_copied,
+            result.message.text_content.as_deref().unwrap_or("")
+        );
+    }
+
     fn collect_all_messages(data_dir: PathBuf, view: MessageView) -> Vec<LegacyMessage> {
         let mut offset = 0;
         let mut messages = Vec::new();
