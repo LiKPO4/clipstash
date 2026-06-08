@@ -11,6 +11,7 @@ import {
   getLegacyStats,
   listExternalWindowTargets,
   listLegacyMessages,
+  pasteLegacyImportQueue,
   pasteLegacyImportQueueItem,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
@@ -31,6 +32,7 @@ import type {
   ExternalWindowTarget,
   LegacyImportQueueCopyResult,
   LegacyImportPasteResult,
+  LegacyImportQueuePasteResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyReplaceImagesResult,
@@ -60,6 +62,8 @@ type ImportStageResult = LegacyImportStageResult;
 type ImportQueueCopyResult = LegacyImportQueueCopyResult;
 
 type ImportQueuePasteResult = LegacyImportPasteResult;
+
+type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -126,6 +130,10 @@ function App() {
   const [importQueuePasteError, setImportQueuePasteError] = useState<string | null>(null);
   const [importQueuePasteResult, setImportQueuePasteResult] =
     useState<ImportQueuePasteResult | null>(null);
+  const [pastingImportQueue, setPastingImportQueue] = useState(false);
+  const [importQueuePasteAllError, setImportQueuePasteAllError] = useState<string | null>(null);
+  const [importQueuePasteAllResult, setImportQueuePasteAllResult] =
+    useState<ImportQueuePasteAllResult | null>(null);
   const [targetWindows, setTargetWindows] = useState<ExternalWindowTarget[]>([]);
   const [selectedTargetWindow, setSelectedTargetWindow] =
     useState<ExternalWindowTarget | null>(null);
@@ -547,6 +555,36 @@ function App() {
     }
   }
 
+  async function pasteImportQueue() {
+    const target = targetWindowValidation?.target;
+    if (
+      !importQueuePreview ||
+      !selectedTargetWindow ||
+      !target ||
+      target.hwnd !== selectedTargetWindow.hwnd ||
+      pastingImportQueue
+    ) {
+      return;
+    }
+
+    setPastingImportQueue(true);
+    setImportQueuePasteAllError(null);
+    setImportQueuePasteAllResult(null);
+
+    try {
+      const result = await pasteLegacyImportQueue(
+        importQueuePreview.message_id,
+        target.hwnd,
+        250,
+      );
+      setImportQueuePasteAllResult(result);
+    } catch (err) {
+      setImportQueuePasteAllError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPastingImportQueue(false);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
@@ -567,6 +605,13 @@ function App() {
     !!selectedTargetWindow &&
     !!validatedTargetWindow &&
     selectedTargetWindow.hwnd === validatedTargetWindow.hwnd &&
+    pastingImportQueueItem === null &&
+    !pastingImportQueue;
+  const canPasteImportQueue =
+    !!selectedTargetWindow &&
+    !!validatedTargetWindow &&
+    selectedTargetWindow.hwnd === validatedTargetWindow.hwnd &&
+    !pastingImportQueue &&
     pastingImportQueueItem === null;
 
   return (
@@ -1033,6 +1078,13 @@ function App() {
                       {targetWindowValidation.target.process_id}
                     </p>
                   )}
+                  <button
+                    type="button"
+                    disabled={!canPasteImportQueue}
+                    onClick={pasteImportQueue}
+                  >
+                    {pastingImportQueue ? "整队列粘贴中..." : "粘贴整队列"}
+                  </button>
                 </div>
                 <div className="import-queue-items">
                   {importQueuePreview.items.map((item, index) => (
@@ -1127,6 +1179,38 @@ function App() {
                     : `${
                         importQueuePasteResult.image_filename ?? "图片"
                       } 已发送到 ${importQueuePasteResult.target.title}`}
+                </p>
+              </>
+            )
+          )}
+        </section>
+      )}
+
+      {(importQueuePasteAllError || importQueuePasteAllResult) && (
+        <section
+          className={`floating-result ${
+            importQueuePasteAllError ? "floating-result-error" : ""
+          }`}
+          role={importQueuePasteAllError ? "alert" : "status"}
+        >
+          {importQueuePasteAllError ? (
+            <>
+              <strong>粘贴整队列失败</strong>
+              <p>{importQueuePasteAllError}</p>
+            </>
+          ) : (
+            importQueuePasteAllResult && (
+              <>
+                <strong>
+                  已粘贴整队列 #{importQueuePasteAllResult.message_id} ·{" "}
+                  {importQueuePasteAllResult.completed_count} 项
+                </strong>
+                <p>
+                  {importQueuePasteAllResult.failure
+                    ? `停在第 ${
+                        (importQueuePasteAllResult.failed_item_index ?? 0) + 1
+                      } 项：${importQueuePasteAllResult.failure}`
+                    : `已发送到 ${importQueuePasteAllResult.target.title}，间隔 ${importQueuePasteAllResult.requested_delay_ms}ms`}
                 </p>
               </>
             )

@@ -132,3 +132,13 @@ export type LegacyImportPasteResult = {
   target: ExternalWindowTarget;
   sent_ctrl_v: boolean;
 };
+
+export type LegacyImportQueuePasteResult = {
+  message_id: number;
+  target: ExternalWindowTarget;
+  requested_delay_ms: number;
+  completed_count: number;
+  failed_item_index: number | null;
+  failure: string | null;
+  items: LegacyImportPasteResult[];
+};

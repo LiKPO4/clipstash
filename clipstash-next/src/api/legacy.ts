@@ -10,6 +10,7 @@ import type {
   LegacyCopyImageResult,
   LegacyImportQueueCopyResult,
   LegacyImportPasteResult,
+  LegacyImportQueuePasteResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyMessagePage,
@@ -139,5 +140,17 @@ export function pasteLegacyImportQueueItem(
     messageId,
     itemIndex,
     targetHwnd,
+  });
+}
+
+export function pasteLegacyImportQueue(
+  messageId: number,
+  targetHwnd: number,
+  delayMs?: number,
+) {
+  return invoke<LegacyImportQueuePasteResult>("paste_legacy_import_queue", {
+    messageId,
+    targetHwnd,
+    delayMs,
   });
 }
