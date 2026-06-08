@@ -151,6 +151,7 @@
 - 已扩展前端 API 合约测试，覆盖统计、列表、外部窗口枚举/校验、图片复制、导入 staging、队列预览、队列单项复制和单项粘贴 wrapper 的 command 名与参数映射；当前仅验证调用契约，不写真实旧库。
 - 已在扩展前端 API 合约测试后补跑非写库验证：`npm run build` 通过，`npm run verify:legacy-readonly` 通过，旧库审计结果保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 - 已新增前端 mock 交互测试，覆盖浏览器文字剪贴板写入不可用时显示错误，并确认不触发文字更新、归档或旧库刷新 command；当前测试不写真实旧库。
+- 已新增前端 mock 交互测试，覆盖图片复制 command 失败时显示错误，并确认不刷新旧库统计/列表；当前测试不写真实旧库。
 
 ## 未完成
 

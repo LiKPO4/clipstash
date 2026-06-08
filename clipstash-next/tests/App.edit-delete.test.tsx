@@ -51,6 +51,7 @@ const page = {
 
 let listedMessages = [message];
 let writeTextMock: ReturnType<typeof vi.fn>;
+let failNextImageCopy = false;
 
 const updateResult = {
   backup: {
@@ -220,6 +221,7 @@ const externalWindowValidation = {
 describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
+    failNextImageCopy = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
@@ -236,6 +238,10 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(args?.archived ? archiveResult : restoreResult);
       }
       if (command === "copy_legacy_image_to_clipboard") {
+        if (failNextImageCopy) {
+          failNextImageCopy = false;
+          return Promise.reject(new Error("图片剪贴板写入失败"));
+        }
         return Promise.resolve(copyImageResult);
       }
       if (command === "stage_legacy_message_import_to_clipboard") {
@@ -505,6 +511,25 @@ describe("edit and delete guarded actions", () => {
     });
     expect(await screen.findByText("已复制图片")).toBeTruthy();
     expect(screen.getByText("old.png · 12 × 8")).toBeTruthy();
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("shows an image copy error without refreshing legacy data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const imageGrid = await screen.findByLabelText("图片缩略图");
+    failNextImageCopy = true;
+    await user.click(within(imageGrid).getByRole("button", { name: "复制图片" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+        filename: "old.png",
+      });
+    });
+    expect(await screen.findByText("复制图片失败")).toBeTruthy();
+    expect(screen.getByText("图片剪贴板写入失败")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
