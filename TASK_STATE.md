@@ -125,6 +125,8 @@
 - 已更新前端 mock 交互测试，覆盖刷新目标窗口、选择窗口、校验窗口，以及校验窗口不触发队列复制或旧库刷新。
 - 已新增低层 Windows Ctrl+V 输入模块 `keyboard_input.rs`，使用 `SendInput` 构造 Ctrl+V 按键序列；当前未暴露给前端或导入 command。
 - 已新增 ignored 手动验收测试 `manual_sends_ctrl_v_to_foreground_window`，只有设置 `CLIPSTASH_NEXT_SEND_CTRL_V` 时才会向当前前台窗口发送 Ctrl+V；当前会话未执行该手动测试，避免误粘贴到 Codex/终端。
+- 已新增低层外部窗口聚焦函数 `focus_external_window_target`，复用窗口校验后执行 `ShowWindow(SW_RESTORE)` 和 `SetForegroundWindow`；当前未暴露给前端或导入 command。
+- 已新增 ignored 手动验收测试 `manual_focuses_external_window_target`，只有设置 `CLIPSTASH_NEXT_FOCUS_WINDOW` 时才会聚焦本机外部窗口；当前会话未执行该手动测试，避免抢焦点干扰。
 
 ## 未完成
 
@@ -134,7 +136,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入流程中的外部窗口聚焦、逐项 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板。
+- 阶段 3 尚未实现导入流程中的逐项 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数。
 
 ## 阻塞
 

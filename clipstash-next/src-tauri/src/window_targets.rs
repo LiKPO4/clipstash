@@ -13,6 +13,12 @@ pub struct ExternalWindowValidation {
     pub target: Option<ExternalWindowTarget>,
 }
 
+#[derive(Serialize)]
+pub struct ExternalWindowFocus {
+    pub focused: bool,
+    pub target: ExternalWindowTarget,
+}
+
 #[cfg(target_os = "windows")]
 pub fn list_external_window_targets() -> Result<Vec<ExternalWindowTarget>, String> {
     windows_impl::list_external_window_targets()
@@ -34,13 +40,26 @@ pub fn validate_external_window_target(_hwnd: isize) -> Result<ExternalWindowVal
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
+pub fn focus_external_window_target(hwnd: isize) -> Result<ExternalWindowFocus, String> {
+    windows_impl::focus_external_window_target(hwnd)
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn focus_external_window_target(_hwnd: isize) -> Result<ExternalWindowFocus, String> {
+    Err("目标窗口聚焦仅支持 Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::{ExternalWindowTarget, ExternalWindowValidation};
+    use super::{ExternalWindowFocus, ExternalWindowTarget, ExternalWindowValidation};
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible,
+        EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow,
+        SW_RESTORE,
     };
 
     pub fn list_external_window_targets() -> Result<Vec<ExternalWindowTarget>, String> {
@@ -87,6 +106,31 @@ mod windows_impl {
         Ok(ExternalWindowValidation {
             valid: true,
             target: Some(target),
+        })
+    }
+
+    pub fn focus_external_window_target(hwnd_value: isize) -> Result<ExternalWindowFocus, String> {
+        let validation = validate_external_window_target(hwnd_value)?;
+        let target = validation
+            .target
+            .ok_or_else(|| format!("目标窗口校验未返回窗口信息：hwnd={hwnd_value}"))?;
+        let hwnd = target.hwnd as HWND;
+
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            if SetForegroundWindow(hwnd) == 0 {
+                return Err(format!("目标窗口聚焦失败：hwnd={hwnd_value}"));
+            }
+
+            let foreground = GetForegroundWindow();
+            if foreground != hwnd {
+                return Err(format!("目标窗口未成为前台窗口：hwnd={hwnd_value}"));
+            }
+        }
+
+        Ok(ExternalWindowFocus {
+            focused: true,
+            target,
         })
     }
 
@@ -196,6 +240,32 @@ mod tests {
         eprintln!(
             "external-window-validate-ok hwnd={} pid={} title={}",
             target.hwnd, target.process_id, target.title
+        );
+    }
+
+    #[test]
+    #[ignore = "focuses a local desktop window; set CLIPSTASH_NEXT_FOCUS_WINDOW"]
+    fn manual_focuses_external_window_target() {
+        let requested = std::env::var("CLIPSTASH_NEXT_FOCUS_WINDOW")
+            .expect("set CLIPSTASH_NEXT_FOCUS_WINDOW to a hwnd, or any value to focus the first local window");
+        let hwnd = match requested.parse::<isize>() {
+            Ok(hwnd) => hwnd,
+            Err(_) => {
+                list_external_window_targets()
+                    .expect("list external windows")
+                    .first()
+                    .expect("at least one external window is required for manual focus")
+                    .hwnd
+            }
+        };
+
+        let focused = focus_external_window_target(hwnd).expect("focus external window");
+
+        assert!(focused.focused);
+        assert_eq!(focused.target.hwnd, hwnd);
+        eprintln!(
+            "external-window-focus-ok hwnd={} pid={} title={}",
+            focused.target.hwnd, focused.target.process_id, focused.target.title
         );
     }
 }
