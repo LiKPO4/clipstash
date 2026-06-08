@@ -28,7 +28,9 @@ body {
   margin: 0;
   min-width: 360px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f8fbff 0, #eef4fb 86px, #f4f7fb 100%);
+  background:
+    linear-gradient(90deg, rgba(63, 125, 241, 0.08), transparent 26%, transparent 74%, rgba(63, 125, 241, 0.08)),
+    #edf3fa;
 }
 
 button,
@@ -52,6 +54,10 @@ body.preview-open {
   margin: 0 auto;
   padding: 0 12px 18px;
   background: #f6f9fd;
+  box-shadow:
+    -1px 0 0 rgba(157, 176, 200, 0.34),
+    1px 0 0 rgba(157, 176, 200, 0.34),
+    0 18px 48px rgba(31, 77, 132, 0.14);
 }
 
 .app-topbar {
@@ -59,15 +65,15 @@ body.preview-open {
   top: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-columns: minmax(118px, 1fr) auto;
+  gap: 8px;
   align-items: center;
-  min-height: 86px;
+  min-height: 74px;
   margin: 0 -12px;
-  padding: 12px 10px 10px 14px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 22px rgba(31, 77, 132, 0.08);
-  backdrop-filter: blur(14px);
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid #dce6f3;
+  background: #fff;
+  box-shadow: 0 8px 18px rgba(31, 77, 132, 0.06);
 }
 
 .brand-block {
@@ -108,14 +114,16 @@ h1 {
 
 .top-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
+  justify-content: flex-end;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .top-actions span {
-  max-width: 94px;
+  max-width: 82px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -123,9 +131,9 @@ h1 {
 
 .top-actions button {
   min-height: 30px;
-  padding: 0 8px;
+  padding: 0 7px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   color: #405675;
   background: transparent;
   cursor: pointer;
@@ -134,6 +142,7 @@ h1 {
 .top-actions .primary-new {
   min-width: 82px;
   min-height: 34px;
+  margin-left: 4px;
   color: #fff;
   background: var(--blue);
   font-weight: 700;
