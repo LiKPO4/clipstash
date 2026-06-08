@@ -132,6 +132,7 @@
 - 已在前端导入队列浮层中接入 `paste_legacy_import_queue_item`，只有当前选择窗口与校验通过窗口 hwnd 一致时才启用“粘贴第 N 项”；当前仍不整队列自动粘贴、不自动归档、不写 DB。
 - 已新增前端 mock 交互测试，覆盖未校验目标窗口时粘贴按钮禁用、校验后调用单项粘贴 command，以及粘贴不刷新旧库统计/列表。
 - 已完成阶段 3B 单项受控粘贴真实手动验收：启动临时 WinForms 文本框窗口 `ClipStash Paste Target`，枚举到目标 `hwnd=17894008`，对消息 `id=114` 的 `item_index=0` 执行 `manual_pastes_legacy_import_queue_item_to_external_window` 成功；临时目标文件读回 52 字符，内容预览为 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`；随后 `npm run verify:legacy-readonly` 通过，旧库计数保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
+- 已完成阶段 3B 图片项真实手动验收：启动临时 WinForms 图片粘贴窗口 `ClipStash Image Paste Target`，枚举到目标 `hwnd=1248816`，对消息 `id=114` 的 `item_index=1` 执行 `manual_pastes_legacy_import_queue_item_to_external_window` 成功；临时目标文件读回 `image width=1 height=1`；随后 `npm run verify:legacy-readonly` 通过，旧库计数保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 
 ## 未完成
 
@@ -141,7 +142,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入流程中的整队列 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口；3B 文字项真实粘贴验收已通过，图片项尚未真实粘贴验收。
+- 阶段 3 尚未实现导入流程中的整队列 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口；3B 文字项和图片项真实粘贴验收均已通过。
 
 ## 阻塞
 
