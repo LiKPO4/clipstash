@@ -271,6 +271,23 @@ h1 {
   gap: 10px;
 }
 
+.baseline-warning {
+  padding: 10px;
+  border: 1px solid #f1d18f;
+  border-radius: 8px;
+  background: #fff8e8;
+}
+
+.baseline-warning strong {
+  color: #805b00;
+}
+
+.baseline-warning p {
+  margin: 4px 0 0;
+  color: #6f5a2b;
+  font-size: 12px;
+}
+
 .safety-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

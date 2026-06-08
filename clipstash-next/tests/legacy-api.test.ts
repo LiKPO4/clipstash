@@ -7,6 +7,7 @@ import {
   copyLegacyImageToClipboard,
   copyLegacyMessageTextToClipboard,
   copyLegacyMessageImportQueueItemToClipboard,
+  getLegacySafetyReport,
   getLegacyStats,
   listExternalWindowTargets,
   listLegacyMessages,
@@ -40,6 +41,14 @@ describe("legacy api command contracts", () => {
     await getLegacyStats();
 
     expect(invokeMock).toHaveBeenCalledWith("get_legacy_stats");
+  });
+
+  it("maps safety report requests to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ orphan_image_count: 0 });
+
+    await getLegacySafetyReport();
+
+    expect(invokeMock).toHaveBeenCalledWith("get_legacy_safety_report");
   });
 
   it("maps message list arguments to the backend command", async () => {

@@ -48,6 +48,13 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
+const LEGACY_BASELINE = {
+  normalCount: 11,
+  archivedCount: 103,
+  totalCount: 114,
+  joinedImageCount: 107,
+  orphanImageCount: 0,
+};
 
 type PreviewImage = {
   filename: string;
@@ -1371,9 +1378,17 @@ function SafetyReportPanel({
 }) {
   const latestBackupPath =
     report.recent_db_backups[0]?.path ?? report.recent_image_backups[0]?.path ?? null;
+  const baselineChanges = legacyBaselineChanges(report);
 
   return (
     <section className="safety-panel" aria-label="数据安全审计结果">
+      {baselineChanges.length > 0 && (
+        <div className="baseline-warning" role="status">
+          <strong>旧库可能被其他版本改动过</strong>
+          <p>{baselineChanges.join("，")}</p>
+        </div>
+      )}
+
       <div className="safety-grid">
         <SafetyMetric label="图片关联" value={report.joined_image_count} />
         <SafetyMetric label="孤立图片" value={report.orphan_image_count} danger={report.orphan_image_count > 0} />
@@ -1391,6 +1406,26 @@ function SafetyReportPanel({
       <BackupList title="最近图片备份" backups={report.recent_image_backups} onOpenPath={onOpenPath} />
     </section>
   );
+}
+
+function legacyBaselineChanges(report: LegacySafetyReport) {
+  const changes = [];
+  if (report.stats.normal_count !== LEGACY_BASELINE.normalCount) {
+    changes.push(`普通 ${LEGACY_BASELINE.normalCount} -> ${report.stats.normal_count}`);
+  }
+  if (report.stats.archived_count !== LEGACY_BASELINE.archivedCount) {
+    changes.push(`归档 ${LEGACY_BASELINE.archivedCount} -> ${report.stats.archived_count}`);
+  }
+  if (report.stats.total_count !== LEGACY_BASELINE.totalCount) {
+    changes.push(`总数 ${LEGACY_BASELINE.totalCount} -> ${report.stats.total_count}`);
+  }
+  if (report.joined_image_count !== LEGACY_BASELINE.joinedImageCount) {
+    changes.push(`图片关联 ${LEGACY_BASELINE.joinedImageCount} -> ${report.joined_image_count}`);
+  }
+  if (report.orphan_image_count !== LEGACY_BASELINE.orphanImageCount) {
+    changes.push(`孤立图片 ${LEGACY_BASELINE.orphanImageCount} -> ${report.orphan_image_count}`);
+  }
+  return changes;
 }
 
 function SafetyMetric({
