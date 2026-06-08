@@ -14,12 +14,20 @@ use crate::legacy_query::{
 #[cfg(test)]
 use crate::legacy_query::{query_count, view_where_sql};
 use crate::legacy_schema::ensure_legacy_schema;
+use crate::legacy_write_audit::legacy_write_audit;
+pub use crate::legacy_write_audit::LegacyWriteAudit;
+use crate::legacy_write_precheck::{
+    ensure_message_exists_for_path, read_message_for_update_precheck,
+    validate_replace_images_request,
+};
 use crate::legacy_write_validation::{
     normalize_optional_text_message, normalize_text_message, validate_images_data,
 };
 use arboard::{Clipboard, ImageData};
 use chrono::Utc;
-use rusqlite::{params, Connection, OpenFlags};
+#[cfg(test)]
+use rusqlite::OpenFlags;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -68,14 +76,6 @@ pub struct LegacyMessagePage {
     pub total_count: i64,
     pub has_more: bool,
     pub messages: Vec<LegacyMessage>,
-}
-
-#[derive(Serialize)]
-pub struct LegacyWriteAudit {
-    pub operation: String,
-    pub message_id: i64,
-    pub db_backup_path: String,
-    pub image_backup_dir: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -335,20 +335,6 @@ fn create_mixed_message_with_backup_for_path(
         audit,
         message,
     })
-}
-
-fn legacy_write_audit(
-    operation: &str,
-    message: &LegacyMessage,
-    backup: &LegacyDbBackup,
-    image_backup: Option<&LegacyImageFilesBackup>,
-) -> LegacyWriteAudit {
-    LegacyWriteAudit {
-        operation: operation.to_string(),
-        message_id: message.id,
-        db_backup_path: backup.backup_path.clone(),
-        image_backup_dir: image_backup.map(|backup| backup.backup_dir.clone()),
-    }
 }
 
 fn update_text_message_with_backup_for_path(
@@ -724,84 +710,6 @@ pub fn create_mixed_message_for_path(
         }
     };
 
-    read_legacy_message_by_id(&conn, &images_dir, message_id)
-}
-
-fn validate_replace_images_request(
-    db_path: &Path,
-    message_id: i64,
-    images_data: &[Vec<u8>],
-) -> Result<(), String> {
-    if message_id <= 0 {
-        return Err("替换消息图片失败，消息 id 必须大于 0".to_string());
-    }
-    if !db_path.is_file() {
-        return Err(format!(
-            "替换消息图片失败，数据库不存在：{}",
-            db_path.display()
-        ));
-    }
-    if images_data.iter().any(|image_data| image_data.is_empty()) {
-        return Err("替换消息图片失败，图片数据不能为空".to_string());
-    }
-
-    let current_message = read_message_for_update_precheck(db_path, message_id)?;
-    let has_text = current_message
-        .text_content
-        .as_deref()
-        .map(|text| !text.trim().is_empty())
-        .unwrap_or(false);
-    if images_data.is_empty() && !has_text {
-        return Err("替换消息图片失败，不能清空无文字消息的所有图片".to_string());
-    }
-
-    Ok(())
-}
-
-fn ensure_message_exists_for_path(db_path: &Path, message_id: i64) -> Result<(), String> {
-    if message_id <= 0 {
-        return Err("更新消息失败，消息 id 必须大于 0".to_string());
-    }
-    if !db_path.is_file() {
-        return Err(format!("更新消息失败，数据库不存在：{}", db_path.display()));
-    }
-
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
-    ensure_legacy_schema(&conn)?;
-    let exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM messages WHERE id = ?",
-            [message_id],
-            |row| row.get(0),
-        )
-        .map_err(|err| format!("检查消息是否存在失败：{err}"))?;
-
-    if exists == 0 {
-        return Err(format!("更新消息失败，消息不存在：{message_id}"));
-    }
-
-    Ok(())
-}
-
-fn read_message_for_update_precheck(
-    db_path: &Path,
-    message_id: i64,
-) -> Result<LegacyMessage, String> {
-    if message_id <= 0 {
-        return Err("读取消息失败，消息 id 必须大于 0".to_string());
-    }
-    if !db_path.is_file() {
-        return Err(format!("读取消息失败，数据库不存在：{}", db_path.display()));
-    }
-
-    let data_dir = db_path
-        .parent()
-        .ok_or_else(|| format!("读取消息失败，无法定位数据库目录：{}", db_path.display()))?;
-    let images_dir = data_dir.join("images");
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
-    ensure_legacy_schema(&conn)?;
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
