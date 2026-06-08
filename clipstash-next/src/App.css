@@ -519,8 +519,8 @@ textarea:focus,
 
 .message-list {
   display: grid;
-  gap: 12px;
-  padding-right: 8px;
+  gap: 10px;
+  padding-right: 7px;
   max-height: calc(100vh - 234px);
   overflow: auto;
 }
@@ -540,16 +540,17 @@ textarea:focus,
 }
 
 .message-card {
-  padding: 12px;
-  border: 1px solid #cbd8e8;
-  border-radius: 0;
+  padding: 11px 12px 12px;
+  border: 1px solid #d4e0ef;
+  border-radius: 8px;
   background: var(--panel);
+  box-shadow: 0 1px 0 rgba(9, 36, 71, 0.04);
 }
 
 .message-meta {
   display: flex;
   flex-direction: column-reverse;
-  gap: 10px;
+  gap: 8px;
 }
 
 .message-meta-text {
@@ -568,7 +569,7 @@ textarea:focus,
 
 .message-actions {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   justify-content: flex-end;
   overflow-x: auto;
   padding-bottom: 2px;
@@ -582,14 +583,14 @@ textarea:focus,
 .message-actions button,
 .secondary-action {
   flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 9px;
+  min-height: 27px;
+  padding: 0 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   color: #405675;
-  background: #f0f4f9;
+  background: #edf3fb;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
@@ -603,7 +604,7 @@ textarea:focus,
 
 .message-actions .danger-action {
   color: #fff;
-  background: var(--danger);
+  background: #d34d45;
 }
 
 .message-actions button:disabled {
@@ -614,13 +615,13 @@ textarea:focus,
 .message-text {
   display: -webkit-box;
   overflow: hidden;
-  margin: 10px 2px 0;
-  padding: 10px 12px;
-  border-radius: 7px;
+  margin: 9px 1px 0;
+  padding: 10px 11px;
+  border-radius: 8px;
   color: var(--ink);
-  background: var(--soft);
+  background: #edf3fa;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -634,9 +635,9 @@ textarea:focus,
 .image-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 0;
-  margin-bottom: 10px;
+  gap: 7px;
+  margin-top: 8px;
+  margin-bottom: 0;
 }
 
 .image-tile,
@@ -646,8 +647,8 @@ textarea:focus,
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid #cbd8e8;
-  border-radius: 0;
+  border: 1px solid #d4e0ef;
+  border-radius: 7px;
   background: #f4f7fb;
   text-align: left;
 }
