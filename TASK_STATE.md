@@ -108,6 +108,9 @@
 - 已执行真实系统剪贴板导入 staging 图片验收，目标消息 `id=113`，Rust 返回 `kind=image`、图片文件 `clipstash-next-20260608161841911-1588-0.png`，旧 Python `clipboard_utils.get_clipboard_image()` 读回尺寸 `(1, 1)`、模式 `RGBA`。
 - 已新增导入队列只读预检 command：`preview_legacy_message_import_queue`，按旧版导入顺序返回文字项和存在图片项，缺失图片只计数跳过；当前不写剪贴板、不模拟粘贴、不聚焦外部窗口、不写 DB。
 - 已新增 Rust 临时库测试，覆盖导入队列顺序为文字优先、图片按 `message_images.id` 顺序、缺失图片跳过计数、空消息报错。
+- 已新增导入队列单项复制 command：`copy_legacy_message_import_queue_item_to_clipboard`，按 `message_id + item_index` 复制队列中的文字或图片到系统剪贴板；当前不模拟粘贴、不聚焦外部窗口、不写 DB。
+- 已新增 ignored 手动验收测试 `manual_copies_local_legacy_import_queue_item_to_system_clipboard`，只有设置 `CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_ID` 和 `CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX` 时才会写系统剪贴板。
+- 已执行真实系统剪贴板导入队列单项复制验收，目标消息 `id=114`：`index=0` 复制文字，旧 Python 读回 52 字符；`index=1` 复制图片 `clipstash-next-20260608163309521-1896-0.png`，旧 Python 读回尺寸 `(1, 1)`、模式 `RGBA`。
 
 ## 未完成
 
@@ -117,7 +120,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入流程中的外部窗口聚焦、逐项 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检和首项剪贴板 staging。
+- 阶段 3 尚未实现导入流程中的外部窗口聚焦、逐项 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板。
 
 ## 阻塞
 
@@ -139,4 +142,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：基于 `preview_legacy_message_import_queue` 设计逐项导入执行器，先实现单步“复制队列第 N 项到剪贴板”再考虑 Ctrl+V。
+- 进入阶段 3 下一步：在前端增加导入队列预览/单项复制入口，或在 Rust 侧设计受控 Ctrl+V 粘贴执行器。

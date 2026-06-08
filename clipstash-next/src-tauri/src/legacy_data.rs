@@ -111,7 +111,7 @@ pub struct LegacyArchiveMessageResult {
     pub message: LegacyMessage,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct LegacyCopyImageResult {
     pub filename: String,
     pub path: String,
@@ -145,6 +145,16 @@ pub struct LegacyImportQueuePreview {
     pub image_count: usize,
     pub skipped_missing_image_count: usize,
     pub items: Vec<LegacyImportQueueItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LegacyImportQueueCopyResult {
+    pub message_id: i64,
+    pub item_index: usize,
+    pub staged_kind: String,
+    pub text_length: usize,
+    pub image_filename: Option<String>,
+    pub copied_image: Option<LegacyCopyImageResult>,
 }
 
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
@@ -237,6 +247,14 @@ pub fn preview_legacy_message_import_queue(
 ) -> Result<LegacyImportQueuePreview, String> {
     let data_dir = legacy_data_dir()?;
     preview_legacy_message_import_queue_from_dir(data_dir, message_id)
+}
+
+pub fn copy_legacy_message_import_queue_item_to_clipboard(
+    message_id: i64,
+    item_index: usize,
+) -> Result<LegacyImportQueueCopyResult, String> {
+    let data_dir = legacy_data_dir()?;
+    copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir, message_id, item_index)
 }
 
 pub fn list_legacy_messages(
@@ -1148,6 +1166,61 @@ fn import_queue_preview_from_message(
     })
 }
 
+fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
+    data_dir: PathBuf,
+    message_id: i64,
+    item_index: usize,
+) -> Result<LegacyImportQueueCopyResult, String> {
+    let preview = preview_legacy_message_import_queue_from_dir(data_dir.clone(), message_id)?;
+    let item = preview.items.get(item_index).ok_or_else(|| {
+        format!(
+            "复制导入队列项失败，索引超出范围：#{message_id} index={item_index} total={}",
+            preview.item_count
+        )
+    })?;
+
+    if item.kind == "text" {
+        let text = item
+            .text
+            .as_deref()
+            .ok_or_else(|| format!("复制导入队列文字失败，队列项缺少文字：#{message_id}"))?;
+        let mut clipboard =
+            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
+        clipboard
+            .set_text(text.to_string())
+            .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+
+        return Ok(LegacyImportQueueCopyResult {
+            message_id,
+            item_index,
+            staged_kind: "text".to_string(),
+            text_length: item.text_length,
+            image_filename: None,
+            copied_image: None,
+        });
+    }
+
+    if item.kind == "image" {
+        let image = item
+            .image
+            .as_ref()
+            .ok_or_else(|| format!("复制导入队列图片失败，队列项缺少图片：#{message_id}"))?;
+        let copied_image =
+            copy_legacy_image_to_clipboard_from_dir(data_dir, image.filename.clone())?;
+
+        return Ok(LegacyImportQueueCopyResult {
+            message_id,
+            item_index,
+            staged_kind: "image".to_string(),
+            text_length: 0,
+            image_filename: Some(image.filename.clone()),
+            copied_image: Some(copied_image),
+        });
+    }
+
+    Err(format!("复制导入队列项失败，未知队列项类型：{}", item.kind))
+}
+
 fn resolve_legacy_image_path(data_dir: &Path, filename: &str) -> Result<PathBuf, String> {
     let trimmed = filename.trim();
     if trimmed.is_empty() {
@@ -1461,6 +1534,16 @@ mod tests {
         let empty = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 2)
             .expect_err("empty message should fail preview");
         assert!(empty.contains("消息为空或图片文件缺失"));
+
+        let out_of_range =
+            copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir.clone(), 1, 3)
+                .expect_err("out-of-range queue item should fail before writing clipboard");
+        assert!(out_of_range.contains("索引超出范围"));
+
+        let empty_copy =
+            copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir.clone(), 2, 0)
+                .expect_err("empty message should fail before writing clipboard");
+        assert!(empty_copy.contains("消息为空或图片文件缺失"));
 
         fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
     }
@@ -2937,6 +3020,43 @@ mod tests {
             result.text_length,
             result.image_count,
             result.first_image_filename
+        );
+    }
+
+    #[test]
+    #[ignore = "writes system clipboard; set CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_ID and CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX"]
+    fn manual_copies_local_legacy_import_queue_item_to_system_clipboard() {
+        let message_id = std::env::var("CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_ID")
+            .expect("set CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_ID to an existing message id")
+            .parse::<i64>()
+            .expect("CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_ID must be an integer");
+        let item_index = std::env::var("CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX")
+            .expect("set CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX to a queue item index")
+            .parse::<usize>()
+            .expect("CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX must be a zero-based integer");
+
+        let result = copy_legacy_message_import_queue_item_to_clipboard(message_id, item_index)
+            .expect("copy local legacy import queue item");
+
+        assert_eq!(result.message_id, message_id);
+        assert_eq!(result.item_index, item_index);
+        assert!(result.staged_kind == "text" || result.staged_kind == "image");
+        if result.staged_kind == "text" {
+            assert!(result.text_length > 0);
+            assert!(result.image_filename.is_none());
+            assert!(result.copied_image.is_none());
+        } else {
+            assert!(result.image_filename.is_some());
+            assert!(result.copied_image.is_some());
+        }
+
+        eprintln!(
+            "legacy-import-queue-copy-ok id={} index={} kind={} text_length={} image={:?}",
+            result.message_id,
+            result.item_index,
+            result.staged_kind,
+            result.text_length,
+            result.image_filename
         );
     }
 

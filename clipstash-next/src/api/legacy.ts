@@ -6,6 +6,7 @@ import type {
   LegacyCreateTextMessageResult,
   LegacyDeleteMessageResult,
   LegacyCopyImageResult,
+  LegacyImportQueueCopyResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyMessagePage,
@@ -101,4 +102,17 @@ export function previewLegacyMessageImportQueue(messageId: number) {
   return invoke<LegacyImportQueuePreview>("preview_legacy_message_import_queue", {
     messageId,
   });
+}
+
+export function copyLegacyMessageImportQueueItemToClipboard(
+  messageId: number,
+  itemIndex: number,
+) {
+  return invoke<LegacyImportQueueCopyResult>(
+    "copy_legacy_message_import_queue_item_to_clipboard",
+    {
+      messageId,
+      itemIndex,
+    },
+  );
 }

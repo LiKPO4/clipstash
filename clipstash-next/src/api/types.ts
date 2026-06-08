@@ -102,3 +102,12 @@ export type LegacyImportQueuePreview = {
   skipped_missing_image_count: number;
   items: LegacyImportQueueItem[];
 };
+
+export type LegacyImportQueueCopyResult = {
+  message_id: number;
+  item_index: number;
+  staged_kind: "text" | "image";
+  text_length: number;
+  image_filename: string | null;
+  copied_image: LegacyCopyImageResult | null;
+};
