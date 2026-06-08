@@ -152,6 +152,7 @@
 - 已在扩展前端 API 合约测试后补跑非写库验证：`npm run build` 通过，`npm run verify:legacy-readonly` 通过，旧库审计结果保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 - 已新增前端 mock 交互测试，覆盖浏览器文字剪贴板写入不可用时显示错误，并确认不触发文字更新、归档或旧库刷新 command；当前测试不写真实旧库。
 - 已新增前端 mock 交互测试，覆盖图片复制 command 失败时显示错误，并确认不刷新旧库统计/列表；当前测试不写真实旧库。
+- 已新增前端 mock 交互测试，覆盖准备导入 command 失败时显示错误，并确认不刷新旧库统计/列表；当前测试不写真实旧库。
 
 ## 未完成
 

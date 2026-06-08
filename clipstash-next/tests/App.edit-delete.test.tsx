@@ -52,6 +52,7 @@ const page = {
 let listedMessages = [message];
 let writeTextMock: ReturnType<typeof vi.fn>;
 let failNextImageCopy = false;
+let failNextImportStage = false;
 
 const updateResult = {
   backup: {
@@ -222,6 +223,7 @@ describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
     failNextImageCopy = false;
+    failNextImportStage = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
@@ -245,6 +247,10 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(copyImageResult);
       }
       if (command === "stage_legacy_message_import_to_clipboard") {
+        if (failNextImportStage) {
+          failNextImportStage = false;
+          return Promise.reject(new Error("导入剪贴板准备失败"));
+        }
         return Promise.resolve(importStageResult);
       }
       if (command === "preview_legacy_message_import_queue") {
@@ -552,6 +558,29 @@ describe("edit and delete guarded actions", () => {
     });
     expect(await screen.findByText("已准备导入 #10")).toBeTruthy();
     expect(screen.getByText("3 个字符已进入剪贴板")).toBeTruthy();
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("shows an import staging error without refreshing legacy data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    failNextImportStage = true;
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "准备导入",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("stage_legacy_message_import_to_clipboard", {
+        messageId: 10,
+      });
+    });
+    expect(await screen.findByText("准备导入失败")).toBeTruthy();
+    expect(screen.getByText("导入剪贴板准备失败")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
