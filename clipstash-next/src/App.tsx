@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
-import { getLegacyStats, listLegacyMessages } from "./api/legacy";
+import { createLegacyTextMessage, getLegacyStats, listLegacyMessages } from "./api/legacy";
 import type {
   LegacyMessageImage,
   LegacyMessage,
   LegacyMessagePage,
   LegacyStats,
+  LegacyCreateTextMessageResult,
   MessageView,
   SortOrder,
 } from "./api/types";
@@ -28,6 +29,12 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
+  const [textDraft, setTextDraft] = useState("");
+  const [writeConfirmed, setWriteConfirmed] = useState(false);
+  const [creatingTextMessage, setCreatingTextMessage] = useState(false);
+  const [createTextError, setCreateTextError] = useState<string | null>(null);
+  const [createTextResult, setCreateTextResult] =
+    useState<LegacyCreateTextMessageResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -35,10 +42,7 @@ function App() {
     setLoading(true);
     setError(null);
 
-    Promise.all([
-      getLegacyStats(),
-      listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT }),
-    ])
+    loadLegacyData(view, sort)
       .then(([nextStats, nextPage]) => {
         if (!alive) return;
         setStats(nextStats);
@@ -102,14 +106,40 @@ function App() {
     }
   }
 
+  async function createTextMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const text = textDraft.trim();
+    if (!text || !writeConfirmed || creatingTextMessage) return;
+
+    setCreatingTextMessage(true);
+    setCreateTextError(null);
+    setCreateTextResult(null);
+
+    try {
+      const result = await createLegacyTextMessage(text);
+      const [nextStats, nextPage] = await loadLegacyData(view, sort);
+      setStats(nextStats);
+      setPage(nextPage);
+      setTextDraft("");
+      setWriteConfirmed(false);
+      setCreateTextResult(result);
+    } catch (err) {
+      setCreateTextError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingTextMessage(false);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
+  const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
 
   return (
     <main className="shell">
       <section className="summary">
-        <p className="eyebrow">ClipStash Next / 阶段 1</p>
-        <h1>旧消息只读列表</h1>
-        <p className="lede">读取旧数据库和图片目录，展示消息归属、排序和图片文件状态。</p>
+        <p className="eyebrow">ClipStash Next / 阶段 2</p>
+        <h1>旧库兼容工作台</h1>
+        <p className="lede">读取旧数据库和图片目录，分步验证新增文字消息的备份写入路径。</p>
       </section>
 
       {loading && <p className="status">正在读取旧数据库...</p>}
@@ -145,6 +175,61 @@ function App() {
             <PathRow label="数据目录" value={stats.data_dir} ok={stats.db_exists} />
             <PathRow label="数据库" value={stats.db_path} ok={stats.db_exists} />
             <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
+          </section>
+
+          <section className="write-panel" aria-label="新增纯文字消息">
+            <div className="write-panel-head">
+              <div>
+                <p className="eyebrow">Phase 2 / Write Guard</p>
+                <h2>新增纯文字消息</h2>
+              </div>
+              <span className="write-badge">备份后写入</span>
+            </div>
+
+            <form className="text-create-form" onSubmit={createTextMessage}>
+              <label className="field-label" htmlFor="new-text-message">
+                文字内容
+              </label>
+              <textarea
+                id="new-text-message"
+                value={textDraft}
+                onChange={(event) => setTextDraft(event.target.value)}
+                placeholder="输入要写入旧 clipstash.db 的纯文字消息"
+                rows={4}
+              />
+
+              <label className="write-confirm">
+                <input
+                  type="checkbox"
+                  checked={writeConfirmed}
+                  onChange={(event) => setWriteConfirmed(event.target.checked)}
+                />
+                <span>确认本次会写入旧数据库，并在写入前自动创建备份。</span>
+              </label>
+
+              <button type="submit" className="write-submit" disabled={!canCreateText}>
+                {creatingTextMessage ? "正在写入..." : "新增并备份"}
+              </button>
+            </form>
+
+            {createTextError && (
+              <div className="write-result write-result-error" role="alert">
+                <strong>写入失败</strong>
+                <p>{createTextError}</p>
+              </div>
+            )}
+
+            {createTextResult && (
+              <div className="write-result write-result-ok" role="status">
+                <strong>已写入 #{createTextResult.message.id}</strong>
+                <p>{createTextResult.message.created_at}</p>
+                <PathRow
+                  label="备份"
+                  value={createTextResult.backup.backup_path}
+                  ok={createTextResult.backup.bytes_copied > 0}
+                />
+              </div>
+            )}
           </section>
 
           <section className="toolbar" aria-label="消息列表控制">
@@ -342,6 +427,13 @@ function getAssetSrc(path: string) {
   } catch {
     return "";
   }
+}
+
+function loadLegacyData(view: MessageView, sort: SortOrder) {
+  return Promise.all([
+    getLegacyStats(),
+    listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT }),
+  ]);
 }
 
 export default App;
