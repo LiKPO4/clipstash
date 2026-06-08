@@ -6,6 +6,7 @@ mod legacy_image_files;
 mod legacy_paths;
 mod legacy_query;
 mod legacy_schema;
+mod legacy_write_validation;
 mod window_targets;
 
 #[tauri::command]

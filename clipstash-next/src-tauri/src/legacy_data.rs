@@ -14,6 +14,9 @@ use crate::legacy_query::{
 #[cfg(test)]
 use crate::legacy_query::{query_count, view_where_sql};
 use crate::legacy_schema::ensure_legacy_schema;
+use crate::legacy_write_validation::{
+    normalize_optional_text_message, normalize_text_message, validate_images_data,
+};
 use arboard::{Clipboard, ImageData};
 use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags};
@@ -722,32 +725,6 @@ pub fn create_mixed_message_for_path(
     };
 
     read_legacy_message_by_id(&conn, &images_dir, message_id)
-}
-
-fn normalize_text_message(text_content: String) -> Result<String, String> {
-    let normalized = text_content.trim().to_string();
-    if normalized.is_empty() {
-        return Err("新增纯文字消息失败，文字内容不能为空".to_string());
-    }
-
-    Ok(normalized)
-}
-
-fn normalize_optional_text_message(text_content: Option<String>) -> Option<String> {
-    text_content
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
-}
-
-fn validate_images_data(images_data: &[Vec<u8>]) -> Result<(), String> {
-    if images_data.is_empty() {
-        return Err("新增图片消息失败，至少需要一张图片".to_string());
-    }
-    if images_data.iter().any(|image_data| image_data.is_empty()) {
-        return Err("新增图片消息失败，图片数据不能为空".to_string());
-    }
-
-    Ok(())
 }
 
 fn validate_replace_images_request(
