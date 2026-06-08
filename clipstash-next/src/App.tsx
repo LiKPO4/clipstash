@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
 import {
   copyLegacyMessageImportQueueItemToClipboard,
+  copyLegacyMessageTextToClipboard,
   copyLegacyImageToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
@@ -149,6 +150,7 @@ function App() {
   const [validatingTargetWindow, setValidatingTargetWindow] = useState(false);
   const [targetWindowValidation, setTargetWindowValidation] =
     useState<ExternalWindowValidation | null>(null);
+  const [showComposer, setShowComposer] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -401,11 +403,11 @@ function App() {
     setCopyResult(null);
 
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("当前环境不支持剪贴板写入");
-      }
-      await navigator.clipboard.writeText(text);
-      setCopyResult({ messageId: message.id, textLength: text.length });
+      const result = await copyLegacyMessageTextToClipboard(message.id);
+      setCopyResult({
+        messageId: result.message_id,
+        textLength: result.text_length,
+      });
     } catch (err) {
       setCopyError(err instanceof Error ? err.message : String(err));
     }
@@ -638,11 +640,30 @@ function App() {
 
   return (
     <main className="shell">
-      <section className="summary">
-        <p className="eyebrow">ClipStash Next / 阶段 2</p>
-        <h1>旧库兼容工作台</h1>
-        <p className="lede">读取旧数据库和图片目录，分步验证新增文字消息的备份写入路径。</p>
-      </section>
+      <header className="app-topbar">
+        <div className="brand-block">
+          <span className="app-icon" aria-hidden="true">
+            C
+          </span>
+          <div>
+            <h1>需求暂存站</h1>
+            <p>@linjianglu</p>
+          </div>
+        </div>
+
+        <nav className="top-actions" aria-label="应用操作">
+          <span>{stats ? `总计 ${stats.total_count} 条消息` : "正在读取"}</span>
+          <button type="button">置顶</button>
+          <button type="button">设置</button>
+          <button
+            type="button"
+            className="primary-new"
+            onClick={() => setShowComposer((visible) => !visible)}
+          >
+            + 新建
+          </button>
+        </nav>
+      </header>
 
       {loading && <p className="status">正在读取旧数据库...</p>}
 
@@ -658,7 +679,7 @@ function App() {
 
       {stats && (
         <>
-          <section className="metrics" aria-label="消息计数">
+          <section className="metrics compact-metrics" aria-label="消息计数">
             <article className="metric total">
               <span>总消息</span>
               <strong>{stats.total_count}</strong>
@@ -673,147 +694,154 @@ function App() {
             </article>
           </section>
 
-          <section className="paths" aria-label="旧数据路径">
-            <PathRow label="数据目录" value={stats.data_dir} ok={stats.db_exists} />
-            <PathRow label="数据库" value={stats.db_path} ok={stats.db_exists} />
-            <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
-          </section>
+          <details className="dev-details">
+            <summary>旧数据路径</summary>
+            <section className="paths" aria-label="旧数据路径">
+              <PathRow label="数据目录" value={stats.data_dir} ok={stats.db_exists} />
+              <PathRow label="数据库" value={stats.db_path} ok={stats.db_exists} />
+              <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
+            </section>
+          </details>
 
-          <section className="write-panel" aria-label="新增纯文字消息">
-            <div className="write-panel-head">
-              <div>
-                <p className="eyebrow">Phase 2 / Write Guard</p>
-                <h2>新增纯文字消息</h2>
-              </div>
-              <span className="write-badge">备份后写入</span>
-            </div>
-
-            <form className="text-create-form" onSubmit={createTextMessage}>
-              <label className="field-label" htmlFor="new-text-message">
-                文字内容
-              </label>
-              <textarea
-                id="new-text-message"
-                value={textDraft}
-                onChange={(event) => setTextDraft(event.target.value)}
-                placeholder="输入要写入旧 clipstash.db 的纯文字消息"
-                rows={4}
-              />
-
-              <label className="write-confirm">
-                <input
-                  type="checkbox"
-                  checked={writeConfirmed}
-                  onChange={(event) => setWriteConfirmed(event.target.checked)}
-                />
-                <span>确认本次会写入旧数据库，并在写入前自动创建备份。</span>
-              </label>
-
-              <button type="submit" className="write-submit" disabled={!canCreateText}>
-                {creatingTextMessage ? "正在写入..." : "新增并备份"}
-              </button>
-            </form>
-
-            {createTextError && (
-              <div className="write-result write-result-error" role="alert">
-                <strong>写入失败</strong>
-                <p>{createTextError}</p>
-              </div>
-            )}
-
-            {createTextResult && (
-              <div className="write-result write-result-ok" role="status">
-                <strong>已写入 #{createTextResult.message.id}</strong>
-                <p>{createTextResult.message.created_at}</p>
-                <PathRow
-                  label="备份"
-                  value={createTextResult.backup.backup_path}
-                  ok={createTextResult.backup.bytes_copied > 0}
-                />
-              </div>
-            )}
-          </section>
-
-          <section className="write-panel" aria-label="新增图片或图文消息">
-            <div className="write-panel-head">
-              <div>
-                <p className="eyebrow">Phase 2 / Media Guard</p>
-                <h2>新增图片 / 图文消息</h2>
-              </div>
-              <span className="write-badge media-badge">备份后写入</span>
-            </div>
-
-            <form className="text-create-form" onSubmit={createMediaMessage}>
-              <label className="field-label" htmlFor="new-media-message-text">
-                配套文字
-              </label>
-              <textarea
-                id="new-media-message-text"
-                value={mediaTextDraft}
-                onChange={(event) => setMediaTextDraft(event.target.value)}
-                placeholder="留空则创建纯图片消息"
-                rows={3}
-              />
-
-              <label className="field-label" htmlFor="new-media-message-files">
-                图片
-              </label>
-              <input
-                key={mediaInputKey}
-                id="new-media-message-files"
-                className="file-input"
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={selectMediaFiles}
-              />
-
-              {mediaFiles.length > 0 && (
-                <div className="selected-files" aria-label="已选图片">
-                  {mediaFiles.map((file, index) => (
-                    <span key={`${file.name}-${file.size}-${index}`}>
-                      {file.name} · {formatBytes(file.size)}
-                    </span>
-                  ))}
+          {showComposer && (
+            <section className="composer-stack" aria-label="新增消息面板">
+              <section className="write-panel" aria-label="新增纯文字消息">
+                <div className="write-panel-head">
+                  <div>
+                    <p className="eyebrow">Phase 2 / Write Guard</p>
+                    <h2>新增纯文字消息</h2>
+                  </div>
+                  <span className="write-badge">备份后写入</span>
                 </div>
-              )}
 
-              <label className="write-confirm">
-                <input
-                  type="checkbox"
-                  checked={mediaWriteConfirmed}
-                  onChange={(event) => setMediaWriteConfirmed(event.target.checked)}
-                />
-                <span>确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。</span>
-              </label>
+                <form className="text-create-form" onSubmit={createTextMessage}>
+                  <label className="field-label" htmlFor="new-text-message">
+                    文字内容
+                  </label>
+                  <textarea
+                    id="new-text-message"
+                    value={textDraft}
+                    onChange={(event) => setTextDraft(event.target.value)}
+                    placeholder="输入要写入旧 clipstash.db 的纯文字消息"
+                    rows={4}
+                  />
 
-              <button type="submit" className="write-submit" disabled={!canCreateMedia}>
-                {creatingMediaMessage ? "正在写入..." : "新增并备份"}
-              </button>
-            </form>
+                  <label className="write-confirm">
+                    <input
+                      type="checkbox"
+                      checked={writeConfirmed}
+                      onChange={(event) => setWriteConfirmed(event.target.checked)}
+                    />
+                    <span>确认本次会写入旧数据库，并在写入前自动创建备份。</span>
+                  </label>
 
-            {createMediaError && (
-              <div className="write-result write-result-error" role="alert">
-                <strong>写入失败</strong>
-                <p>{createMediaError}</p>
-              </div>
-            )}
+                  <button type="submit" className="write-submit" disabled={!canCreateText}>
+                    {creatingTextMessage ? "正在写入..." : "新增并备份"}
+                  </button>
+                </form>
 
-            {createMediaResult && (
-              <div className="write-result write-result-ok" role="status">
-                <strong>已写入 #{createMediaResult.message.id}</strong>
-                <p>
-                  {createMediaResult.message.created_at} · 图片{" "}
-                  {createMediaResult.message.images.length}
-                </p>
-                <PathRow
-                  label="备份"
-                  value={createMediaResult.backup.backup_path}
-                  ok={createMediaResult.backup.bytes_copied > 0}
-                />
-              </div>
-            )}
-          </section>
+                {createTextError && (
+                  <div className="write-result write-result-error" role="alert">
+                    <strong>写入失败</strong>
+                    <p>{createTextError}</p>
+                  </div>
+                )}
+
+                {createTextResult && (
+                  <div className="write-result write-result-ok" role="status">
+                    <strong>已写入 #{createTextResult.message.id}</strong>
+                    <p>{createTextResult.message.created_at}</p>
+                    <PathRow
+                      label="备份"
+                      value={createTextResult.backup.backup_path}
+                      ok={createTextResult.backup.bytes_copied > 0}
+                    />
+                  </div>
+                )}
+              </section>
+
+              <section className="write-panel" aria-label="新增图片或图文消息">
+                <div className="write-panel-head">
+                  <div>
+                    <p className="eyebrow">Phase 2 / Media Guard</p>
+                    <h2>新增图片 / 图文消息</h2>
+                  </div>
+                  <span className="write-badge media-badge">备份后写入</span>
+                </div>
+
+                <form className="text-create-form" onSubmit={createMediaMessage}>
+                  <label className="field-label" htmlFor="new-media-message-text">
+                    配套文字
+                  </label>
+                  <textarea
+                    id="new-media-message-text"
+                    value={mediaTextDraft}
+                    onChange={(event) => setMediaTextDraft(event.target.value)}
+                    placeholder="留空则创建纯图片消息"
+                    rows={3}
+                  />
+
+                  <label className="field-label" htmlFor="new-media-message-files">
+                    图片
+                  </label>
+                  <input
+                    key={mediaInputKey}
+                    id="new-media-message-files"
+                    className="file-input"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={selectMediaFiles}
+                  />
+
+                  {mediaFiles.length > 0 && (
+                    <div className="selected-files" aria-label="已选图片">
+                      {mediaFiles.map((file, index) => (
+                        <span key={`${file.name}-${file.size}-${index}`}>
+                          {file.name} · {formatBytes(file.size)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <label className="write-confirm">
+                    <input
+                      type="checkbox"
+                      checked={mediaWriteConfirmed}
+                      onChange={(event) => setMediaWriteConfirmed(event.target.checked)}
+                    />
+                    <span>确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。</span>
+                  </label>
+
+                  <button type="submit" className="write-submit" disabled={!canCreateMedia}>
+                    {creatingMediaMessage ? "正在写入..." : "新增并备份"}
+                  </button>
+                </form>
+
+                {createMediaError && (
+                  <div className="write-result write-result-error" role="alert">
+                    <strong>写入失败</strong>
+                    <p>{createMediaError}</p>
+                  </div>
+                )}
+
+                {createMediaResult && (
+                  <div className="write-result write-result-ok" role="status">
+                    <strong>已写入 #{createMediaResult.message.id}</strong>
+                    <p>
+                      {createMediaResult.message.created_at} · 图片{" "}
+                      {createMediaResult.message.images.length}
+                    </p>
+                    <PathRow
+                      label="备份"
+                      value={createMediaResult.backup.backup_path}
+                      ok={createMediaResult.backup.bytes_copied > 0}
+                    />
+                  </div>
+                )}
+              </section>
+            </section>
+          )}
 
           <section className="toolbar" aria-label="消息列表控制">
             <div className="segmented" role="tablist" aria-label="消息视图">

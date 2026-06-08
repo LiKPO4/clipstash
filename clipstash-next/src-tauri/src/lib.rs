@@ -86,6 +86,13 @@ fn copy_legacy_image_to_clipboard(
 }
 
 #[tauri::command]
+fn copy_legacy_message_text_to_clipboard(
+    message_id: i64,
+) -> Result<legacy_data::LegacyCopyTextResult, String> {
+    legacy_data::copy_legacy_message_text_to_clipboard(message_id)
+}
+
+#[tauri::command]
 fn copy_legacy_message_import_queue_item_to_clipboard(
     message_id: i64,
     item_index: usize,
@@ -160,6 +167,7 @@ pub fn run() {
             create_legacy_mixed_message,
             create_legacy_text_message,
             copy_legacy_image_to_clipboard,
+            copy_legacy_message_text_to_clipboard,
             copy_legacy_message_import_queue_item_to_clipboard,
             delete_legacy_message,
             get_legacy_stats,

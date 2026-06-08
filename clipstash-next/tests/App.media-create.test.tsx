@@ -85,7 +85,7 @@ describe("media create form", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const panel = await screen.findByRole("region", { name: "新增图片或图文消息" });
+    const panel = await openMediaCreatePanel(user);
     const fileInput = within(panel).getByLabelText("图片");
     const confirm = within(panel).getByLabelText(
       "确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。",
@@ -112,7 +112,7 @@ describe("media create form", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const panel = await screen.findByRole("region", { name: "新增图片或图文消息" });
+    const panel = await openMediaCreatePanel(user);
     await user.upload(
       within(panel).getByLabelText("图片"),
       new File([new Uint8Array([1, 2, 3])], "pixel.png", { type: "image/png" }),
@@ -143,7 +143,7 @@ describe("media create form", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const panel = await screen.findByRole("region", { name: "新增图片或图文消息" });
+    const panel = await openMediaCreatePanel(user);
     await user.type(within(panel).getByLabelText("配套文字"), " 配套文字 ");
     await user.upload(
       within(panel).getByLabelText("图片"),
@@ -172,4 +172,9 @@ describe("media create form", () => {
 
 function commandCallCount(command: string) {
   return invokeMock.mock.calls.filter(([calledCommand]) => calledCommand === command).length;
+}
+
+async function openMediaCreatePanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "+ 新建" }));
+  return screen.findByRole("region", { name: "新增图片或图文消息" });
 }

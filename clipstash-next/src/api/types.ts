@@ -89,6 +89,11 @@ export type LegacyCopyImageResult = {
   height: number;
 };
 
+export type LegacyCopyTextResult = {
+  message_id: number;
+  text_length: number;
+};
+
 export type LegacyImportStageResult = {
   message_id: number;
   staged_kind: "text" | "image";

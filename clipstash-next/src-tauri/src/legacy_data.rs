@@ -119,6 +119,12 @@ pub struct LegacyCopyImageResult {
     pub height: u32,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LegacyCopyTextResult {
+    pub message_id: i64,
+    pub text_length: usize,
+}
+
 #[derive(Serialize)]
 pub struct LegacyImportStageResult {
     pub message_id: i64,
@@ -233,6 +239,13 @@ pub fn set_legacy_message_archived(
 pub fn copy_legacy_image_to_clipboard(filename: String) -> Result<LegacyCopyImageResult, String> {
     let data_dir = legacy_data_dir()?;
     copy_legacy_image_to_clipboard_from_dir(data_dir, filename)
+}
+
+pub fn copy_legacy_message_text_to_clipboard(
+    message_id: i64,
+) -> Result<LegacyCopyTextResult, String> {
+    let data_dir = legacy_data_dir()?;
+    copy_legacy_message_text_to_clipboard_from_dir(data_dir, message_id)
 }
 
 pub fn stage_legacy_message_import_to_clipboard(
@@ -1051,6 +1064,31 @@ fn copy_legacy_image_to_clipboard_from_dir(
         path: path_to_string(image_path),
         width,
         height,
+    })
+}
+
+fn copy_legacy_message_text_to_clipboard_from_dir(
+    data_dir: PathBuf,
+    message_id: i64,
+) -> Result<LegacyCopyTextResult, String> {
+    let db_path = data_dir.join("clipstash.db");
+    let message = read_message_for_update_precheck(&db_path, message_id)?;
+    let text = message
+        .text_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| format!("消息 #{message_id} 没有可复制的文字"))?;
+
+    let mut clipboard =
+        Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制文字失败：{err}"))?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+
+    Ok(LegacyCopyTextResult {
+        message_id,
+        text_length: text.chars().count(),
     })
 }
 

@@ -5,6 +5,7 @@ import {
   createLegacyTextMessage,
   deleteLegacyMessage,
   copyLegacyImageToClipboard,
+  copyLegacyMessageTextToClipboard,
   copyLegacyMessageImportQueueItemToClipboard,
   getLegacyStats,
   listExternalWindowTargets,
@@ -191,6 +192,16 @@ describe("legacy api command contracts", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
       filename: "clipstash-next.png",
+    });
+  });
+
+  it("maps text copy arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ message_id: 114, text_length: 52 });
+
+    await copyLegacyMessageTextToClipboard(114);
+
+    expect(invokeMock).toHaveBeenCalledWith("copy_legacy_message_text_to_clipboard", {
+      messageId: 114,
     });
   });
 

@@ -50,7 +50,7 @@ const page = {
 };
 
 let listedMessages = [message];
-let writeTextMock: ReturnType<typeof vi.fn>;
+let failNextTextCopy = false;
 let failNextImageCopy = false;
 let failNextImportStage = false;
 let failNextImportQueuePreview = false;
@@ -229,6 +229,7 @@ const externalWindowValidation = {
 describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
+    failNextTextCopy = false;
     failNextImageCopy = false;
     failNextImportStage = false;
     failNextImportQueuePreview = false;
@@ -252,6 +253,13 @@ describe("edit and delete guarded actions", () => {
       if (command === "delete_legacy_message") return Promise.resolve(deleteResult);
       if (command === "set_legacy_message_archived") {
         return Promise.resolve(args?.archived ? archiveResult : restoreResult);
+      }
+      if (command === "copy_legacy_message_text_to_clipboard") {
+        if (failNextTextCopy) {
+          failNextTextCopy = false;
+          return Promise.reject(new Error("文字剪贴板写入失败"));
+        }
+        return Promise.resolve({ message_id: message.id, text_length: 3 });
       }
       if (command === "copy_legacy_image_to_clipboard") {
         if (failNextImageCopy) {
@@ -498,7 +506,6 @@ describe("edit and delete guarded actions", () => {
 
   it("copies message text without invoking a write command", async () => {
     const user = userEvent.setup();
-    writeTextMock = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
     render(<App />);
 
     const card = await screen.findByText("#10");
@@ -509,7 +516,9 @@ describe("edit and delete guarded actions", () => {
     );
 
     await waitFor(() => {
-      expect(writeTextMock).toHaveBeenCalledWith("旧文字");
+      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_message_text_to_clipboard", {
+        messageId: 10,
+      });
     });
     expect(await screen.findByText("已复制 #10")).toBeTruthy();
     expect(screen.getByText("3 个字符")).toBeTruthy();
@@ -525,20 +534,25 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("shows a copy error when text clipboard writes are unavailable", async () => {
+  it("shows a copy error when text clipboard writes fail", async () => {
     const user = userEvent.setup();
-    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({} as Clipboard);
     render(<App />);
 
     const card = await screen.findByText("#10");
+    failNextTextCopy = true;
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
         name: "复制文字",
       }),
     );
 
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_message_text_to_clipboard", {
+        messageId: 10,
+      });
+    });
     expect(await screen.findByText("复制失败")).toBeTruthy();
-    expect(screen.getByText("当前环境不支持剪贴板写入")).toBeTruthy();
+    expect(screen.getByText("文字剪贴板写入失败")).toBeTruthy();
     expect(commandCallCount("update_legacy_message_text")).toBe(0);
     expect(commandCallCount("set_legacy_message_archived")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
