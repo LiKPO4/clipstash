@@ -103,6 +103,9 @@
 - 已新增导入功能最小后端 command：`stage_legacy_message_import_to_clipboard`，按旧版顺序把消息文字或第一张存在图片放入系统剪贴板；当前不模拟粘贴、不聚焦外部窗口、不自动归档、不写 DB。
 - 已新增前端“准备导入”最小入口：消息卡片按钮调用 staging command，成功后显示已进入剪贴板的文字长度或图片文件名。
 - 已新增前端 mock 交互测试，覆盖准备导入 command 参数、结果提示，以及准备导入后不刷新旧库统计/列表。
+- 已新增 ignored 手动验收测试 `manual_stages_local_legacy_message_import_to_system_clipboard`，只有设置 `CLIPSTASH_NEXT_STAGE_LEGACY_IMPORT_ID` 时才会写系统剪贴板。
+- 已执行真实系统剪贴板导入 staging 文字验收，目标消息 `id=114`，Rust 返回 `kind=text`、`text_length=52`，旧 Python `clipboard_utils.get_clipboard_text()` 读回同一段 52 字符文字。
+- 已执行真实系统剪贴板导入 staging 图片验收，目标消息 `id=113`，Rust 返回 `kind=image`、图片文件 `clipstash-next-20260608161841911-1588-0.png`，旧 Python `clipboard_utils.get_clipboard_image()` 读回尺寸 `(1, 1)`、模式 `RGBA`。
 
 ## 未完成
 
@@ -134,4 +137,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：验证导入 staging 的构建和只读审计，然后为真实导入补逐项队列/粘贴控制的安全设计。
+- 进入阶段 3 下一步：为导入流程补逐项队列/粘贴控制的安全设计，或先做文字复制 UI 的真实剪贴板验收。

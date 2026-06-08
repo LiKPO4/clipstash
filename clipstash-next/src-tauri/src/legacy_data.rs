@@ -1023,7 +1023,7 @@ fn stage_legacy_message_import_to_clipboard_from_dir(
         .map(str::trim)
         .filter(|text| !text.is_empty());
     let first_existing_image = message.images.iter().find(|image| image.exists);
-    let text_length = text.map(str::len).unwrap_or(0);
+    let text_length = text.map(|value| value.chars().count()).unwrap_or(0);
     let image_count = message.images.iter().filter(|image| image.exists).count();
     let first_image_filename = first_existing_image.map(|image| image.filename.clone());
 
@@ -2747,6 +2747,37 @@ mod tests {
         eprintln!(
             "legacy-image-copy-ok filename={} width={} height={} path={}",
             result.filename, result.width, result.height, result.path
+        );
+    }
+
+    #[test]
+    #[ignore = "writes system clipboard; set CLIPSTASH_NEXT_STAGE_LEGACY_IMPORT_ID"]
+    fn manual_stages_local_legacy_message_import_to_system_clipboard() {
+        let message_id = std::env::var("CLIPSTASH_NEXT_STAGE_LEGACY_IMPORT_ID")
+            .expect("set CLIPSTASH_NEXT_STAGE_LEGACY_IMPORT_ID to an existing message id")
+            .parse::<i64>()
+            .expect("CLIPSTASH_NEXT_STAGE_LEGACY_IMPORT_ID must be an integer");
+
+        let result = stage_legacy_message_import_to_clipboard(message_id)
+            .expect("stage local legacy message import");
+
+        assert_eq!(result.message_id, message_id);
+        assert!(result.staged_kind == "text" || result.staged_kind == "image");
+        if result.staged_kind == "text" {
+            assert!(result.text_length > 0);
+            assert!(result.copied_image.is_none());
+        } else {
+            assert!(result.first_image_filename.is_some());
+            assert!(result.copied_image.is_some());
+        }
+
+        eprintln!(
+            "legacy-import-stage-ok id={} kind={} text_length={} image_count={} first_image={:?}",
+            result.message_id,
+            result.staged_kind,
+            result.text_length,
+            result.image_count,
+            result.first_image_filename
         );
     }
 
