@@ -56,8 +56,16 @@ export type LegacyDbBackup = {
   bytes_copied: number;
 };
 
+export type LegacyWriteAudit = {
+  operation: string;
+  message_id: number;
+  db_backup_path: string;
+  image_backup_dir: string | null;
+};
+
 export type LegacyCreateTextMessageResult = {
   backup: LegacyDbBackup;
+  audit: LegacyWriteAudit;
   message: LegacyMessage;
 };
 
@@ -74,6 +82,7 @@ export type LegacyImageFilesBackup = {
 
 export type LegacyReplaceImagesResult = {
   backup: LegacyDbBackup;
+  audit: LegacyWriteAudit;
   image_backup: LegacyImageFilesBackup | null;
   message: LegacyMessage;
 };

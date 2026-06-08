@@ -74,14 +74,24 @@ pub struct LegacyDbBackup {
 }
 
 #[derive(Serialize)]
+pub struct LegacyWriteAudit {
+    pub operation: String,
+    pub message_id: i64,
+    pub db_backup_path: String,
+    pub image_backup_dir: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct LegacyCreateTextMessageResult {
     pub backup: LegacyDbBackup,
+    pub audit: LegacyWriteAudit,
     pub message: LegacyMessage,
 }
 
 #[derive(Serialize)]
 pub struct LegacyUpdateMessageResult {
     pub backup: LegacyDbBackup,
+    pub audit: LegacyWriteAudit,
     pub message: LegacyMessage,
 }
 
@@ -94,6 +104,7 @@ pub struct LegacyImageFilesBackup {
 #[derive(Serialize)]
 pub struct LegacyReplaceImagesResult {
     pub backup: LegacyDbBackup,
+    pub audit: LegacyWriteAudit,
     pub image_backup: Option<LegacyImageFilesBackup>,
     pub message: LegacyMessage,
 }
@@ -101,6 +112,7 @@ pub struct LegacyReplaceImagesResult {
 #[derive(Serialize)]
 pub struct LegacyDeleteMessageResult {
     pub backup: LegacyDbBackup,
+    pub audit: LegacyWriteAudit,
     pub image_backup: Option<LegacyImageFilesBackup>,
     pub message: LegacyMessage,
 }
@@ -108,6 +120,7 @@ pub struct LegacyDeleteMessageResult {
 #[derive(Serialize)]
 pub struct LegacyArchiveMessageResult {
     pub backup: LegacyDbBackup,
+    pub audit: LegacyWriteAudit,
     pub message: LegacyMessage,
 }
 
@@ -427,7 +440,12 @@ fn create_text_message_with_backup_for_path(
     let message = create_text_message_for_path(db_path, Some(normalized_text))
         .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
 
-    Ok(LegacyCreateTextMessageResult { backup, message })
+    let audit = legacy_write_audit("create_text_message", &message, &backup, None);
+    Ok(LegacyCreateTextMessageResult {
+        backup,
+        audit,
+        message,
+    })
 }
 
 fn create_image_message_with_backup_for_path(
@@ -439,7 +457,12 @@ fn create_image_message_with_backup_for_path(
     let message = create_image_message_for_path(db_path, images_data)
         .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
 
-    Ok(LegacyCreateTextMessageResult { backup, message })
+    let audit = legacy_write_audit("create_image_message", &message, &backup, None);
+    Ok(LegacyCreateTextMessageResult {
+        backup,
+        audit,
+        message,
+    })
 }
 
 fn create_mixed_message_with_backup_for_path(
@@ -453,7 +476,26 @@ fn create_mixed_message_with_backup_for_path(
     let message = create_mixed_message_for_path(db_path, Some(normalized_text), images_data)
         .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
 
-    Ok(LegacyCreateTextMessageResult { backup, message })
+    let audit = legacy_write_audit("create_mixed_message", &message, &backup, None);
+    Ok(LegacyCreateTextMessageResult {
+        backup,
+        audit,
+        message,
+    })
+}
+
+fn legacy_write_audit(
+    operation: &str,
+    message: &LegacyMessage,
+    backup: &LegacyDbBackup,
+    image_backup: Option<&LegacyImageFilesBackup>,
+) -> LegacyWriteAudit {
+    LegacyWriteAudit {
+        operation: operation.to_string(),
+        message_id: message.id,
+        db_backup_path: backup.backup_path.clone(),
+        image_backup_dir: image_backup.map(|backup| backup.backup_dir.clone()),
+    }
 }
 
 fn update_text_message_with_backup_for_path(
@@ -467,7 +509,12 @@ fn update_text_message_with_backup_for_path(
     let message = update_text_message_for_path(db_path, message_id, normalized_text)
         .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
 
-    Ok(LegacyUpdateMessageResult { backup, message })
+    let audit = legacy_write_audit("update_message_text", &message, &backup, None);
+    Ok(LegacyUpdateMessageResult {
+        backup,
+        audit,
+        message,
+    })
 }
 
 fn replace_message_images_with_backup_for_path(
@@ -489,8 +536,15 @@ fn replace_message_images_with_backup_for_path(
     let message = replace_message_images_for_path(db_path, message_id, images_data)
         .map_err(|err| format!("{err}；已创建数据库备份：{}", backup.backup_path))?;
 
+    let audit = legacy_write_audit(
+        "replace_message_images",
+        &message,
+        &backup,
+        image_backup.as_ref(),
+    );
     Ok(LegacyReplaceImagesResult {
         backup,
+        audit,
         image_backup,
         message,
     })
@@ -510,8 +564,10 @@ fn delete_message_with_backup_for_path(
     let message = delete_message_for_path(db_path, message_id)
         .map_err(|err| format!("{err}；已创建数据库备份：{}", backup.backup_path))?;
 
+    let audit = legacy_write_audit("delete_message", &message, &backup, image_backup.as_ref());
     Ok(LegacyDeleteMessageResult {
         backup,
+        audit,
         image_backup,
         message,
     })
@@ -527,7 +583,12 @@ fn set_message_archived_with_backup_for_path(
     let message = set_message_archived_for_path(db_path, message_id, archived)
         .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
 
-    Ok(LegacyArchiveMessageResult { backup, message })
+    let audit = legacy_write_audit("set_message_archived", &message, &backup, None);
+    Ok(LegacyArchiveMessageResult {
+        backup,
+        audit,
+        message,
+    })
 }
 
 pub fn create_text_message_for_path(
@@ -1770,6 +1831,10 @@ mod tests {
             result.message.text_content.as_deref(),
             Some("command text message")
         );
+        assert_eq!(result.audit.operation, "create_text_message");
+        assert_eq!(result.audit.message_id, result.message.id);
+        assert_eq!(result.audit.db_backup_path, result.backup.backup_path);
+        assert!(result.audit.image_backup_dir.is_none());
         assert!(!result.message.archived);
         assert!(result.message.images.is_empty());
 
@@ -1877,6 +1942,10 @@ mod tests {
         .expect("update text message with backup");
 
         assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(result.audit.operation, "update_message_text");
+        assert_eq!(result.audit.message_id, result.message.id);
+        assert_eq!(result.audit.db_backup_path, result.backup.backup_path);
+        assert!(result.audit.image_backup_dir.is_none());
         assert_eq!(result.message.id, 1);
         assert_eq!(result.message.text_content.as_deref(), Some("updated text"));
         assert_eq!(result.message.images.len(), 1);
@@ -1998,7 +2067,14 @@ mod tests {
                 .expect("replace message images with backup");
 
         assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(result.audit.operation, "replace_message_images");
+        assert_eq!(result.audit.message_id, result.message.id);
+        assert_eq!(result.audit.db_backup_path, result.backup.backup_path);
         let image_backup = result.image_backup.expect("image backup");
+        assert_eq!(
+            result.audit.image_backup_dir.as_deref(),
+            Some(image_backup.backup_dir.as_str())
+        );
         let image_backup_dir = PathBuf::from(&image_backup.backup_dir);
         assert!(image_backup_dir.is_dir());
         assert_eq!(image_backup.filenames, vec!["old-a.png", "old-b.png"]);
@@ -2141,10 +2217,17 @@ mod tests {
             delete_message_with_backup_for_path(&db_path, 1).expect("delete message with backup");
 
         assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(result.audit.operation, "delete_message");
+        assert_eq!(result.audit.message_id, result.message.id);
+        assert_eq!(result.audit.db_backup_path, result.backup.backup_path);
         assert_eq!(result.message.id, 1);
         assert_eq!(result.message.text_content.as_deref(), Some("delete me"));
         assert_eq!(result.message.images.len(), 2);
         let image_backup = result.image_backup.expect("image backup");
+        assert_eq!(
+            result.audit.image_backup_dir.as_deref(),
+            Some(image_backup.backup_dir.as_str())
+        );
         let image_backup_dir = PathBuf::from(&image_backup.backup_dir);
         assert_eq!(image_backup.filenames, vec!["delete-a.png", "delete-b.png"]);
         assert_eq!(
@@ -2277,6 +2360,10 @@ mod tests {
             .expect("archive message with backup");
 
         assert!(PathBuf::from(&archived.backup.backup_path).is_file());
+        assert_eq!(archived.audit.operation, "set_message_archived");
+        assert_eq!(archived.audit.message_id, archived.message.id);
+        assert_eq!(archived.audit.db_backup_path, archived.backup.backup_path);
+        assert!(archived.audit.image_backup_dir.is_none());
         assert!(archived.message.archived);
         assert!(archived.message.archived_at.is_some());
 
