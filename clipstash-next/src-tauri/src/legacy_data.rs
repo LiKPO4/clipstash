@@ -273,6 +273,21 @@ fn create_image_message_with_backup_for_path(
     Ok(LegacyCreateTextMessageResult { backup, message })
 }
 
+#[allow(dead_code)]
+fn create_mixed_message_with_backup_for_path(
+    db_path: &Path,
+    text_content: String,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyCreateTextMessageResult, String> {
+    let normalized_text = normalize_text_message(text_content)?;
+    validate_images_data(&images_data)?;
+    let backup = create_legacy_db_backup_for_path(db_path)?;
+    let message = create_mixed_message_for_path(db_path, Some(normalized_text), images_data)
+        .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
+
+    Ok(LegacyCreateTextMessageResult { backup, message })
+}
+
 pub fn create_text_message_for_path(
     db_path: &Path,
     text_content: Option<String>,
@@ -304,6 +319,15 @@ pub fn create_image_message_for_path(
     db_path: &Path,
     images_data: Vec<Vec<u8>>,
 ) -> Result<LegacyMessage, String> {
+    create_mixed_message_for_path(db_path, None, images_data)
+}
+
+#[allow(dead_code)]
+pub fn create_mixed_message_for_path(
+    db_path: &Path,
+    text_content: Option<String>,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyMessage, String> {
     validate_images_data(&images_data)?;
 
     if !db_path.is_file() {
@@ -332,10 +356,10 @@ pub fn create_image_message_for_path(
             .transaction()
             .map_err(|err| format!("开启图片消息写入事务失败：{err}"))?;
         tx.execute(
-            "INSERT INTO messages (text_content, archived) VALUES (NULL, 0)",
-            [],
+            "INSERT INTO messages (text_content, archived) VALUES (?, 0)",
+            params![text_content],
         )
-        .map_err(|err| format!("新增图片消息失败：{err}"))?;
+        .map_err(|err| format!("新增图文消息失败：{err}"))?;
 
         let message_id = tx.last_insert_rowid();
         for (index, image_data) in images_data.iter().enumerate() {
@@ -1018,6 +1042,114 @@ mod tests {
             .iter()
             .find(|item| item.id == result.message.id)
             .expect("listed image message");
+        assert_eq!(listed.images.len(), 2);
+        assert!(listed.images.iter().all(|image| image.exists));
+
+        let backup_conn =
+            Connection::open(&result.backup.backup_path).expect("open backup sqlite fixture");
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM messages")
+                .expect("count backup messages"),
+            1
+        );
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM message_images")
+                .expect("count backup images"),
+            0
+        );
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn creates_mixed_message_in_temp_legacy_db_after_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-create-mixed-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('existing', 0);
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = create_mixed_message_with_backup_for_path(
+            &db_path,
+            "  mixed text message  ".to_string(),
+            vec![
+                b"mixed-first-image".to_vec(),
+                b"mixed-second-image".to_vec(),
+            ],
+        )
+        .expect("create mixed message with backup");
+
+        assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(
+            result.message.text_content.as_deref(),
+            Some("mixed text message")
+        );
+        assert!(!result.message.archived);
+        assert_eq!(result.message.images.len(), 2);
+
+        assert_eq!(
+            fs::read(&result.message.images[0].path).expect("read first mixed image"),
+            b"mixed-first-image"
+        );
+        assert_eq!(
+            fs::read(&result.message.images[1].path).expect("read second mixed image"),
+            b"mixed-second-image"
+        );
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            2
+        );
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM message_images").expect("count images"),
+            2
+        );
+        let image_rows = query_image_rows(&conn, result.message.id);
+        assert_eq!(image_rows.len(), 2);
+        assert_eq!(image_rows[0].1, result.message.images[0].filename);
+        assert_eq!(image_rows[1].1, result.message.images[1].filename);
+        assert!(image_rows[0].0 < image_rows[1].0);
+        drop(conn);
+
+        let page = list_legacy_messages_from_dir(
+            data_dir.clone(),
+            MessageView::Normal,
+            SortOrder::Newest,
+            Some(0),
+            Some(10),
+        )
+        .expect("read messages after mixed insert");
+        let listed = page
+            .messages
+            .iter()
+            .find(|item| item.id == result.message.id)
+            .expect("listed mixed message");
+        assert_eq!(listed.text_content.as_deref(), Some("mixed text message"));
         assert_eq!(listed.images.len(), 2);
         assert!(listed.images.iter().all(|image| image.exists));
 
