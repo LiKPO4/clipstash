@@ -182,6 +182,10 @@
 - 已在导入队列项复制 UI 验收后两次运行 `npm run verify:legacy-readonly`，旧库审计均保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片，页面未出现 WebView 剪贴板权限提示“允许/阻止”。
 - 已完成目标窗口刷新/选择/校验真实 UI 验收：启动临时 WinForms 窗口 `ClipStash Validation Target`，在导入队列弹层点击“刷新目标窗口”后枚举到 21 个候选，选择 `ClipStash Validation Target · pid 28000 · hwnd 10554688` 后点击“校验目标窗口”，页面显示“校验通过：ClipStash Validation Target · pid 28000”。
 - 已在目标窗口 UI 校验后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片、不发送 Ctrl+V，页面未出现 WebView 权限提示“允许/阻止”。
+- 已加固 Windows 目标窗口聚焦逻辑：`focus_external_window_target` 先恢复/置顶窗口，再用 `AttachThreadInput` 附加当前线程、前台线程和目标线程后重试 `SetForegroundWindow`，用于解决真实 UI 单项粘贴中“目标窗口校验通过但聚焦失败”的问题。
+- 已完成单项粘贴真实 UI 验收：启动临时 WinForms 文本框窗口 `ClipStash Single Paste Target`，在消息 `#114` 导入队列中选择并校验目标窗口后点击“粘贴第 1 项”，页面显示“已粘贴导入项 #114 / 1 / 52 个字符已发送到 ClipStash Single Paste Target”，临时目标文件读回 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`。
+- 单项粘贴验收期间未勾选导入后归档；验收后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片。
+- 已在聚焦修复和单项粘贴 UI 验收后补跑验证：`cargo fmt -- --check` 通过；`cargo test` 通过，22 项通过、18 项 ignored；`cargo check` 通过；`npm test` 通过，3 个测试文件 46 项通过；`npm run build` 通过。
 
 ## 未完成
 
@@ -220,4 +224,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做单项粘贴 UI 验收，需使用临时外部窗口且仍不写旧库。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做整队列粘贴 UI 验收，仍使用临时外部窗口，默认不勾选归档以避免写旧库。

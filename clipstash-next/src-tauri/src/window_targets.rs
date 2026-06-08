@@ -54,10 +54,15 @@ pub fn focus_external_window_target(_hwnd: isize) -> Result<ExternalWindowFocus,
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::{ExternalWindowFocus, ExternalWindowTarget, ExternalWindowValidation};
+    use std::thread;
+    use std::time::Duration;
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
-    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::System::Threading::{
+        AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+        BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow,
         SW_RESTORE,
     };
@@ -117,13 +122,13 @@ mod windows_impl {
         let hwnd = target.hwnd as HWND;
 
         unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
-            if SetForegroundWindow(hwnd) == 0 {
+            restore_and_raise_window(hwnd);
+            if !try_set_foreground_window(hwnd) {
                 return Err(format!("目标窗口聚焦失败：hwnd={hwnd_value}"));
             }
 
-            let foreground = GetForegroundWindow();
-            if foreground != hwnd {
+            thread::sleep(Duration::from_millis(120));
+            if GetForegroundWindow() != hwnd {
                 return Err(format!("目标窗口未成为前台窗口：hwnd={hwnd_value}"));
             }
         }
@@ -132,6 +137,61 @@ mod windows_impl {
             focused: true,
             target,
         })
+    }
+
+    unsafe fn restore_and_raise_window(hwnd: HWND) {
+        ShowWindow(hwnd, SW_RESTORE);
+        BringWindowToTop(hwnd);
+        SetActiveWindow(hwnd);
+        SetFocus(hwnd);
+    }
+
+    unsafe fn try_set_foreground_window(hwnd: HWND) -> bool {
+        if try_raise_without_attach(hwnd) {
+            return true;
+        }
+
+        let current_thread_id = GetCurrentThreadId();
+        let foreground = GetForegroundWindow();
+        let foreground_thread_id = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, std::ptr::null_mut())
+        };
+        let target_thread_id = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
+
+        let attach_foreground =
+            foreground_thread_id != 0 && foreground_thread_id != current_thread_id;
+        let attach_target = target_thread_id != 0 && target_thread_id != current_thread_id;
+
+        if attach_foreground {
+            AttachThreadInput(current_thread_id, foreground_thread_id, 1);
+        }
+        if attach_target {
+            AttachThreadInput(current_thread_id, target_thread_id, 1);
+        }
+
+        let focused = try_raise_without_attach(hwnd);
+
+        if attach_target {
+            AttachThreadInput(current_thread_id, target_thread_id, 0);
+        }
+        if attach_foreground {
+            AttachThreadInput(current_thread_id, foreground_thread_id, 0);
+        }
+
+        focused
+    }
+
+    unsafe fn try_raise_without_attach(hwnd: HWND) -> bool {
+        for _ in 0..5 {
+            restore_and_raise_window(hwnd);
+            if SetForegroundWindow(hwnd) != 0 || GetForegroundWindow() == hwnd {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(80));
+        }
+        GetForegroundWindow() == hwnd
     }
 
     struct EnumState<'a> {
