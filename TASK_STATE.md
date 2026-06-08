@@ -117,6 +117,8 @@
 - 已新增 Rust `windows-sys` 直接依赖，用于阶段 3 Windows 窗口枚举/后续受控输入；当前仅启用窗口枚举相关 feature，回滚时移除 `Cargo.toml` 与 `Cargo.lock` 中对应依赖即可。
 - 已新增 `list_external_window_targets` command 和 `window_targets.rs`，用于枚举可见外部窗口并排除 ClipStash Next 自身进程；当前不聚焦窗口、不发送 Ctrl+V、不写 DB。
 - 已新增 ignored 手动验收测试 `manual_lists_external_window_targets`，只有设置 `CLIPSTASH_NEXT_LIST_WINDOWS` 时才读取本机桌面窗口；本机验收读到 14 个候选窗口。
+- 已在前端导入队列浮层中新增目标窗口选择 UI，可刷新 `list_external_window_targets` 并选择目标窗口；当前仅保存选择状态，不聚焦窗口、不发送 Ctrl+V、不写 DB。
+- 已新增前端 mock 交互测试，覆盖刷新目标窗口、选择目标窗口，以及选择窗口不触发队列复制或旧库刷新。
 
 ## 未完成
 
@@ -150,4 +152,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：将 `list_external_window_targets` 接入前端目标窗口选择 UI，然后实现目标窗口校验。
+- 进入阶段 3 下一步：实现目标窗口校验 command，用于粘贴前确认 hwnd 仍存在且不是自身进程。

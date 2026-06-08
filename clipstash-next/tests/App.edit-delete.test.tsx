@@ -155,6 +155,19 @@ const importQueueCopyResult = {
   copied_image: null,
 };
 
+const externalWindowTargets = [
+  {
+    hwnd: 1001,
+    process_id: 2001,
+    title: "记事本",
+  },
+  {
+    hwnd: 1002,
+    process_id: 2002,
+    title: "浏览器输入框",
+  },
+];
+
 describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
@@ -184,6 +197,9 @@ describe("edit and delete guarded actions", () => {
       }
       if (command === "copy_legacy_message_import_queue_item_to_clipboard") {
         return Promise.resolve(importQueueCopyResult);
+      }
+      if (command === "list_external_window_targets") {
+        return Promise.resolve(externalWindowTargets);
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
@@ -466,6 +482,31 @@ describe("edit and delete guarded actions", () => {
     });
     expect(await screen.findByText("已复制导入项 #10 / 1")).toBeTruthy();
     expect(screen.getAllByText("3 个字符已进入剪贴板").length).toBeGreaterThan(0);
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("loads and selects an external target window without pasting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "查看队列",
+      }),
+    );
+    await screen.findByText("导入队列 #10");
+
+    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_external_window_targets");
+    });
+
+    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
+    expect(screen.getByText("已选择：记事本 · hwnd 1001")).toBeTruthy();
+    expect(commandCallCount("copy_legacy_message_import_queue_item_to_clipboard")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });

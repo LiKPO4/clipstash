@@ -9,6 +9,7 @@ import {
   createLegacyTextMessage,
   deleteLegacyMessage,
   getLegacyStats,
+  listExternalWindowTargets,
   listLegacyMessages,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
@@ -24,6 +25,7 @@ import type {
   LegacyArchiveMessageResult,
   LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
+  ExternalWindowTarget,
   LegacyImportQueueCopyResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
@@ -111,6 +113,11 @@ function App() {
   const [importQueueCopyError, setImportQueueCopyError] = useState<string | null>(null);
   const [importQueueCopyResult, setImportQueueCopyResult] =
     useState<ImportQueueCopyResult | null>(null);
+  const [targetWindows, setTargetWindows] = useState<ExternalWindowTarget[]>([]);
+  const [selectedTargetWindow, setSelectedTargetWindow] =
+    useState<ExternalWindowTarget | null>(null);
+  const [targetWindowError, setTargetWindowError] = useState<string | null>(null);
+  const [loadingTargetWindows, setLoadingTargetWindows] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -421,6 +428,34 @@ function App() {
     } finally {
       setLoadingImportQueueMessageId(null);
     }
+  }
+
+  async function refreshTargetWindows() {
+    if (loadingTargetWindows) return;
+
+    setLoadingTargetWindows(true);
+    setTargetWindowError(null);
+
+    try {
+      const windows = await listExternalWindowTargets();
+      setTargetWindows(windows);
+      if (
+        selectedTargetWindow &&
+        !windows.some((window) => window.hwnd === selectedTargetWindow.hwnd)
+      ) {
+        setSelectedTargetWindow(null);
+      }
+    } catch (err) {
+      setTargetWindowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingTargetWindows(false);
+    }
+  }
+
+  function selectTargetWindow(hwnd: string) {
+    const parsedHwnd = Number(hwnd);
+    const target = targetWindows.find((window) => window.hwnd === parsedHwnd) ?? null;
+    setSelectedTargetWindow(target);
   }
 
   async function copyImportQueueItem(itemIndex: number) {
@@ -880,6 +915,37 @@ function App() {
                   {importQueuePreview.text_length} 字符 · 图片{" "}
                   {importQueuePreview.image_count}
                 </p>
+                <div className="target-window-panel">
+                  <div className="target-window-head">
+                    <span>目标窗口</span>
+                    <button
+                      type="button"
+                      disabled={loadingTargetWindows}
+                      onClick={refreshTargetWindows}
+                    >
+                      {loadingTargetWindows ? "刷新中..." : "刷新目标窗口"}
+                    </button>
+                  </div>
+                  {targetWindowError && <p role="alert">{targetWindowError}</p>}
+                  <select
+                    aria-label="选择目标窗口"
+                    value={selectedTargetWindow?.hwnd ?? ""}
+                    onChange={(event) => selectTargetWindow(event.target.value)}
+                  >
+                    <option value="">未选择目标窗口</option>
+                    {targetWindows.map((window) => (
+                      <option value={window.hwnd} key={window.hwnd}>
+                        {window.title} · pid {window.process_id}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedTargetWindow && (
+                    <p>
+                      已选择：{selectedTargetWindow.title} · hwnd{" "}
+                      {selectedTargetWindow.hwnd}
+                    </p>
+                  )}
+                </div>
                 <div className="import-queue-items">
                   {importQueuePreview.items.map((item, index) => (
                     <div className="import-queue-item" key={`${item.kind}-${index}`}>

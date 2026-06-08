@@ -823,6 +823,57 @@ button {
   margin-top: 12px;
 }
 
+.target-window-panel {
+  border-top: 1px solid #cfe2d9;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.target-window-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.target-window-head span {
+  color: #24312c;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.target-window-head button,
+.target-window-panel select {
+  background: #fffdf8;
+  border: 1px solid #b8d1c8;
+  border-radius: 8px;
+  color: #24312c;
+  min-height: 34px;
+}
+
+.target-window-head button {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+}
+
+.target-window-head button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.target-window-panel select {
+  padding: 0 8px;
+  width: 100%;
+}
+
+.target-window-panel p {
+  font-size: 12px;
+}
+
 .import-queue-item {
   align-items: center;
   display: grid;
