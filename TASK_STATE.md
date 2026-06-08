@@ -56,11 +56,15 @@
 - 已新增受保护的 Rust command：`create_legacy_image_message`，内部会先备份旧 DB，再新增图片消息；当前仅暴露 command 和前端 API，未接入 UI。
 - 已新增前端 API/类型封装 `createLegacyImageMessage`。
 - 已新增图片写入失败清理测试，覆盖 DB 关联插入失败后事务回滚且已保存图片文件被删除，不留下孤立图片文件。
+- 已新增 ignored 手动验收测试 `manual_creates_local_legacy_image_message_with_backup`，只有设置 `CLIPSTASH_NEXT_WRITE_LEGACY_IMAGE` 时才会写真实旧库和真实 `images/`。
+- 已执行一次真实旧库图片写入验收，新增消息 `id=113`，图片文件为 `clipstash-next-20260608161841911-1588-0.png`。
+- 已在图片写入前自动创建备份：`C:\Users\Administrator\AppData\Roaming\ClipStash\clipstash.db.bak-20260608-161841`，大小 `61440` 字节。
+- 已用旧 Python `db.py` 验证可读取新版创建的图片消息，普通列表最新项为 `id=113`，图片文件存在且大小 `70` 字节。
+- 已用 Rust 只读一致性审计验证写入后真实旧库：普通 `10`、归档 `103`、总计 `113`、关联图片 `106`、孤立图片 `0`。
 
 ## 未完成
 
 - 尚未实现复制、编辑、归档、恢复、导入等后续阶段功能。
-- 阶段 2 尚未对真实 `images/` 执行图片写入验收。
 - 阶段 2 尚未为新增图片消息接入前端选择文件 UI。
 - 阶段 2 尚未实现图文混合消息、编辑消息文字和图片、删除消息。
 
@@ -84,4 +88,4 @@
 
 ## 下一步
 
-- 进入阶段 2 下一步：执行一次可回滚的真实旧库新增图片消息手动验收，记录备份路径、新图片文件名，并验证旧 Python 应用可读取新版创建的图片消息。
+- 进入阶段 2 下一步：实现新增图文混合消息的临时数据库写入测试，复用文字和图片写入路径，确认旧 Python 应用可按 `(text, [images])` 结构读取。

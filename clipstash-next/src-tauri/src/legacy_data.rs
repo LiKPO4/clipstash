@@ -1307,6 +1307,55 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "writes local ClipStash app data; set CLIPSTASH_NEXT_WRITE_LEGACY_IMAGE"]
+    fn manual_creates_local_legacy_image_message_with_backup() {
+        std::env::var("CLIPSTASH_NEXT_WRITE_LEGACY_IMAGE")
+            .expect("set CLIPSTASH_NEXT_WRITE_LEGACY_IMAGE=1 to create a local image message");
+        let result = create_legacy_image_message(vec![tiny_png_bytes()])
+            .expect("create local image message");
+        let backup_path = PathBuf::from(&result.backup.backup_path);
+
+        assert!(backup_path.is_file());
+        assert!(result.backup.bytes_copied > 0);
+        assert!(result.message.text_content.is_none());
+        assert!(!result.message.archived);
+        assert!(result.message.archived_at.is_none());
+        assert_eq!(result.message.images.len(), 1);
+        assert!(result.message.images[0].exists);
+        assert!(PathBuf::from(&result.message.images[0].path).is_file());
+
+        let latest_page =
+            list_legacy_messages(MessageView::Normal, SortOrder::Newest, Some(0), Some(1))
+                .expect("list latest local legacy message");
+        let latest = latest_page
+            .messages
+            .first()
+            .expect("latest local legacy message");
+
+        assert_eq!(latest.id, result.message.id);
+        assert_eq!(latest.images.len(), 1);
+        assert_eq!(latest.images[0].filename, result.message.images[0].filename);
+
+        eprintln!(
+            "legacy-image-write-ok id={} image={} path={} backup={} bytes={}",
+            result.message.id,
+            result.message.images[0].filename,
+            result.message.images[0].path,
+            result.backup.backup_path,
+            result.backup.bytes_copied
+        );
+    }
+
+    fn tiny_png_bytes() -> Vec<u8> {
+        vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
+            96, 130,
+        ]
+    }
+
     fn collect_all_messages(data_dir: PathBuf, view: MessageView) -> Vec<LegacyMessage> {
         let mut offset = 0;
         let mut messages = Vec::new();
