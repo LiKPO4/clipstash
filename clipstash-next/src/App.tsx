@@ -16,6 +16,7 @@ import {
   previewLegacyMessageImportQueue,
   stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
+  validateExternalWindowTarget,
 } from "./api/legacy";
 import type {
   LegacyMessageImage,
@@ -25,6 +26,7 @@ import type {
   LegacyArchiveMessageResult,
   LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
+  ExternalWindowValidation,
   ExternalWindowTarget,
   LegacyImportQueueCopyResult,
   LegacyImportQueuePreview,
@@ -118,6 +120,9 @@ function App() {
     useState<ExternalWindowTarget | null>(null);
   const [targetWindowError, setTargetWindowError] = useState<string | null>(null);
   const [loadingTargetWindows, setLoadingTargetWindows] = useState(false);
+  const [validatingTargetWindow, setValidatingTargetWindow] = useState(false);
+  const [targetWindowValidation, setTargetWindowValidation] =
+    useState<ExternalWindowValidation | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -435,6 +440,7 @@ function App() {
 
     setLoadingTargetWindows(true);
     setTargetWindowError(null);
+    setTargetWindowValidation(null);
 
     try {
       const windows = await listExternalWindowTargets();
@@ -456,6 +462,28 @@ function App() {
     const parsedHwnd = Number(hwnd);
     const target = targetWindows.find((window) => window.hwnd === parsedHwnd) ?? null;
     setSelectedTargetWindow(target);
+    setTargetWindowError(null);
+    setTargetWindowValidation(null);
+  }
+
+  async function validateTargetWindow() {
+    if (!selectedTargetWindow || validatingTargetWindow) return;
+
+    setValidatingTargetWindow(true);
+    setTargetWindowError(null);
+    setTargetWindowValidation(null);
+
+    try {
+      const validation = await validateExternalWindowTarget(selectedTargetWindow.hwnd);
+      setTargetWindowValidation(validation);
+      if (validation.target) {
+        setSelectedTargetWindow(validation.target);
+      }
+    } catch (err) {
+      setTargetWindowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setValidatingTargetWindow(false);
+    }
   }
 
   async function copyImportQueueItem(itemIndex: number) {
@@ -943,6 +971,19 @@ function App() {
                     <p>
                       已选择：{selectedTargetWindow.title} · hwnd{" "}
                       {selectedTargetWindow.hwnd}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!selectedTargetWindow || validatingTargetWindow}
+                    onClick={validateTargetWindow}
+                  >
+                    {validatingTargetWindow ? "校验中..." : "校验目标窗口"}
+                  </button>
+                  {targetWindowValidation?.target && (
+                    <p>
+                      校验通过：{targetWindowValidation.target.title} · pid{" "}
+                      {targetWindowValidation.target.process_id}
                     </p>
                   )}
                 </div>

@@ -168,6 +168,11 @@ const externalWindowTargets = [
   },
 ];
 
+const externalWindowValidation = {
+  valid: true,
+  target: externalWindowTargets[0],
+};
+
 describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
@@ -200,6 +205,9 @@ describe("edit and delete guarded actions", () => {
       }
       if (command === "list_external_window_targets") {
         return Promise.resolve(externalWindowTargets);
+      }
+      if (command === "validate_external_window_target") {
+        return Promise.resolve(externalWindowValidation);
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
@@ -486,7 +494,7 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("loads and selects an external target window without pasting", async () => {
+  it("loads, selects, and validates an external target window without pasting", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -506,6 +514,15 @@ describe("edit and delete guarded actions", () => {
 
     await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
     expect(screen.getByText("已选择：记事本 · hwnd 1001")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("validate_external_window_target", {
+        hwnd: 1001,
+      });
+    });
+    expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
     expect(commandCallCount("copy_legacy_message_import_queue_item_to_clipboard")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);

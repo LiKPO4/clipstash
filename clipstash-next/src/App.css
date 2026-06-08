@@ -845,6 +845,7 @@ button {
 }
 
 .target-window-head button,
+.target-window-panel > button,
 .target-window-panel select {
   background: #fffdf8;
   border: 1px solid #b8d1c8;
@@ -853,14 +854,16 @@ button {
   min-height: 34px;
 }
 
-.target-window-head button {
+.target-window-head button,
+.target-window-panel > button {
   cursor: pointer;
   font-size: 12px;
   font-weight: 700;
   padding: 0 10px;
 }
 
-.target-window-head button:disabled {
+.target-window-head button:disabled,
+.target-window-panel > button:disabled {
   cursor: wait;
   opacity: 0.6;
 }
