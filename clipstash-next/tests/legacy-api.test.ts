@@ -4,11 +4,20 @@ import {
   createLegacyMixedMessage,
   createLegacyTextMessage,
   deleteLegacyMessage,
+  copyLegacyImageToClipboard,
+  copyLegacyMessageImportQueueItemToClipboard,
+  getLegacyStats,
+  listExternalWindowTargets,
+  listLegacyMessages,
   pasteLegacyImportQueue,
+  pasteLegacyImportQueueItem,
   pasteLegacyImportQueueWithOptionalArchive,
+  previewLegacyMessageImportQueue,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
+  validateExternalWindowTarget,
 } from "../src/api/legacy";
 
 const { invokeMock } = vi.hoisted(() => ({
@@ -22,6 +31,50 @@ vi.mock("@tauri-apps/api/core", () => ({
 describe("legacy api command contracts", () => {
   afterEach(() => {
     invokeMock.mockReset();
+  });
+
+  it("maps stats requests to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ total_count: 114 });
+
+    await getLegacyStats();
+
+    expect(invokeMock).toHaveBeenCalledWith("get_legacy_stats");
+  });
+
+  it("maps message list arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ messages: [] });
+
+    await listLegacyMessages({
+      view: "normal",
+      sort: "newest",
+      offset: 20,
+      limit: 10,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
+      view: "normal",
+      sort: "newest",
+      offset: 20,
+      limit: 10,
+    });
+  });
+
+  it("maps external window list requests to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce([]);
+
+    await listExternalWindowTargets();
+
+    expect(invokeMock).toHaveBeenCalledWith("list_external_window_targets");
+  });
+
+  it("maps external window validation arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ valid: true });
+
+    await validateExternalWindowTarget(123456);
+
+    expect(invokeMock).toHaveBeenCalledWith("validate_external_window_target", {
+      hwnd: 123456,
+    });
   });
 
   it("maps queued paste arguments to the backend command", async () => {
@@ -128,6 +181,65 @@ describe("legacy api command contracts", () => {
     expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_archived", {
       messageId: 114,
       archived: true,
+    });
+  });
+
+  it("maps image copy arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ filename: "clipstash-next.png" });
+
+    await copyLegacyImageToClipboard("clipstash-next.png");
+
+    expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+      filename: "clipstash-next.png",
+    });
+  });
+
+  it("maps import staging arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ kind: "text" });
+
+    await stageLegacyMessageImportToClipboard(114);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "stage_legacy_message_import_to_clipboard",
+      {
+        messageId: 114,
+      },
+    );
+  });
+
+  it("maps import queue preview arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ items: [] });
+
+    await previewLegacyMessageImportQueue(114);
+
+    expect(invokeMock).toHaveBeenCalledWith("preview_legacy_message_import_queue", {
+      messageId: 114,
+    });
+  });
+
+  it("maps import queue item copy arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ item_index: 1 });
+
+    await copyLegacyMessageImportQueueItemToClipboard(114, 1);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "copy_legacy_message_import_queue_item_to_clipboard",
+      {
+        messageId: 114,
+        itemIndex: 1,
+      },
+    );
+  });
+
+  it("maps import queue item paste arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ item_index: 1 });
+
+    await pasteLegacyImportQueueItem(114, 1, 123456);
+
+    expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_item", {
+      messageId: 114,
+      itemIndex: 1,
+      targetHwnd: 123456,
     });
   });
 });

@@ -148,6 +148,7 @@
 - 已新增前端 API 合约测试 `tests/legacy-api.test.ts`，直接 mock Tauri `invoke`，覆盖 `pasteLegacyImportQueue` 与 `pasteLegacyImportQueueWithOptionalArchive` 的 command 名和参数映射；用于补足当前浏览器 UI 验收受阻时的前端/后端调用契约证据。
 - 已扩展前端 API 合约测试，覆盖 `updateLegacyMessageText`、`replaceLegacyMessageImages`、`deleteLegacyMessage`、`setLegacyMessageArchived` 的 command 名和参数映射；这些路径仍未替代真实 UI 点击验收，但已补充前端/后端调用契约证据。
 - 已扩展前端 API 合约测试，覆盖 `createLegacyTextMessage`、`createLegacyImageMessage`、`createLegacyMixedMessage` 的 command 名和参数映射；当前仅验证前端/后端调用契约，不写真实旧库。
+- 已扩展前端 API 合约测试，覆盖统计、列表、外部窗口枚举/校验、图片复制、导入 staging、队列预览、队列单项复制和单项粘贴 wrapper 的 command 名与参数映射；当前仅验证调用契约，不写真实旧库。
 
 ## 未完成
 
