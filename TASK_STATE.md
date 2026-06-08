@@ -111,6 +111,8 @@
 - 已新增导入队列单项复制 command：`copy_legacy_message_import_queue_item_to_clipboard`，按 `message_id + item_index` 复制队列中的文字或图片到系统剪贴板；当前不模拟粘贴、不聚焦外部窗口、不写 DB。
 - 已新增 ignored 手动验收测试 `manual_copies_local_legacy_import_queue_item_to_system_clipboard`，只有设置 `CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_ID` 和 `CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX` 时才会写系统剪贴板。
 - 已执行真实系统剪贴板导入队列单项复制验收，目标消息 `id=114`：`index=0` 复制文字，旧 Python 读回 52 字符；`index=1` 复制图片 `clipstash-next-20260608163309521-1896-0.png`，旧 Python 读回尺寸 `(1, 1)`、模式 `RGBA`。
+- 已为前端消息卡片新增“查看队列”入口，可读取导入队列预览并在浮层中逐项“复制第 N 项”；当前仍不模拟粘贴、不聚焦外部窗口、不写 DB。
+- 已新增前端 mock 交互测试，覆盖导入队列预览、单项复制 command 参数，以及查看/复制队列不刷新旧库统计/列表。
 
 ## 未完成
 
@@ -142,4 +144,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：在前端增加导入队列预览/单项复制入口，或在 Rust 侧设计受控 Ctrl+V 粘贴执行器。
+- 进入阶段 3 下一步：对前端导入队列入口做真实 Tauri UI 点击验收，或在 Rust 侧设计受控 Ctrl+V 粘贴执行器。

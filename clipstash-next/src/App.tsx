@@ -2,6 +2,7 @@ import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
 import {
+  copyLegacyMessageImportQueueItemToClipboard,
   copyLegacyImageToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
@@ -11,6 +12,7 @@ import {
   listLegacyMessages,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  previewLegacyMessageImportQueue,
   stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
 } from "./api/legacy";
@@ -22,6 +24,8 @@ import type {
   LegacyArchiveMessageResult,
   LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
+  LegacyImportQueueCopyResult,
+  LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyReplaceImagesResult,
   MessageView,
@@ -46,6 +50,8 @@ type CopyResult = {
 type ImageCopyResult = LegacyCopyImageResult;
 
 type ImportStageResult = LegacyImportStageResult;
+
+type ImportQueueCopyResult = LegacyImportQueueCopyResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -93,6 +99,18 @@ function App() {
   const [importingMessageId, setImportingMessageId] = useState<number | null>(null);
   const [importStageError, setImportStageError] = useState<string | null>(null);
   const [importStageResult, setImportStageResult] = useState<ImportStageResult | null>(null);
+  const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
+    useState<number | null>(null);
+  const [importQueueError, setImportQueueError] = useState<string | null>(null);
+  const [importQueuePreview, setImportQueuePreview] =
+    useState<LegacyImportQueuePreview | null>(null);
+  const [copyingImportQueueItem, setCopyingImportQueueItem] = useState<{
+    messageId: number;
+    itemIndex: number;
+  } | null>(null);
+  const [importQueueCopyError, setImportQueueCopyError] = useState<string | null>(null);
+  const [importQueueCopyResult, setImportQueueCopyResult] =
+    useState<ImportQueueCopyResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -386,6 +404,45 @@ function App() {
     }
   }
 
+  async function openImportQueue(message: LegacyMessage) {
+    if (loadingImportQueueMessageId !== null) return;
+
+    setLoadingImportQueueMessageId(message.id);
+    setImportQueueError(null);
+    setImportQueuePreview(null);
+    setImportQueueCopyError(null);
+    setImportQueueCopyResult(null);
+
+    try {
+      const preview = await previewLegacyMessageImportQueue(message.id);
+      setImportQueuePreview(preview);
+    } catch (err) {
+      setImportQueueError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingImportQueueMessageId(null);
+    }
+  }
+
+  async function copyImportQueueItem(itemIndex: number) {
+    if (!importQueuePreview || copyingImportQueueItem !== null) return;
+
+    setCopyingImportQueueItem({ messageId: importQueuePreview.message_id, itemIndex });
+    setImportQueueCopyError(null);
+    setImportQueueCopyResult(null);
+
+    try {
+      const result = await copyLegacyMessageImportQueueItemToClipboard(
+        importQueuePreview.message_id,
+        itemIndex,
+      );
+      setImportQueueCopyResult(result);
+    } catch (err) {
+      setImportQueueCopyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCopyingImportQueueItem(null);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
@@ -629,11 +686,13 @@ function App() {
               messages={page.messages}
               archivingMessageId={archivingMessageId}
               importingMessageId={importingMessageId}
+              loadingImportQueueMessageId={loadingImportQueueMessageId}
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
               onArchive={toggleArchiveMessage}
               onCopyImage={copyMessageImage}
               onCopyText={copyMessageText}
+              onOpenImportQueue={openImportQueue}
               onStageImport={stageMessageImport}
               onPreview={setPreviewImage}
             />
@@ -799,6 +858,84 @@ function App() {
           )}
         </section>
       )}
+
+      {(importQueueError || importQueuePreview) && (
+        <section
+          className={`floating-result import-queue-result ${
+            importQueueError ? "floating-result-error" : ""
+          }`}
+          role={importQueueError ? "alert" : "status"}
+        >
+          {importQueueError ? (
+            <>
+              <strong>导入队列读取失败</strong>
+              <p>{importQueueError}</p>
+            </>
+          ) : (
+            importQueuePreview && (
+              <>
+                <strong>导入队列 #{importQueuePreview.message_id}</strong>
+                <p>
+                  {importQueuePreview.item_count} 项 · 文字{" "}
+                  {importQueuePreview.text_length} 字符 · 图片{" "}
+                  {importQueuePreview.image_count}
+                </p>
+                <div className="import-queue-items">
+                  {importQueuePreview.items.map((item, index) => (
+                    <div className="import-queue-item" key={`${item.kind}-${index}`}>
+                      <span>
+                        第 {index + 1} 项 ·{" "}
+                        {item.kind === "text"
+                          ? `文字 · ${item.text_length} 字符`
+                          : `图片 · ${item.image?.filename ?? "未知图片"}`}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={copyingImportQueueItem !== null}
+                        onClick={() => copyImportQueueItem(index)}
+                      >
+                        {copyingImportQueueItem?.messageId ===
+                          importQueuePreview.message_id &&
+                        copyingImportQueueItem.itemIndex === index
+                          ? "复制中..."
+                          : `复制第 ${index + 1} 项`}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )
+          )}
+        </section>
+      )}
+
+      {(importQueueCopyError || importQueueCopyResult) && (
+        <section
+          className={`floating-result ${importQueueCopyError ? "floating-result-error" : ""}`}
+          role={importQueueCopyError ? "alert" : "status"}
+        >
+          {importQueueCopyError ? (
+            <>
+              <strong>复制导入项失败</strong>
+              <p>{importQueueCopyError}</p>
+            </>
+          ) : (
+            importQueueCopyResult && (
+              <>
+                <strong>
+                  已复制导入项 #{importQueueCopyResult.message_id} /{" "}
+                  {importQueueCopyResult.item_index + 1}
+                </strong>
+                <p>
+                  {importQueueCopyResult.staged_kind === "text"
+                    ? `${importQueueCopyResult.text_length} 个字符已进入剪贴板`
+                    : `${importQueueCopyResult.image_filename ?? "图片"} 已进入剪贴板`}
+                </p>
+              </>
+            )
+          )}
+        </section>
+      )}
     </main>
   );
 }
@@ -824,23 +961,27 @@ function PathRow({
 function MessageList({
   archivingMessageId,
   importingMessageId,
+  loadingImportQueueMessageId,
   messages,
   onArchive,
   onCopyImage,
   onCopyText,
   onDelete,
   onEdit,
+  onOpenImportQueue,
   onStageImport,
   onPreview,
 }: {
   archivingMessageId: number | null;
   importingMessageId: number | null;
+  loadingImportQueueMessageId: number | null;
   messages: LegacyMessage[];
   onArchive: (message: LegacyMessage) => void;
   onCopyImage: (image: LegacyMessageImage) => void;
   onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
+  onOpenImportQueue: (message: LegacyMessage) => void;
   onStageImport: (message: LegacyMessage) => void;
   onPreview: (image: PreviewImage) => void;
 }) {
@@ -878,6 +1019,13 @@ function MessageList({
                 onClick={() => onStageImport(message)}
               >
                 {importingMessageId === message.id ? "准备中..." : "准备导入"}
+              </button>
+              <button
+                type="button"
+                disabled={loadingImportQueueMessageId !== null}
+                onClick={() => onOpenImportQueue(message)}
+              >
+                {loadingImportQueueMessageId === message.id ? "读取中..." : "查看队列"}
               </button>
               <button type="button" onClick={() => onEdit(message)}>
                 编辑

@@ -813,6 +813,48 @@ button {
   color: #53635b;
 }
 
+.import-queue-result {
+  min-width: min(420px, calc(100vw - 36px));
+}
+
+.import-queue-items {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.import-queue-item {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.import-queue-item span {
+  color: #45554d;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-queue-item button {
+  background: #fffdf8;
+  border: 1px solid #b8d1c8;
+  border-radius: 8px;
+  color: #1f7a64;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.import-queue-item button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .floating-result-error {
   border-color: #e3c7bf;
   background: #fff0ea;
