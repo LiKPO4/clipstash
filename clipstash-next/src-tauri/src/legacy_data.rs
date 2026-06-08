@@ -77,6 +77,12 @@ pub struct LegacyCreateTextMessageResult {
     pub message: LegacyMessage,
 }
 
+#[derive(Serialize)]
+pub struct LegacyUpdateMessageResult {
+    pub backup: LegacyDbBackup,
+    pub message: LegacyMessage,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -110,6 +116,18 @@ pub fn create_legacy_mixed_message(
         &data_dir.join("clipstash.db"),
         text_content,
         images_data,
+    )
+}
+
+pub fn update_legacy_message_text(
+    message_id: i64,
+    text_content: Option<String>,
+) -> Result<LegacyUpdateMessageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    update_text_message_with_backup_for_path(
+        &data_dir.join("clipstash.db"),
+        message_id,
+        text_content,
     )
 }
 
@@ -299,6 +317,20 @@ fn create_mixed_message_with_backup_for_path(
     Ok(LegacyCreateTextMessageResult { backup, message })
 }
 
+fn update_text_message_with_backup_for_path(
+    db_path: &Path,
+    message_id: i64,
+    text_content: Option<String>,
+) -> Result<LegacyUpdateMessageResult, String> {
+    let normalized_text = normalize_optional_text_message(text_content);
+    ensure_message_exists_for_path(db_path, message_id)?;
+    let backup = create_legacy_db_backup_for_path(db_path)?;
+    let message = update_text_message_for_path(db_path, message_id, normalized_text)
+        .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
+
+    Ok(LegacyUpdateMessageResult { backup, message })
+}
+
 pub fn create_text_message_for_path(
     db_path: &Path,
     text_content: Option<String>,
@@ -322,6 +354,40 @@ pub fn create_text_message_for_path(
     .map_err(|err| format!("新增纯文字消息失败：{err}"))?;
 
     let message_id = conn.last_insert_rowid();
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
+pub fn update_text_message_for_path(
+    db_path: &Path,
+    message_id: i64,
+    text_content: Option<String>,
+) -> Result<LegacyMessage, String> {
+    if message_id <= 0 {
+        return Err("更新消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("更新消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("更新消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+    let conn =
+        Connection::open(db_path).map_err(|err| format!("打开旧数据库准备更新失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+
+    let updated = conn
+        .execute(
+            "UPDATE messages SET text_content = ? WHERE id = ?",
+            params![text_content, message_id],
+        )
+        .map_err(|err| format!("更新消息文字失败：{err}"))?;
+
+    if updated == 0 {
+        return Err(format!("更新消息失败，消息不存在：{message_id}"));
+    }
+
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
@@ -412,12 +478,44 @@ fn normalize_text_message(text_content: String) -> Result<String, String> {
     Ok(normalized)
 }
 
+fn normalize_optional_text_message(text_content: Option<String>) -> Option<String> {
+    text_content
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
 fn validate_images_data(images_data: &[Vec<u8>]) -> Result<(), String> {
     if images_data.is_empty() {
         return Err("新增图片消息失败，至少需要一张图片".to_string());
     }
     if images_data.iter().any(|image_data| image_data.is_empty()) {
         return Err("新增图片消息失败，图片数据不能为空".to_string());
+    }
+
+    Ok(())
+}
+
+fn ensure_message_exists_for_path(db_path: &Path, message_id: i64) -> Result<(), String> {
+    if message_id <= 0 {
+        return Err("更新消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("更新消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE id = ?",
+            [message_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| format!("检查消息是否存在失败：{err}"))?;
+
+    if exists == 0 {
+        return Err(format!("更新消息失败，消息不存在：{message_id}"));
     }
 
     Ok(())
@@ -949,6 +1047,128 @@ mod tests {
         drop(conn);
 
         let result = create_text_message_with_backup_for_path(&db_path, "   ".to_string());
+
+        assert!(result.is_err());
+        assert!(!fs::read_dir(&data_dir)
+            .expect("read data dir")
+            .any(|entry| entry
+                .expect("read data dir entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with("clipstash.db.bak-")));
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn updates_text_message_with_backup_and_preserves_images() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-update-text-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        let images_dir = data_dir.join("images");
+        fs::create_dir_all(&images_dir).expect("create images dir");
+        fs::write(images_dir.join("existing.png"), b"existing-image").expect("write image");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('old text', 0);
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'existing.png');
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = update_text_message_with_backup_for_path(
+            &db_path,
+            1,
+            Some("  updated text  ".to_string()),
+        )
+        .expect("update text message with backup");
+
+        assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(result.message.id, 1);
+        assert_eq!(result.message.text_content.as_deref(), Some("updated text"));
+        assert_eq!(result.message.images.len(), 1);
+        assert_eq!(result.message.images[0].filename, "existing.png");
+        assert!(result.message.images[0].exists);
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            1
+        );
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM message_images").expect("count images"),
+            1
+        );
+        let text: Option<String> = conn
+            .query_row(
+                "SELECT text_content FROM messages WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read updated text");
+        assert_eq!(text.as_deref(), Some("updated text"));
+        drop(conn);
+
+        let backup_conn =
+            Connection::open(&result.backup.backup_path).expect("open backup sqlite fixture");
+        let backup_text: Option<String> = backup_conn
+            .query_row(
+                "SELECT text_content FROM messages WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read backup text");
+        assert_eq!(backup_text.as_deref(), Some("old text"));
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn rejects_missing_text_update_before_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-update-missing-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result =
+            update_text_message_with_backup_for_path(&db_path, 404, Some("new text".to_string()));
 
         assert!(result.is_err());
         assert!(!fs::read_dir(&data_dir)

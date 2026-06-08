@@ -33,6 +33,14 @@ fn create_legacy_mixed_message(
 }
 
 #[tauri::command]
+fn update_legacy_message_text(
+    message_id: i64,
+    text_content: Option<String>,
+) -> Result<legacy_data::LegacyUpdateMessageResult, String> {
+    legacy_data::update_legacy_message_text(message_id, text_content)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -52,7 +60,8 @@ pub fn run() {
             create_legacy_mixed_message,
             create_legacy_text_message,
             get_legacy_stats,
-            list_legacy_messages
+            list_legacy_messages,
+            update_legacy_message_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

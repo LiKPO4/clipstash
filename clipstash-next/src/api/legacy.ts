@@ -5,6 +5,7 @@ import type {
   LegacyCreateTextMessageResult,
   LegacyMessagePage,
   LegacyStats,
+  LegacyUpdateMessageResult,
   MessageView,
   SortOrder,
 } from "./types";
@@ -48,5 +49,12 @@ export function createLegacyMixedMessage(textContent: string, imagesData: number
   return invoke<LegacyCreateMixedMessageResult>("create_legacy_mixed_message", {
     textContent,
     imagesData,
+  });
+}
+
+export function updateLegacyMessageText(messageId: number, textContent: string | null) {
+  return invoke<LegacyUpdateMessageResult>("update_legacy_message_text", {
+    messageId,
+    textContent,
   });
 }

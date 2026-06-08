@@ -53,3 +53,5 @@ export type LegacyCreateTextMessageResult = {
 export type LegacyCreateImageMessageResult = LegacyCreateTextMessageResult;
 
 export type LegacyCreateMixedMessageResult = LegacyCreateTextMessageResult;
+
+export type LegacyUpdateMessageResult = LegacyCreateTextMessageResult;
