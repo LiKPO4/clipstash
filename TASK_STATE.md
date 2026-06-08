@@ -3,7 +3,7 @@
 ## 当前目标
 
 - 将 ClipStash 逐步从 Python + Tkinter/customtkinter 重构为 Tauri 2 + React + TypeScript + Rust + SQLite。
-- 当前阶段为阶段 1：只读读取旧 `messages` 与 `message_images`，逐步展示消息列表和图片。
+- 当前阶段进入阶段 2 写入安全铺垫：先在临时数据库验证新增纯文字消息，不对真实旧库写入。
 
 ## 已完成
 
@@ -38,11 +38,14 @@
 - 已新增 Rust DB 备份基础设施，备份文件命名为 `clipstash.db.bak-YYYYMMDD-HHMMSS`。
 - 已新增临时数据库备份测试，验证备份内容一致且源 DB 未改变。
 - 已为备份时间戳新增直接依赖 `chrono`，并安装 `rustfmt` 组件用于 Rust 格式化。
+- 已新增 Rust 侧纯文字消息写入函数 `create_text_message_for_path`，当前仅在临时 SQLite 测试中使用，未接入 UI command。
+- 已新增临时数据库写入测试，覆盖写入前备份、新增 `messages` 一行、`archived=0`、不新增 `message_images`、旧读取函数可读回、备份库保持原消息数。
 
 ## 未完成
 
 - 尚未实现复制、编辑、归档、恢复、导入等后续阶段功能。
 - 阶段 2 尚未对真实旧库执行任何写入或备份。
+- 阶段 2 尚未暴露新增消息 command，也未接入前端输入 UI。
 
 ## 阻塞
 
@@ -64,4 +67,4 @@
 
 ## 下一步
 
-- 进入阶段 2：先实现新增纯文字消息的临时数据库写入测试和 Rust command，真实旧库写入前必须先创建备份并确认回滚路径。
+- 进入阶段 2 下一步：增加受保护的新增纯文字消息 command，真实旧库写入前必须自动创建备份，并先确认回滚路径。

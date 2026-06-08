@@ -229,6 +229,33 @@ fn list_legacy_messages_from_dir(
     })
 }
 
+#[allow(dead_code)]
+pub fn create_text_message_for_path(
+    db_path: &Path,
+    text_content: Option<String>,
+) -> Result<LegacyMessage, String> {
+    if !db_path.is_file() {
+        return Err(format!("新增消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("新增消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+    let conn =
+        Connection::open(db_path).map_err(|err| format!("打开旧数据库准备写入失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+
+    conn.execute(
+        "INSERT INTO messages (text_content, archived) VALUES (?, 0)",
+        params![text_content],
+    )
+    .map_err(|err| format!("新增纯文字消息失败：{err}"))?;
+
+    let message_id = conn.last_insert_rowid();
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
 fn legacy_data_dir() -> Result<PathBuf, String> {
     if let Some(appdata) = env::var_os("APPDATA") {
         return Ok(PathBuf::from(appdata).join("ClipStash"));
@@ -255,6 +282,42 @@ fn ensure_legacy_schema(conn: &Connection) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[allow(dead_code)]
+fn read_legacy_message_by_id(
+    conn: &Connection,
+    images_dir: &PathBuf,
+    message_id: i64,
+) -> Result<LegacyMessage, String> {
+    let (id, text_content, created_at, archived, archived_at) = conn
+        .query_row(
+            "SELECT id, text_content, created_at, archived, archived_at \
+             FROM messages \
+             WHERE id = ?",
+            [message_id],
+            |row| {
+                let archived: i64 = row.get(3)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    archived == 1,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .map_err(|err| format!("读取新增消息失败：{err}"))?;
+    let images = list_images_for_message(conn, images_dir, id)?;
+
+    Ok(LegacyMessage {
+        id,
+        text_content,
+        created_at,
+        archived,
+        archived_at,
+        images,
+    })
 }
 
 fn list_images_for_message(
@@ -476,6 +539,88 @@ mod tests {
         );
 
         fs::remove_dir_all(data_dir).expect("remove backup fixture");
+    }
+
+    #[test]
+    fn creates_text_message_in_temp_legacy_db_after_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-create-text-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('existing', 0);
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let backup = create_legacy_db_backup_for_path(&db_path).expect("create backup first");
+        let backup_path = PathBuf::from(&backup.backup_path);
+        let message = create_text_message_for_path(&db_path, Some("new text".to_string()))
+            .expect("create text message");
+
+        assert!(backup_path.is_file());
+        assert_eq!(message.text_content.as_deref(), Some("new text"));
+        assert!(!message.archived);
+        assert!(message.archived_at.is_none());
+        assert!(message.images.is_empty());
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        let message_count = query_count(&conn, "SELECT COUNT(*) FROM messages")
+            .expect("count messages after insert");
+        let image_count = query_count(&conn, "SELECT COUNT(*) FROM message_images")
+            .expect("count images after insert");
+        let archived: i64 = conn
+            .query_row(
+                "SELECT archived FROM messages WHERE id = ?",
+                [message.id],
+                |row| row.get(0),
+            )
+            .expect("read archived flag");
+
+        assert_eq!(message_count, 2);
+        assert_eq!(image_count, 0);
+        assert_eq!(archived, 0);
+        drop(conn);
+
+        let page = list_legacy_messages_from_dir(
+            data_dir.clone(),
+            MessageView::Normal,
+            SortOrder::Newest,
+            Some(0),
+            Some(10),
+        )
+        .expect("read messages after insert");
+        assert!(page
+            .messages
+            .iter()
+            .any(|item| item.id == message.id && item.text_content.as_deref() == Some("new text")));
+
+        let backup_conn = Connection::open(&backup_path).expect("open backup sqlite fixture");
+        let backup_message_count = query_count(&backup_conn, "SELECT COUNT(*) FROM messages")
+            .expect("count backup messages");
+        assert_eq!(backup_message_count, 1);
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
     }
 
     #[test]
