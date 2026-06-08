@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
 import { getLegacyStats, listLegacyMessages } from "./api/legacy";
 import type {
+  LegacyMessageImage,
   LegacyMessage,
   LegacyMessagePage,
   LegacyStats,
@@ -219,15 +221,9 @@ function MessageList({ messages }: { messages: LegacyMessage[] }) {
           </p>
 
           {message.images.length > 0 && (
-            <div className="image-strip" aria-label="图片文件状态">
+            <div className="image-grid" aria-label="图片缩略图">
               {message.images.map((image) => (
-                <span
-                  className={image.exists ? "image-chip image-ok" : "image-chip image-missing"}
-                  key={image.id}
-                  title={image.path}
-                >
-                  {image.filename}
-                </span>
+                <MessageImageTile image={image} key={image.id} />
               ))}
             </div>
           )}
@@ -235,6 +231,39 @@ function MessageList({ messages }: { messages: LegacyMessage[] }) {
       ))}
     </section>
   );
+}
+
+function MessageImageTile({ image }: { image: LegacyMessageImage }) {
+  const [broken, setBroken] = useState(false);
+  const canRenderImage = image.exists && !broken;
+  const src = canRenderImage ? getAssetSrc(image.path) : "";
+
+  return (
+    <figure
+      className={canRenderImage && src ? "image-tile" : "image-tile image-tile-missing"}
+      title={image.path}
+    >
+      {canRenderImage && src ? (
+        <img
+          alt={image.filename}
+          loading="lazy"
+          src={src}
+          onError={() => setBroken(true)}
+        />
+      ) : (
+        <span>{image.exists ? "无法读取" : "文件缺失"}</span>
+      )}
+      <figcaption>{image.filename}</figcaption>
+    </figure>
+  );
+}
+
+function getAssetSrc(path: string) {
+  try {
+    return convertFileSrc(path);
+  } catch {
+    return "";
+  }
 }
 
 export default App;

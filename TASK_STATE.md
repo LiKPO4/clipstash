@@ -23,11 +23,14 @@
 - 已运行 Rust 单元测试覆盖消息排序、图片顺序和图片存在/缺失状态。
 - 已运行本机旧库只读列表验证，普通消息总数 `8`，首批返回 `5`，`has_more=true`。
 - 已用普通浏览器检查页面基础布局，1280px 和 390px 宽度均无横向溢出。
+- 已实现旧图片缩略图只读展示：存在的图片通过 Tauri `asset` protocol 加载，缺失或读取失败时显示固定尺寸占位。
+- 已为 Tauri `assetProtocol` 配置最小 scope：`$DATA/ClipStash/images/*` 和 `$HOME/ClipStash/images/*`。
+- 已为 Rust `tauri` 依赖开启 `protocol-asset` feature，并通过 `npm run tauri build` 验证配置可打包。
 
 ## 未完成
 
 - 尚未运行 `npm run tauri dev` 并人工查看真实 Tauri WebView 首屏。
-- 阶段 1 尚未实现真实缩略图渲染和图片预览，只展示图片文件状态。
+- 阶段 1 尚未实现图片预览弹层；缩略图在 Tauri WebView 中仍待人工视觉验收。
 - 尚未实现复制、编辑、归档、恢复、导入等后续阶段功能。
 
 ## 阻塞
@@ -38,6 +41,8 @@
 
 - `clipstash-next/src-tauri/src/legacy_data.rs`
 - `clipstash-next/src-tauri/src/lib.rs`
+- `clipstash-next/src-tauri/tauri.conf.json`
+- `clipstash-next/src-tauri/Cargo.toml`
 - `clipstash-next/src/App.tsx`
 - `clipstash-next/src/App.css`
 - `clipstash-next/src/api/legacy.ts`
@@ -45,5 +50,5 @@
 
 ## 下一步
 
-- 继续阶段 1：实现旧图片缩略图只读展示，仍通过 DB filename + `images/` 解析，不移动、不改写图片。
+- 继续阶段 1：运行 `npm run tauri dev` 做真实 Tauri WebView 视觉验收，然后实现图片预览弹层。
 - 在进入写入阶段前继续保持只读，不改旧 DB、不改旧 `images/`。
