@@ -34,6 +34,11 @@ type PreviewImage = {
 
 type EditResult = LegacyCreateTextMessageResult | LegacyReplaceImagesResult;
 
+type CopyResult = {
+  messageId: number;
+  textLength: number;
+};
+
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
   const [page, setPage] = useState<LegacyMessagePage | null>(null);
@@ -73,6 +78,8 @@ function App() {
   const [archivingMessageId, setArchivingMessageId] = useState<number | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [archiveResult, setArchiveResult] = useState<LegacyArchiveMessageResult | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -314,6 +321,24 @@ function App() {
       setArchiveError(err instanceof Error ? err.message : String(err));
     } finally {
       setArchivingMessageId(null);
+    }
+  }
+
+  async function copyMessageText(message: LegacyMessage) {
+    const text = message.text_content?.trim();
+    if (!text) return;
+
+    setCopyError(null);
+    setCopyResult(null);
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("当前环境不支持剪贴板写入");
+      }
+      await navigator.clipboard.writeText(text);
+      setCopyResult({ messageId: message.id, textLength: text.length });
+    } catch (err) {
+      setCopyError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -562,6 +587,7 @@ function App() {
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
               onArchive={toggleArchiveMessage}
+              onCopyText={copyMessageText}
               onPreview={setPreviewImage}
             />
           )}
@@ -656,6 +682,27 @@ function App() {
           )}
         </section>
       )}
+
+      {(copyError || copyResult) && (
+        <section
+          className={`floating-result ${copyError ? "floating-result-error" : ""}`}
+          role={copyError ? "alert" : "status"}
+        >
+          {copyError ? (
+            <>
+              <strong>复制失败</strong>
+              <p>{copyError}</p>
+            </>
+          ) : (
+            copyResult && (
+              <>
+                <strong>已复制 #{copyResult.messageId}</strong>
+                <p>{copyResult.textLength} 个字符</p>
+              </>
+            )
+          )}
+        </section>
+      )}
     </main>
   );
 }
@@ -682,6 +729,7 @@ function MessageList({
   archivingMessageId,
   messages,
   onArchive,
+  onCopyText,
   onDelete,
   onEdit,
   onPreview,
@@ -689,6 +737,7 @@ function MessageList({
   archivingMessageId: number | null;
   messages: LegacyMessage[];
   onArchive: (message: LegacyMessage) => void;
+  onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
   onPreview: (image: PreviewImage) => void;
@@ -716,6 +765,11 @@ function MessageList({
                     ? "恢复"
                     : "归档"}
               </button>
+              {message.text_content && (
+                <button type="button" onClick={() => onCopyText(message)}>
+                  复制文字
+                </button>
+              )}
               <button type="button" onClick={() => onEdit(message)}>
                 编辑
               </button>

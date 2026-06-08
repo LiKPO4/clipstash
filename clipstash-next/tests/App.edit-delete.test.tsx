@@ -50,6 +50,7 @@ const page = {
 };
 
 let listedMessages = [message];
+let writeTextMock: ReturnType<typeof vi.fn>;
 
 const updateResult = {
   backup: {
@@ -132,6 +133,7 @@ describe("edit and delete guarded actions", () => {
   afterEach(() => {
     cleanup();
     invokeMock.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("updates message text only after explicit confirmation", async () => {
@@ -302,6 +304,35 @@ describe("edit and delete guarded actions", () => {
     expect(await screen.findByText("已恢复 #10")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(3);
     expect(commandCallCount("list_legacy_messages")).toBe(3);
+  });
+
+  it("copies message text without invoking a write command", async () => {
+    const user = userEvent.setup();
+    writeTextMock = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "复制文字",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith("旧文字");
+    });
+    expect(await screen.findByText("已复制 #10")).toBeTruthy();
+    expect(screen.getByText("3 个字符")).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "update_legacy_message_text",
+      expect.anything(),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "set_legacy_message_archived",
+      expect.anything(),
+    );
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 });
 
