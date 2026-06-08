@@ -38,3 +38,14 @@ export type LegacyMessagePage = {
   has_more: boolean;
   messages: LegacyMessage[];
 };
+
+export type LegacyDbBackup = {
+  source_path: string;
+  backup_path: string;
+  bytes_copied: number;
+};
+
+export type LegacyCreateTextMessageResult = {
+  backup: LegacyDbBackup;
+  message: LegacyMessage;
+};

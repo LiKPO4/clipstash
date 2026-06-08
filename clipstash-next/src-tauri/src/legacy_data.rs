@@ -71,6 +71,12 @@ pub struct LegacyDbBackup {
     pub bytes_copied: u64,
 }
 
+#[derive(Serialize)]
+pub struct LegacyCreateTextMessageResult {
+    pub backup: LegacyDbBackup,
+    pub message: LegacyMessage,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -79,6 +85,13 @@ pub fn read_legacy_stats() -> Result<LegacyStats, String> {
 pub fn create_legacy_db_backup() -> Result<LegacyDbBackup, String> {
     let data_dir = legacy_data_dir()?;
     create_legacy_db_backup_for_path(&data_dir.join("clipstash.db"))
+}
+
+pub fn create_legacy_text_message(
+    text_content: String,
+) -> Result<LegacyCreateTextMessageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    create_text_message_with_backup_for_path(&data_dir.join("clipstash.db"), text_content)
 }
 
 pub fn list_legacy_messages(
@@ -100,7 +113,7 @@ fn create_legacy_db_backup_for_path(db_path: &Path) -> Result<LegacyDbBackup, St
         .parent()
         .ok_or_else(|| format!("备份失败，无法定位数据库目录：{}", db_path.display()))?;
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-    let backup_path = parent.join(format!("clipstash.db.bak-{timestamp}"));
+    let backup_path = next_backup_path(parent, &timestamp.to_string());
     let bytes_copied =
         fs::copy(db_path, &backup_path).map_err(|err| format!("备份旧数据库失败：{err}"))?;
 
@@ -229,7 +242,18 @@ fn list_legacy_messages_from_dir(
     })
 }
 
-#[allow(dead_code)]
+fn create_text_message_with_backup_for_path(
+    db_path: &Path,
+    text_content: String,
+) -> Result<LegacyCreateTextMessageResult, String> {
+    let normalized_text = normalize_text_message(text_content)?;
+    let backup = create_legacy_db_backup_for_path(db_path)?;
+    let message = create_text_message_for_path(db_path, Some(normalized_text))
+        .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
+
+    Ok(LegacyCreateTextMessageResult { backup, message })
+}
+
 pub fn create_text_message_for_path(
     db_path: &Path,
     text_content: Option<String>,
@@ -254,6 +278,31 @@ pub fn create_text_message_for_path(
 
     let message_id = conn.last_insert_rowid();
     read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
+fn normalize_text_message(text_content: String) -> Result<String, String> {
+    let normalized = text_content.trim().to_string();
+    if normalized.is_empty() {
+        return Err("新增纯文字消息失败，文字内容不能为空".to_string());
+    }
+
+    Ok(normalized)
+}
+
+fn next_backup_path(parent: &Path, timestamp: &str) -> PathBuf {
+    let first = parent.join(format!("clipstash.db.bak-{timestamp}"));
+    if !first.exists() {
+        return first;
+    }
+
+    for index in 1.. {
+        let candidate = parent.join(format!("clipstash.db.bak-{timestamp}-{index}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("backup suffix search is unbounded");
 }
 
 fn legacy_data_dir() -> Result<PathBuf, String> {
@@ -542,6 +591,32 @@ mod tests {
     }
 
     #[test]
+    fn creates_unique_legacy_db_backup_paths_without_overwriting() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-unique-backup-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create backup fixture dir");
+
+        let first_backup_path = data_dir.join("clipstash.db.bak-20260608-120000");
+        fs::write(&first_backup_path, b"first-backup").expect("seed existing backup");
+
+        let next_path = next_backup_path(&data_dir, "20260608-120000");
+
+        assert_eq!(
+            next_path.file_name().expect("backup filename"),
+            "clipstash.db.bak-20260608-120000-1"
+        );
+        assert_eq!(
+            fs::read(first_backup_path).expect("read existing backup"),
+            b"first-backup"
+        );
+
+        fs::remove_dir_all(data_dir).expect("remove backup fixture");
+    }
+
+    #[test]
     fn creates_text_message_in_temp_legacy_db_after_backup() {
         let data_dir = env::temp_dir().join(format!(
             "clipstash-next-legacy-create-text-test-{}",
@@ -619,6 +694,113 @@ mod tests {
             .expect("count backup messages");
         assert_eq!(backup_message_count, 1);
         drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn creates_text_message_with_backup_wrapper() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-create-text-wrapper-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('existing', 0);
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = create_text_message_with_backup_for_path(
+            &db_path,
+            "  command text message  ".to_string(),
+        )
+        .expect("create text message with backup");
+
+        assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert_eq!(
+            result.message.text_content.as_deref(),
+            Some("command text message")
+        );
+        assert!(!result.message.archived);
+        assert!(result.message.images.is_empty());
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            2
+        );
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM message_images").expect("count images"),
+            0
+        );
+        drop(conn);
+
+        let backup_conn =
+            Connection::open(&result.backup.backup_path).expect("open backup sqlite fixture");
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM messages")
+                .expect("count backup messages"),
+            1
+        );
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn rejects_blank_text_message_before_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-create-blank-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = create_text_message_with_backup_for_path(&db_path, "   ".to_string());
+
+        assert!(result.is_err());
+        assert!(!fs::read_dir(&data_dir)
+            .expect("read data dir")
+            .any(|entry| entry
+                .expect("read data dir entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with("clipstash.db.bak-")));
 
         fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
     }

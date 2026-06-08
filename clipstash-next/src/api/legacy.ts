@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LegacyMessagePage, LegacyStats, MessageView, SortOrder } from "./types";
+import type {
+  LegacyCreateTextMessageResult,
+  LegacyMessagePage,
+  LegacyStats,
+  MessageView,
+  SortOrder,
+} from "./types";
 
 export function getLegacyStats() {
   return invoke<LegacyStats>("get_legacy_stats");
@@ -21,5 +27,11 @@ export function listLegacyMessages({
     sort,
     offset,
     limit,
+  });
+}
+
+export function createLegacyTextMessage(textContent: string) {
+  return invoke<LegacyCreateTextMessageResult>("create_legacy_text_message", {
+    textContent,
   });
 }
