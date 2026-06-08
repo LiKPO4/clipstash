@@ -9,6 +9,7 @@ import {
   getLegacyStats,
   listLegacyMessages,
   replaceLegacyMessageImages,
+  setLegacyMessageArchived,
   updateLegacyMessageText,
 } from "./api/legacy";
 import type {
@@ -16,6 +17,7 @@ import type {
   LegacyMessage,
   LegacyMessagePage,
   LegacyStats,
+  LegacyArchiveMessageResult,
   LegacyCreateTextMessageResult,
   LegacyReplaceImagesResult,
   MessageView,
@@ -68,6 +70,9 @@ function App() {
   const [deletingLegacyMessage, setDeletingLegacyMessage] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteResult, setDeleteResult] = useState<EditResult | null>(null);
+  const [archivingMessageId, setArchivingMessageId] = useState<number | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveResult, setArchiveResult] = useState<LegacyArchiveMessageResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -291,6 +296,24 @@ function App() {
       setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeletingLegacyMessage(false);
+    }
+  }
+
+  async function toggleArchiveMessage(message: LegacyMessage) {
+    if (archivingMessageId !== null) return;
+
+    setArchivingMessageId(message.id);
+    setArchiveError(null);
+    setArchiveResult(null);
+
+    try {
+      const result = await setLegacyMessageArchived(message.id, !message.archived);
+      await refreshLegacyData();
+      setArchiveResult(result);
+    } catch (err) {
+      setArchiveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchivingMessageId(null);
     }
   }
 
@@ -535,8 +558,10 @@ function App() {
           {page && (
             <MessageList
               messages={page.messages}
+              archivingMessageId={archivingMessageId}
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
+              onArchive={toggleArchiveMessage}
               onPreview={setPreviewImage}
             />
           )}
@@ -603,6 +628,34 @@ function App() {
           />
         </section>
       )}
+
+      {(archiveError || archiveResult) && (
+        <section
+          className={`floating-result ${archiveError ? "floating-result-error" : ""}`}
+          role={archiveError ? "alert" : "status"}
+        >
+          {archiveError ? (
+            <>
+              <strong>归档操作失败</strong>
+              <p>{archiveError}</p>
+            </>
+          ) : (
+            archiveResult && (
+              <>
+                <strong>
+                  {archiveResult.message.archived ? "已归档" : "已恢复"} #
+                  {archiveResult.message.id}
+                </strong>
+                <PathRow
+                  label="备份"
+                  value={archiveResult.backup.backup_path}
+                  ok={archiveResult.backup.bytes_copied > 0}
+                />
+              </>
+            )
+          )}
+        </section>
+      )}
     </main>
   );
 }
@@ -626,12 +679,16 @@ function PathRow({
 }
 
 function MessageList({
+  archivingMessageId,
   messages,
+  onArchive,
   onDelete,
   onEdit,
   onPreview,
 }: {
+  archivingMessageId: number | null;
   messages: LegacyMessage[];
+  onArchive: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
   onPreview: (image: PreviewImage) => void;
@@ -647,6 +704,18 @@ function MessageList({
               {message.archived && <span>归档于 {message.archived_at ?? "未知时间"}</span>}
             </div>
             <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
+              <button
+                type="button"
+                className="archive-action"
+                disabled={archivingMessageId !== null}
+                onClick={() => onArchive(message)}
+              >
+                {archivingMessageId === message.id
+                  ? "处理中..."
+                  : message.archived
+                    ? "恢复"
+                    : "归档"}
+              </button>
               <button type="button" onClick={() => onEdit(message)}>
                 编辑
               </button>

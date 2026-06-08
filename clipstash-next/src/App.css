@@ -512,9 +512,24 @@ button {
   background: #8a3426;
 }
 
+.message-actions .archive-action {
+  border-color: #1f5f7a;
+  color: #fffdf8;
+  background: #1f5f7a;
+}
+
 .message-actions .danger-action:hover,
 .delete-submit:hover {
   background: #6f281d;
+}
+
+.message-actions .archive-action:hover {
+  background: #184b60;
+}
+
+.message-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .message-text {
@@ -758,6 +773,20 @@ button.image-tile:focus-visible {
 
 .floating-result strong {
   color: #1f7a64;
+}
+
+.floating-result p {
+  margin: 0;
+  color: #53635b;
+}
+
+.floating-result-error {
+  border-color: #e3c7bf;
+  background: #fff0ea;
+}
+
+.floating-result-error strong {
+  color: #802f22;
 }
 
 .empty {

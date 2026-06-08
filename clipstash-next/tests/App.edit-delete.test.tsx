@@ -89,10 +89,28 @@ const deleteResult = {
   message,
 };
 
+const archiveResult = {
+  backup: updateResult.backup,
+  message: {
+    ...message,
+    archived: true,
+    archived_at: "2026-06-08 17:30:00",
+  },
+};
+
+const restoreResult = {
+  backup: updateResult.backup,
+  message: {
+    ...message,
+    archived: false,
+    archived_at: null,
+  },
+};
+
 describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
-    invokeMock.mockImplementation((command: string) => {
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
         return Promise.resolve({
@@ -104,6 +122,9 @@ describe("edit and delete guarded actions", () => {
       if (command === "update_legacy_message_text") return Promise.resolve(updateResult);
       if (command === "replace_legacy_message_images") return Promise.resolve(replaceResult);
       if (command === "delete_legacy_message") return Promise.resolve(deleteResult);
+      if (command === "set_legacy_message_archived") {
+        return Promise.resolve(args?.archived ? archiveResult : restoreResult);
+      }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
   });
@@ -233,6 +254,54 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已删除 #10")).toBeTruthy();
+  });
+
+  it("archives a normal message and refreshes legacy data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "归档" }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_archived", {
+        messageId: 10,
+        archived: true,
+      });
+    });
+    expect(await screen.findByText("已归档 #10")).toBeTruthy();
+    expect(commandCallCount("get_legacy_stats")).toBe(2);
+    expect(commandCallCount("list_legacy_messages")).toBe(2);
+  });
+
+  it("restores an archived message and refreshes legacy data", async () => {
+    listedMessages = [
+      {
+        ...message,
+        archived: true,
+        archived_at: "2026-06-08 17:30:00",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "已归档" }));
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "恢复" }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_archived", {
+        messageId: 10,
+        archived: false,
+      });
+    });
+    expect(await screen.findByText("已恢复 #10")).toBeTruthy();
+    expect(commandCallCount("get_legacy_stats")).toBe(3);
+    expect(commandCallCount("list_legacy_messages")).toBe(3);
   });
 });
 
