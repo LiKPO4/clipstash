@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "verify:legacy-readonly": "cd src-tauri && %USERPROFILE%\\.cargo\\bin\\cargo.exe test verifies_local_legacy_readonly_consistency -- --ignored --nocapture",
     "tauri": "tauri"
   },
   "dependencies": {

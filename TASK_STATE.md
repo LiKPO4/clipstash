@@ -28,6 +28,9 @@
 - 已为 Rust `tauri` 依赖开启 `protocol-asset` feature，并通过 `npm run tauri build` 验证配置可打包。
 - 已实现图片预览弹层：点击可读缩略图打开大图，支持遮罩关闭、关闭按钮和 Escape 关闭。
 - 已运行短时 `npm run tauri dev` 启动烟测，日志显示已启动 `target\debug\clipstash-next.exe`；随后已清理开发服务和应用进程。
+- 已新增 `npm run verify:legacy-readonly`，用于本机旧库只读一致性审计。
+- 已运行只读一致性审计，结果：普通 `8`、归档 `103`、总计 `111`、关联图片 `105`、孤立图片 `0`。
+- 审计覆盖：普通/归档数量、分页读取总数、最新/最早排序、图片数量、图片 `id` 顺序、图片文件存在状态。
 
 ## 未完成
 
@@ -48,8 +51,9 @@
 - `clipstash-next/src/App.css`
 - `clipstash-next/src/api/legacy.ts`
 - `clipstash-next/src/api/types.ts`
+- `clipstash-next/package.json`
 
 ## 下一步
 
-- 继续阶段 1：做真实 Tauri WebView 视觉验收后，补齐排序/列表一致性核对脚本或进入只读细节完善。
+- 继续阶段 1：做真实 Tauri WebView 视觉验收；通过后进入阶段 2 基础写入前的最小设计与备份策略确认。
 - 在进入写入阶段前继续保持只读，不改旧 DB、不改旧 `images/`。

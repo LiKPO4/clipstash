@@ -448,4 +448,207 @@ mod tests {
             assert!(!message.archived);
         }
     }
+
+    #[test]
+    #[ignore = "requires local ClipStash app data"]
+    fn verifies_local_legacy_readonly_consistency() {
+        let data_dir = legacy_data_dir().expect("resolve local legacy data dir");
+        let db_path = data_dir.join("clipstash.db");
+        let images_dir = data_dir.join("images");
+        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open local legacy database read-only");
+
+        let stats = read_legacy_stats_from_dir(data_dir.clone()).expect("read local stats");
+        let normal_messages = collect_all_messages(data_dir.clone(), MessageView::Normal);
+        let archived_messages = collect_all_messages(data_dir.clone(), MessageView::Archived);
+        let all_messages: Vec<&LegacyMessage> =
+            normal_messages.iter().chain(archived_messages.iter()).collect();
+
+        assert_eq!(stats.normal_count, normal_messages.len() as i64);
+        assert_eq!(stats.archived_count, archived_messages.len() as i64);
+        assert_eq!(
+            stats.total_count,
+            (normal_messages.len() + archived_messages.len()) as i64
+        );
+
+        for message in &normal_messages {
+            assert!(!message.archived, "normal view included archived message {}", message.id);
+        }
+        for message in &archived_messages {
+            assert!(message.archived, "archived view included normal message {}", message.id);
+        }
+
+        assert_message_order_matches_db(&conn, MessageView::Normal, SortOrder::Newest);
+        assert_message_order_matches_db(&conn, MessageView::Normal, SortOrder::Oldest);
+        assert_message_order_matches_db(&conn, MessageView::Archived, SortOrder::Newest);
+        assert_message_order_matches_db(&conn, MessageView::Archived, SortOrder::Oldest);
+
+        let api_image_count: i64 = all_messages
+            .iter()
+            .map(|message| message.images.len() as i64)
+            .sum();
+        let db_joined_image_count = query_count(
+            &conn,
+            "SELECT COUNT(*) \
+             FROM message_images mi \
+             JOIN messages m ON m.id = mi.message_id",
+        )
+        .expect("count joined images");
+        let db_orphan_image_count = query_count(
+            &conn,
+            "SELECT COUNT(*) \
+             FROM message_images mi \
+             LEFT JOIN messages m ON m.id = mi.message_id \
+             WHERE m.id IS NULL",
+        )
+        .expect("count orphan images");
+
+        assert_eq!(api_image_count, db_joined_image_count);
+
+        for message in all_messages {
+            let db_images = query_image_rows(&conn, message.id);
+            assert_eq!(
+                db_images.len(),
+                message.images.len(),
+                "image count mismatch for message {}",
+                message.id
+            );
+
+            let mut previous_image_id = None;
+            for (index, image) in message.images.iter().enumerate() {
+                let (db_image_id, db_filename) = &db_images[index];
+                assert_eq!(&image.id, db_image_id, "image id mismatch for message {}", message.id);
+                assert_eq!(
+                    &image.filename, db_filename,
+                    "image filename mismatch for message {}",
+                    message.id
+                );
+                assert_eq!(
+                    image.exists,
+                    images_dir.join(&image.filename).is_file(),
+                    "image file status mismatch for {}",
+                    image.filename
+                );
+
+                if let Some(previous) = previous_image_id {
+                    assert!(
+                        image.id > previous,
+                        "image order is not ascending for message {}",
+                        message.id
+                    );
+                }
+                previous_image_id = Some(image.id);
+            }
+        }
+
+        eprintln!(
+            "legacy-readonly-ok normal={} archived={} total={} joined_images={} orphan_images={} db={}",
+            stats.normal_count,
+            stats.archived_count,
+            stats.total_count,
+            db_joined_image_count,
+            db_orphan_image_count,
+            db_path.display()
+        );
+    }
+
+    fn collect_all_messages(data_dir: PathBuf, view: MessageView) -> Vec<LegacyMessage> {
+        let mut offset = 0;
+        let mut messages = Vec::new();
+
+        loop {
+            let page = list_legacy_messages_from_dir(
+                data_dir.clone(),
+                view,
+                SortOrder::Newest,
+                Some(offset),
+                Some(17),
+            )
+            .expect("list legacy messages page");
+            offset += page.messages.len() as i64;
+            messages.extend(page.messages);
+
+            if !page.has_more {
+                break;
+            }
+        }
+
+        messages
+    }
+
+    fn assert_message_order_matches_db(conn: &Connection, view: MessageView, sort: SortOrder) {
+        let data_dir = legacy_data_dir().expect("resolve local legacy data dir");
+        let api_ids: Vec<i64> = collect_all_messages_with_sort(data_dir, view, sort)
+            .iter()
+            .map(|message| message.id)
+            .collect();
+        let db_ids = query_message_ids(conn, view, sort);
+
+        assert_eq!(api_ids, db_ids);
+    }
+
+    fn collect_all_messages_with_sort(
+        data_dir: PathBuf,
+        view: MessageView,
+        sort: SortOrder,
+    ) -> Vec<LegacyMessage> {
+        let mut offset = 0;
+        let mut messages = Vec::new();
+
+        loop {
+            let page = list_legacy_messages_from_dir(
+                data_dir.clone(),
+                view,
+                sort,
+                Some(offset),
+                Some(17),
+            )
+            .expect("list sorted legacy messages page");
+            offset += page.messages.len() as i64;
+            messages.extend(page.messages);
+
+            if !page.has_more {
+                break;
+            }
+        }
+
+        messages
+    }
+
+    fn query_message_ids(conn: &Connection, view: MessageView, sort: SortOrder) -> Vec<i64> {
+        let order = match sort {
+            SortOrder::Newest => "DESC",
+            SortOrder::Oldest => "ASC",
+        };
+        let sort_column = match view {
+            MessageView::Normal => "created_at",
+            MessageView::Archived => "COALESCE(archived_at, created_at)",
+        };
+        let sql = format!(
+            "SELECT id FROM messages WHERE {} ORDER BY {sort_column} {order}, id {order}",
+            view_where_sql(view)
+        );
+        let mut stmt = conn.prepare(&sql).expect("prepare message id query");
+        stmt.query_map([], |row| row.get::<_, i64>(0))
+            .expect("query message ids")
+            .map(|row| row.expect("read message id"))
+            .collect()
+    }
+
+    fn query_image_rows(conn: &Connection, message_id: i64) -> Vec<(i64, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, image_filename \
+                 FROM message_images \
+                 WHERE message_id = ? \
+                 ORDER BY id",
+            )
+            .expect("prepare image row query");
+        stmt.query_map([message_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("query image rows")
+        .map(|row| row.expect("read image row"))
+        .collect()
+    }
 }
