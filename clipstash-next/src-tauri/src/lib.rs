@@ -1,5 +1,6 @@
 mod import_executor;
 mod keyboard_input;
+mod legacy_backup;
 mod legacy_data;
 mod window_targets;
 
