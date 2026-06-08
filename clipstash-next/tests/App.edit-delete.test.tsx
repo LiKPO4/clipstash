@@ -59,6 +59,7 @@ let failNextImportQueueItemPaste = false;
 let failNextImportQueuePaste = false;
 let failNextImportQueueArchivePaste = false;
 let failNextTargetWindowRefresh = false;
+let failNextTargetWindowValidation = false;
 
 const updateResult = {
   backup: {
@@ -236,6 +237,7 @@ describe("edit and delete guarded actions", () => {
     failNextImportQueuePaste = false;
     failNextImportQueueArchivePaste = false;
     failNextTargetWindowRefresh = false;
+    failNextTargetWindowValidation = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
@@ -308,6 +310,10 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(externalWindowTargets);
       }
       if (command === "validate_external_window_target") {
+        if (failNextTargetWindowValidation) {
+          failNextTargetWindowValidation = false;
+          return Promise.reject(new Error("目标窗口校验失败"));
+        }
         return Promise.resolve(externalWindowValidation);
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
@@ -768,6 +774,43 @@ describe("edit and delete guarded actions", () => {
     });
     expect(await screen.findByText("目标窗口刷新失败")).toBeTruthy();
     expect(commandCallCount("validate_external_window_target")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue_item")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("shows a target window validation error without enabling paste actions", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "查看队列",
+      }),
+    );
+    await screen.findByText("导入队列 #10");
+
+    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
+    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
+
+    failNextTargetWindowValidation = true;
+    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("validate_external_window_target", {
+        hwnd: 1001,
+      });
+    });
+    expect(await screen.findByText("目标窗口校验失败")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "粘贴第 1 项" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole("button", { name: "粘贴整队列" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     expect(commandCallCount("paste_legacy_import_queue_item")).toBe(0);
     expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
     expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
