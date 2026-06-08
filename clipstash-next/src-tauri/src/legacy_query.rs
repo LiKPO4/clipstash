@@ -1,5 +1,5 @@
 use crate::{
-    legacy_data::{LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessageView, SortOrder},
+    legacy_model::{LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessageView, SortOrder},
     legacy_paths::path_to_string,
     legacy_schema::ensure_legacy_schema,
 };

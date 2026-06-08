@@ -1,4 +1,4 @@
-use crate::{legacy_data::LegacyMessageImage, legacy_paths::path_to_string};
+use crate::{legacy_model::LegacyMessageImage, legacy_paths::path_to_string};
 use chrono::Local;
 use serde::Serialize;
 use std::{

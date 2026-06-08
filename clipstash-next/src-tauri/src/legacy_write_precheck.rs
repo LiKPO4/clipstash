@@ -1,5 +1,5 @@
 use crate::{
-    legacy_data::LegacyMessage, legacy_query::read_legacy_message_by_id,
+    legacy_model::LegacyMessage, legacy_query::read_legacy_message_by_id,
     legacy_schema::ensure_legacy_schema,
 };
 use rusqlite::{Connection, OpenFlags};

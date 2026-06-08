@@ -1,6 +1,6 @@
 use crate::{
-    legacy_data::{LegacyMessage, LegacyMessageImage},
     legacy_image_files::resolve_legacy_image_path,
+    legacy_model::{LegacyMessage, LegacyMessageImage},
     legacy_paths::path_to_string,
     legacy_write_precheck::read_message_for_update_precheck,
 };

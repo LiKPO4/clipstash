@@ -1,6 +1,6 @@
 use crate::{
-    legacy_data::LegacyMessage,
     legacy_image_files::{next_image_filename, remove_old_message_image_files, save_image_file},
+    legacy_model::LegacyMessage,
     legacy_query::read_legacy_message_by_id,
     legacy_schema::ensure_legacy_schema,
     legacy_write_precheck::validate_replace_images_request,

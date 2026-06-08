@@ -1,4 +1,4 @@
-use crate::legacy_data::LegacyMessageImage;
+use crate::legacy_model::LegacyMessageImage;
 use chrono::Local;
 use std::{
     fs,

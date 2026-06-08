@@ -1,6 +1,6 @@
 use crate::{
     legacy_backup::{LegacyDbBackup, LegacyImageFilesBackup},
-    legacy_data::LegacyMessage,
+    legacy_model::LegacyMessage,
 };
 use serde::Serialize;
 
