@@ -16,10 +16,10 @@ pub use crate::legacy_clipboard::{
 pub use crate::legacy_model::LegacyMessageImage;
 pub use crate::legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder};
 use crate::legacy_paths::legacy_data_dir;
+#[cfg(test)]
+use crate::legacy_query::query_count;
 pub use crate::legacy_query::LegacyStats;
 use crate::legacy_query::{list_legacy_messages_from_dir, read_legacy_stats_from_dir};
-#[cfg(test)]
-use crate::legacy_query::{query_count, view_where_sql};
 pub use crate::legacy_write_audit::LegacyWriteAudit;
 use crate::legacy_write_ops::{
     create_image_message_with_backup_for_path, create_mixed_message_with_backup_for_path,
@@ -189,6 +189,9 @@ pub fn list_legacy_messages(
 mod tests {
     use super::*;
     use crate::legacy_image_files::resolve_legacy_image_path;
+    use crate::legacy_test_support::{
+        assert_message_order_matches_db, collect_all_messages, query_image_rows, tiny_png_bytes,
+    };
     use crate::legacy_write_exec::{create_image_message_for_path, create_text_message_for_path};
     use crate::legacy_write_precheck::read_message_for_update_precheck;
     use rusqlite::Connection;
@@ -1959,109 +1962,5 @@ mod tests {
             result.text_length,
             result.image_filename
         );
-    }
-
-    fn tiny_png_bytes() -> Vec<u8> {
-        vec![
-            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
-            192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
-            96, 130,
-        ]
-    }
-
-    fn collect_all_messages(data_dir: PathBuf, view: MessageView) -> Vec<LegacyMessage> {
-        let mut offset = 0;
-        let mut messages = Vec::new();
-
-        loop {
-            let page = list_legacy_messages_from_dir(
-                data_dir.clone(),
-                view,
-                SortOrder::Newest,
-                Some(offset),
-                Some(17),
-            )
-            .expect("list legacy messages page");
-            offset += page.messages.len() as i64;
-            messages.extend(page.messages);
-
-            if !page.has_more {
-                break;
-            }
-        }
-
-        messages
-    }
-
-    fn assert_message_order_matches_db(conn: &Connection, view: MessageView, sort: SortOrder) {
-        let data_dir = legacy_data_dir().expect("resolve local legacy data dir");
-        let api_ids: Vec<i64> = collect_all_messages_with_sort(data_dir, view, sort)
-            .iter()
-            .map(|message| message.id)
-            .collect();
-        let db_ids = query_message_ids(conn, view, sort);
-
-        assert_eq!(api_ids, db_ids);
-    }
-
-    fn collect_all_messages_with_sort(
-        data_dir: PathBuf,
-        view: MessageView,
-        sort: SortOrder,
-    ) -> Vec<LegacyMessage> {
-        let mut offset = 0;
-        let mut messages = Vec::new();
-
-        loop {
-            let page =
-                list_legacy_messages_from_dir(data_dir.clone(), view, sort, Some(offset), Some(17))
-                    .expect("list sorted legacy messages page");
-            offset += page.messages.len() as i64;
-            messages.extend(page.messages);
-
-            if !page.has_more {
-                break;
-            }
-        }
-
-        messages
-    }
-
-    fn query_message_ids(conn: &Connection, view: MessageView, sort: SortOrder) -> Vec<i64> {
-        let order = match sort {
-            SortOrder::Newest => "DESC",
-            SortOrder::Oldest => "ASC",
-        };
-        let sort_column = match view {
-            MessageView::Normal => "created_at",
-            MessageView::Archived => "COALESCE(archived_at, created_at)",
-        };
-        let sql = format!(
-            "SELECT id FROM messages WHERE {} ORDER BY {sort_column} {order}, id {order}",
-            view_where_sql(view)
-        );
-        let mut stmt = conn.prepare(&sql).expect("prepare message id query");
-        stmt.query_map([], |row| row.get::<_, i64>(0))
-            .expect("query message ids")
-            .map(|row| row.expect("read message id"))
-            .collect()
-    }
-
-    fn query_image_rows(conn: &Connection, message_id: i64) -> Vec<(i64, String)> {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, image_filename \
-                 FROM message_images \
-                 WHERE message_id = ? \
-                 ORDER BY id",
-            )
-            .expect("prepare image row query");
-        stmt.query_map([message_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })
-        .expect("query image rows")
-        .map(|row| row.expect("read image row"))
-        .collect()
     }
 }

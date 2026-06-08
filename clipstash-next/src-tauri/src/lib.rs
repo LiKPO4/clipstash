@@ -8,6 +8,8 @@ mod legacy_model;
 mod legacy_paths;
 mod legacy_query;
 mod legacy_schema;
+#[cfg(test)]
+mod legacy_test_support;
 mod legacy_write_audit;
 mod legacy_write_exec;
 mod legacy_write_ops;
