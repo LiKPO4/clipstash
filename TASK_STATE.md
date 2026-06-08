@@ -191,6 +191,10 @@
 - 已在整队列粘贴 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片。
 - 已复核整队列粘贴文本中的额外 `d` 字符来源：改用干净临时目标窗口 `ClipStash Queue Clean Target` 并记录 `KeyPress` 事件后，整队列粘贴文本文件精确读回 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，图片文件读回 `width=1 height=1`，按键日志只有两次 Ctrl+V 控制字符 `code=22`；结论是先前 `d` 字符来自临时验收目标/焦点噪声，不是 ClipStash Next 粘贴逻辑。
 - 已在整队列粘贴复核后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该复核不写 DB、不改图片。
+- 已完成“整队列粘贴成功后归档”真实 UI 验收：确认消息 `#114` 初始 `archived=0 archived_at=None`，启动临时目标窗口 `ClipStash Archive Paste Target`，在导入队列中选择并校验目标窗口，勾选“整队列粘贴成功后归档旧库消息”，点击“粘贴整队列”后页面显示“已粘贴整队列 #114 · 2 项”并显示“已归档旧库消息，备份：C:\Users\Administrator\AppData\Roaming\ClipStash\clipstash.db.bak-20260608-210454”。
+- 带归档整队列粘贴目标文件读回文本包含 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，图片目标读回 `width=1 height=1`；本次临时文本框内容前方出现单个 `w` 字符，按先前干净目标复核结论归类为临时目标/焦点噪声。
+- 已验证归档写入后旧库中 `#114 archived=1 archived_at=2026-06-08 13:04:54`，计数变为 `normal=10 archived=104 total=114`；随后使用受保护手动入口 `manual_sets_local_legacy_archive_state_with_backup` 显式恢复 `#114 archived=false`，生成恢复备份 `clipstash.db.bak-20260608-210532`。
+- 已在恢复后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；直接查询确认 `#114 archived=0 archived_at=None`，图片关联仍为 `clipstash-next-20260608163309521-1896-0.png`。
 
 ## 未完成
 
@@ -229,4 +233,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可在可控临时目标中执行“整队列粘贴成功后归档”UI 验收，并在验收后恢复测试消息状态。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；阶段 3 主流程 UI 验收已覆盖到可选归档，下一步可回到阶段 2 图片/图文新增、编辑/删除等写库 UI 验收，或整理阶段 3 验收清单。
