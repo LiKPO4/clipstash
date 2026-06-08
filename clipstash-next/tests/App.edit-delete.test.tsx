@@ -55,6 +55,7 @@ let failNextImageCopy = false;
 let failNextImportStage = false;
 let failNextImportQueuePreview = false;
 let failNextImportQueueCopy = false;
+let failNextImportQueueItemPaste = false;
 
 const updateResult = {
   backup: {
@@ -228,6 +229,7 @@ describe("edit and delete guarded actions", () => {
     failNextImportStage = false;
     failNextImportQueuePreview = false;
     failNextImportQueueCopy = false;
+    failNextImportQueueItemPaste = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
@@ -272,6 +274,10 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(importQueueCopyResult);
       }
       if (command === "paste_legacy_import_queue_item") {
+        if (failNextImportQueueItemPaste) {
+          failNextImportQueueItemPaste = false;
+          return Promise.reject(new Error("导入队列项粘贴失败"));
+        }
         return Promise.resolve(importQueuePasteResult);
       }
       if (command === "paste_legacy_import_queue") {
@@ -763,6 +769,42 @@ describe("edit and delete guarded actions", () => {
     expect(screen.getByText("3 个字符已发送到 记事本")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("shows a queue item paste error without refreshing legacy data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "查看队列",
+      }),
+    );
+    await screen.findByText("导入队列 #10");
+
+    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
+    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
+    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
+    await waitFor(() => {
+      expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
+    });
+
+    failNextImportQueueItemPaste = true;
+    await user.click(screen.getByRole("button", { name: "粘贴第 1 项" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_item", {
+        messageId: 10,
+        itemIndex: 0,
+        targetHwnd: 1001,
+      });
+    });
+    expect(await screen.findByText("导入队列项粘贴失败")).toBeTruthy();
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+    expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
   });
 
   it("pastes the whole queue only after target window validation", async () => {
