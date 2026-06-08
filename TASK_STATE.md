@@ -133,6 +133,8 @@
 - 已新增前端 mock 交互测试，覆盖未校验目标窗口时粘贴按钮禁用、校验后调用单项粘贴 command，以及粘贴不刷新旧库统计/列表。
 - 已完成阶段 3B 单项受控粘贴真实手动验收：启动临时 WinForms 文本框窗口 `ClipStash Paste Target`，枚举到目标 `hwnd=17894008`，对消息 `id=114` 的 `item_index=0` 执行 `manual_pastes_legacy_import_queue_item_to_external_window` 成功；临时目标文件读回 52 字符，内容预览为 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`；随后 `npm run verify:legacy-readonly` 通过，旧库计数保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 - 已完成阶段 3B 图片项真实手动验收：启动临时 WinForms 图片粘贴窗口 `ClipStash Image Paste Target`，枚举到目标 `hwnd=1248816`，对消息 `id=114` 的 `item_index=1` 执行 `manual_pastes_legacy_import_queue_item_to_external_window` 成功；临时目标文件读回 `image width=1 height=1`；随后 `npm run verify:legacy-readonly` 通过，旧库计数保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
+- 已新增阶段 3C 后端整队列受控粘贴 command `paste_legacy_import_queue(message_id, target_hwnd, delay_ms)`，先只注册 Rust/Tauri 后端；执行前只读预览队列，逐项复用 3B 单项粘贴，每项前重新校验/聚焦目标窗口，默认间隔 250ms，失败时返回已完成项数量、失败索引和错误；当前不接前端、不自动归档、不写 DB。
+- 已新增 ignored 手动验收测试 `manual_pastes_legacy_import_queue_to_external_window`，只有设置 `CLIPSTASH_NEXT_PASTE_QUEUE_ID`、`CLIPSTASH_NEXT_PASTE_QUEUE_HWND` 和可选 `CLIPSTASH_NEXT_PASTE_QUEUE_DELAY_MS` 时才会真实逐项粘贴；当前会话未执行该整队列手动测试。
 
 ## 未完成
 
@@ -142,7 +144,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入流程中的整队列 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口；3B 文字项和图片项真实粘贴验收均已通过。
+- 阶段 3 尚未实现导入流程中的整队列前端触发入口、整队列真实手动验收、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口、整队列受控粘贴后端 command；3B 文字项和图片项真实粘贴验收均已通过。
 
 ## 阻塞
 

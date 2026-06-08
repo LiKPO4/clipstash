@@ -103,6 +103,15 @@ fn paste_legacy_import_queue_item(
 }
 
 #[tauri::command]
+fn paste_legacy_import_queue(
+    message_id: i64,
+    target_hwnd: isize,
+    delay_ms: Option<u64>,
+) -> Result<import_executor::LegacyImportQueuePasteResult, String> {
+    import_executor::paste_legacy_import_queue(message_id, target_hwnd, delay_ms)
+}
+
+#[tauri::command]
 fn stage_legacy_message_import_to_clipboard(
     message_id: i64,
 ) -> Result<legacy_data::LegacyImportStageResult, String> {
@@ -141,6 +150,7 @@ pub fn run() {
             get_legacy_stats,
             list_external_window_targets,
             list_legacy_messages,
+            paste_legacy_import_queue,
             paste_legacy_import_queue_item,
             preview_legacy_message_import_queue,
             replace_legacy_message_images,

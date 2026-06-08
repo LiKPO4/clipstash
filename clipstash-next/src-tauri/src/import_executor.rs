@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::time::Duration;
 
 use crate::{keyboard_input, legacy_data, window_targets};
 
@@ -11,6 +12,17 @@ pub struct LegacyImportPasteResult {
     pub image_filename: Option<String>,
     pub target: window_targets::ExternalWindowTarget,
     pub sent_ctrl_v: bool,
+}
+
+#[derive(Serialize)]
+pub struct LegacyImportQueuePasteResult {
+    pub message_id: i64,
+    pub target: window_targets::ExternalWindowTarget,
+    pub requested_delay_ms: u64,
+    pub completed_count: usize,
+    pub failed_item_index: Option<usize>,
+    pub failure: Option<String>,
+    pub items: Vec<LegacyImportPasteResult>,
 }
 
 pub fn paste_legacy_import_queue_item(
@@ -32,6 +44,67 @@ pub fn paste_legacy_import_queue_item(
         image_filename: copied.image_filename,
         target: focused.target,
         sent_ctrl_v: true,
+    })
+}
+
+pub fn paste_legacy_import_queue(
+    message_id: i64,
+    target_hwnd: isize,
+    delay_ms: Option<u64>,
+) -> Result<LegacyImportQueuePasteResult, String> {
+    let preview = legacy_data::preview_legacy_message_import_queue(message_id)?;
+    if preview.item_count == 0 {
+        return Err(format!("粘贴导入队列失败，队列为空：#{message_id}"));
+    }
+
+    let requested_delay_ms = delay_ms.unwrap_or(250);
+    let delay = Duration::from_millis(requested_delay_ms);
+    let mut items = Vec::with_capacity(preview.item_count);
+    let mut last_target = None;
+
+    for item_index in 0..preview.item_count {
+        if item_index > 0 && !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
+
+        match paste_legacy_import_queue_item(message_id, item_index, target_hwnd) {
+            Ok(result) => {
+                last_target = Some(window_targets::ExternalWindowTarget {
+                    hwnd: result.target.hwnd,
+                    process_id: result.target.process_id,
+                    title: result.target.title.clone(),
+                });
+                items.push(result);
+            }
+            Err(err) => {
+                let target = last_target.unwrap_or_else(|| window_targets::ExternalWindowTarget {
+                    hwnd: target_hwnd,
+                    process_id: 0,
+                    title: String::new(),
+                });
+                return Ok(LegacyImportQueuePasteResult {
+                    message_id,
+                    target,
+                    requested_delay_ms,
+                    completed_count: items.len(),
+                    failed_item_index: Some(item_index),
+                    failure: Some(err),
+                    items,
+                });
+            }
+        }
+    }
+
+    let target =
+        last_target.ok_or_else(|| format!("粘贴导入队列失败，未执行任何项：#{message_id}"))?;
+    Ok(LegacyImportQueuePasteResult {
+        message_id,
+        target,
+        requested_delay_ms,
+        completed_count: items.len(),
+        failed_item_index: None,
+        failure: None,
+        items,
     })
 }
 
@@ -67,6 +140,43 @@ mod tests {
             result.message_id,
             result.item_index,
             result.staged_kind,
+            result.target.hwnd,
+            result.target.title
+        );
+    }
+
+    #[test]
+    #[ignore = "copies each queue item, focuses a local desktop window, and sends Ctrl+V; set CLIPSTASH_NEXT_PASTE_QUEUE_ID, CLIPSTASH_NEXT_PASTE_QUEUE_HWND, and optionally CLIPSTASH_NEXT_PASTE_QUEUE_DELAY_MS"]
+    fn manual_pastes_legacy_import_queue_to_external_window() {
+        let message_id = std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_ID")
+            .expect("set CLIPSTASH_NEXT_PASTE_QUEUE_ID")
+            .parse::<i64>()
+            .expect("CLIPSTASH_NEXT_PASTE_QUEUE_ID must be an integer");
+        let target_hwnd = std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_HWND")
+            .expect("set CLIPSTASH_NEXT_PASTE_QUEUE_HWND")
+            .parse::<isize>()
+            .expect("CLIPSTASH_NEXT_PASTE_QUEUE_HWND must be an integer");
+        let delay_ms = std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_DELAY_MS")
+            .ok()
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .expect("CLIPSTASH_NEXT_PASTE_QUEUE_DELAY_MS must be an integer")
+            });
+
+        let result = paste_legacy_import_queue(message_id, target_hwnd, delay_ms)
+            .expect("paste legacy import queue");
+
+        assert_eq!(result.message_id, message_id);
+        assert_eq!(result.target.hwnd, target_hwnd);
+        assert_eq!(result.failed_item_index, None);
+        assert_eq!(result.failure, None);
+        assert_eq!(result.completed_count, result.items.len());
+        eprintln!(
+            "legacy-import-queue-paste-ok message_id={} completed_count={} delay_ms={} target_hwnd={} target_title={}",
+            result.message_id,
+            result.completed_count,
+            result.requested_delay_ms,
             result.target.hwnd,
             result.target.title
         );

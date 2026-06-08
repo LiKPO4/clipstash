@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ExternalWindowTarget {
     pub hwnd: isize,
     pub process_id: u32,
