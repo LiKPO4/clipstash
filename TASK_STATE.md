@@ -195,11 +195,15 @@
 - 带归档整队列粘贴目标文件读回文本包含 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，图片目标读回 `width=1 height=1`；本次临时文本框内容前方出现单个 `w` 字符，按先前干净目标复核结论归类为临时目标/焦点噪声。
 - 已验证归档写入后旧库中 `#114 archived=1 archived_at=2026-06-08 13:04:54`，计数变为 `normal=10 archived=104 total=114`；随后使用受保护手动入口 `manual_sets_local_legacy_archive_state_with_backup` 显式恢复 `#114 archived=false`，生成恢复备份 `clipstash.db.bak-20260608-210532`。
 - 已在恢复后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；直接查询确认 `#114 archived=0 archived_at=None`，图片关联仍为 `clipstash-next-20260608163309521-1896-0.png`。
+- 已完成阶段 2 纯图片新增真实 UI 验收：基线旧库 `normal=11 archived=103 total=114 max_id=114 joined_images=107`，通过 Tauri UI 展开“+ 新建”，选择临时 `clipstash-ui-create-image.png`，勾选写入确认后提交，页面显示“已写入 #115 / 2026-06-08 13:09:45 · 图片 1”，并显示备份 `clipstash.db.bak-20260608-210945`。
+- 已用 SQLite 验证新增图片消息兼容旧结构：`messages.id=115 text_content=None archived=0`，`message_images` 关联图片 `clipstash-next-20260608210945739-23556-0.png`，旧图片目录中文件存在且大小 `70` 字节。
+- 已通过 Tauri UI 删除测试消息 `#115` 完成清理：删除弹层勾选确认后页面显示“已删除 #115”，并显示删除备份 `clipstash.db.bak-20260608-211133`；随后 SQLite 验证 `messages` 和 `message_images` 中 `#115` 均为 0 行，图片文件已从旧 `images/` 目录移除。
+- 已在图片新增/删除 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`，`max_id=114`。
 
 ## 未完成
 
 - 尚未实现复制、导入等后续阶段功能。
-- 阶段 2 尚未对前端图片/图文入口执行真实点击写入验收；当前 mock 测试不写真实旧库。
+- 阶段 2 已完成前端纯图片新增入口真实点击写入验收并通过 UI 删除清理；图文新增入口尚未执行真实点击写入验收。
 - 阶段 2 尚未完成图片/图文入口的浏览器截图验收；本轮尝试启动 Vite dev server 做前端真实 UI 验收，日志曾显示 `http://127.0.0.1:1420/` ready，但随后端口无监听；内置浏览器访问 `127.0.0.1:1420` 和 `localhost:1420` 均返回 `net::ERR_BLOCKED_BY_CLIENT`，未获得可用浏览器截图证据。
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
@@ -233,4 +237,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；阶段 3 主流程 UI 验收已覆盖到可选归档，下一步可回到阶段 2 图片/图文新增、编辑/删除等写库 UI 验收，或整理阶段 3 验收清单。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做阶段 2 图文新增 UI 验收并清理测试消息，或做编辑/删除消息 UI 验收。
