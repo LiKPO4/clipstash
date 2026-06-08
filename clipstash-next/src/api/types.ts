@@ -9,6 +9,23 @@ export type LegacyStats = {
   total_count: number;
 };
 
+export type LegacyBackupFileInfo = {
+  name: string;
+  path: string;
+  bytes: number;
+  modified_at: string | null;
+};
+
+export type LegacySafetyReport = {
+  stats: LegacyStats;
+  joined_image_count: number;
+  orphan_image_count: number;
+  db_backup_count: number;
+  image_backup_count: number;
+  recent_db_backups: LegacyBackupFileInfo[];
+  recent_image_backups: LegacyBackupFileInfo[];
+};
+
 export type ExternalWindowTarget = {
   hwnd: number;
   process_id: number;

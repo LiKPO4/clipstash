@@ -1,5 +1,6 @@
 import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { openPath } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
   copyLegacyMessageImportQueueItemToClipboard,
@@ -10,6 +11,7 @@ import {
   createLegacyTextMessage,
   deleteLegacyMessage,
   getLegacyStats,
+  getLegacySafetyReport,
   listExternalWindowTargets,
   listLegacyMessages,
   pasteLegacyImportQueue,
@@ -39,6 +41,7 @@ import type {
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyReplaceImagesResult,
+  LegacySafetyReport,
   LegacyWriteAudit,
   MessageView,
   SortOrder,
@@ -152,6 +155,10 @@ function App() {
   const [targetWindowValidation, setTargetWindowValidation] =
     useState<ExternalWindowValidation | null>(null);
   const [showComposer, setShowComposer] = useState(false);
+  const [safetyReport, setSafetyReport] = useState<LegacySafetyReport | null>(null);
+  const [loadingSafetyReport, setLoadingSafetyReport] = useState(false);
+  const [safetyReportError, setSafetyReportError] = useState<string | null>(null);
+  const [openPathError, setOpenPathError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -227,6 +234,30 @@ function App() {
     const [nextStats, nextPage] = await loadLegacyData(view, sort);
     setStats(nextStats);
     setPage(nextPage);
+  }
+
+  async function loadSafetyReport() {
+    setLoadingSafetyReport(true);
+    setSafetyReportError(null);
+
+    try {
+      const report = await getLegacySafetyReport();
+      setSafetyReport(report);
+      setStats(report.stats);
+    } catch (err) {
+      setSafetyReportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingSafetyReport(false);
+    }
+  }
+
+  async function openLocalPath(path: string) {
+    setOpenPathError(null);
+    try {
+      await openPath(path);
+    } catch (err) {
+      setOpenPathError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function createTextMessage(event: FormEvent<HTMLFormElement>) {
@@ -695,12 +726,40 @@ function App() {
             </article>
           </section>
 
-          <details className="dev-details">
-            <summary>旧数据路径</summary>
-            <section className="paths" aria-label="旧数据路径">
+          <details className="dev-details safety-details" onToggle={(event) => {
+            if (event.currentTarget.open && !safetyReport && !loadingSafetyReport) {
+              void loadSafetyReport();
+            }
+          }}>
+            <summary>数据安全</summary>
+            <section className="paths" aria-label="旧数据安全面板">
               <PathRow label="数据目录" value={stats.data_dir} ok={stats.db_exists} />
               <PathRow label="数据库" value={stats.db_path} ok={stats.db_exists} />
               <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
+
+              <div className="safety-actions">
+                <button type="button" onClick={() => void loadSafetyReport()}>
+                  {loadingSafetyReport ? "审计中..." : "刷新审计"}
+                </button>
+                <button type="button" onClick={() => void openLocalPath(stats.data_dir)}>
+                  打开数据目录
+                </button>
+                <button type="button" onClick={() => void openLocalPath(stats.images_dir)}>
+                  打开图片目录
+                </button>
+              </div>
+
+              {safetyReportError && (
+                <p className="inline-error">安全审计失败：{safetyReportError}</p>
+              )}
+              {openPathError && <p className="inline-error">打开目录失败：{openPathError}</p>}
+
+              {safetyReport && (
+                <SafetyReportPanel
+                  report={safetyReport}
+                  onOpenPath={(path) => void openLocalPath(path)}
+                />
+              )}
             </section>
           </details>
 
@@ -1300,6 +1359,80 @@ function LegacyWriteAuditRows({ audit }: { audit: LegacyWriteAudit }) {
         <PathRow label="图备份" value={audit.image_backup_dir} ok={audit.image_backup_dir.length > 0} />
       )}
     </>
+  );
+}
+
+function SafetyReportPanel({
+  report,
+  onOpenPath,
+}: {
+  report: LegacySafetyReport;
+  onOpenPath: (path: string) => void;
+}) {
+  const latestBackupPath =
+    report.recent_db_backups[0]?.path ?? report.recent_image_backups[0]?.path ?? null;
+
+  return (
+    <section className="safety-panel" aria-label="数据安全审计结果">
+      <div className="safety-grid">
+        <SafetyMetric label="图片关联" value={report.joined_image_count} />
+        <SafetyMetric label="孤立图片" value={report.orphan_image_count} danger={report.orphan_image_count > 0} />
+        <SafetyMetric label="DB备份" value={report.db_backup_count} />
+        <SafetyMetric label="图备份" value={report.image_backup_count} />
+      </div>
+
+      {latestBackupPath && (
+        <button type="button" className="open-backup-action" onClick={() => onOpenPath(latestBackupPath)}>
+          打开最近备份
+        </button>
+      )}
+
+      <BackupList title="最近 DB 备份" backups={report.recent_db_backups} onOpenPath={onOpenPath} />
+      <BackupList title="最近图片备份" backups={report.recent_image_backups} onOpenPath={onOpenPath} />
+    </section>
+  );
+}
+
+function SafetyMetric({
+  label,
+  value,
+  danger = false,
+}: {
+  label: string;
+  value: number;
+  danger?: boolean;
+}) {
+  return (
+    <article className={danger ? "safety-metric danger" : "safety-metric"}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function BackupList({
+  title,
+  backups,
+  onOpenPath,
+}: {
+  title: string;
+  backups: { name: string; path: string; bytes: number; modified_at: string | null }[];
+  onOpenPath: (path: string) => void;
+}) {
+  return (
+    <section className="backup-list">
+      <h3>{title}</h3>
+      {backups.length === 0 ? (
+        <p>暂无备份</p>
+      ) : (
+        backups.map((backup) => (
+          <button type="button" key={backup.path} onClick={() => onOpenPath(backup.path)}>
+            <span>{backup.name}</span>
+            <small>{formatBytes(backup.bytes)}</small>
+          </button>
+        ))
+      )}
+    </section>
   );
 }
 

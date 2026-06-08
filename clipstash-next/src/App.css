@@ -241,6 +241,110 @@ h1 {
   padding: 0 10px 10px;
 }
 
+.safety-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.safety-actions button,
+.open-backup-action,
+.backup-list button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: #405675;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.inline-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.safety-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.safety-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.safety-metric {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbff;
+}
+
+.safety-metric span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.safety-metric strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.safety-metric.danger strong {
+  color: var(--danger);
+}
+
+.open-backup-action {
+  justify-self: start;
+}
+
+.backup-list {
+  display: grid;
+  gap: 6px;
+}
+
+.backup-list h3 {
+  margin: 0;
+  color: #405675;
+  font-size: 12px;
+}
+
+.backup-list p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.backup-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+}
+
+.backup-list button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-list button small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .path-row {
   display: grid;
   grid-template-columns: 10px 58px minmax(0, 1fr);

@@ -222,6 +222,9 @@
 - 已将只读统计、消息列表、导入队列预览和本机旧库只读一致性测试从 `legacy_data.rs` 拆到 `legacy_read_tests.rs`；`npm run verify:legacy-readonly` 仍能按测试名执行迁移后的 ignored 测试。
 - 本轮只读验证发现真实旧库外部状态已变化：当前为 `normal=9 archived=106 total=115 max_id=119 joined_images=109 orphan_images=0`，其中 `#112/#113/#114` 已处于归档状态；本轮代码未执行写库命令，仅做只读查询确认。
 - 已新增功能优先 TODO：`clipstash-next/migration-notes/functional-todolist.md`，后续先按数据安全面板、日常主流程、设置页、托盘、快捷键、更新检查、发布替换推进；模块整理暂缓。
+- 已实现 P0-1 数据安全面板基础版：新增只读 `get_legacy_safety_report`，前端“数据安全”折叠区可显示旧库路径、图片关联数、孤立图片数、DB/图片备份数量和最近备份列表，并可打开数据目录、图片目录和最近备份。
+- 已将“禁止空工具调用、占位工具调用或无目的工具调用”写入 `AGENTS.md`；本轮仍发生过误触，后续必须按该规则执行。
+- 本轮只读验证发现真实旧库外部状态继续变化：当前为 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`；本轮功能代码未执行写库命令，仅做只读审计。
 
 ## 未完成
 
@@ -234,6 +237,7 @@
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
 - 阶段 4A 已开始：Rust 旧数据访问层已拆出模型、备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装、底层写入执行、剪贴板、导入队列、测试辅助和只读测试模块。
 - 功能优先 TODO 已建立，后续暂缓纯模块整理，优先补齐“可用版闭环”。
+- P0-1 数据安全面板基础能力已落地；仍缺“基线变化 UI 提示”和真实 UI 截图/点击验收。
 
 ## 阻塞
 
@@ -246,6 +250,7 @@
 - `clipstash-next/src-tauri/src/legacy_clipboard.rs`
 - `clipstash-next/src-tauri/src/legacy_test_support.rs`
 - `clipstash-next/src-tauri/src/legacy_read_tests.rs`
+- `clipstash-next/src-tauri/src/legacy_safety.rs`
 - `clipstash-next/src-tauri/src/legacy_write_exec.rs`
 - `clipstash-next/src-tauri/src/import_executor.rs`
 - `clipstash-next/src-tauri/src/keyboard_input.rs`
@@ -267,4 +272,4 @@
 
 ## 下一步
 
-- 按 `clipstash-next/migration-notes/functional-todolist.md` 推进 P0-1：数据安全面板。
+- 继续 P0-1：补“旧库基线变化”UI 提示，并做一次真实 Tauri UI 验收数据安全面板。

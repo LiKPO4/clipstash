@@ -17,6 +17,7 @@ import type {
   LegacyImportStageResult,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
+  LegacySafetyReport,
   LegacyStats,
   LegacyUpdateMessageResult,
   MessageView,
@@ -25,6 +26,10 @@ import type {
 
 export function getLegacyStats() {
   return invoke<LegacyStats>("get_legacy_stats");
+}
+
+export function getLegacySafetyReport() {
+  return invoke<LegacySafetyReport>("get_legacy_safety_report");
 }
 
 export function listExternalWindowTargets() {

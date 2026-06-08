@@ -9,6 +9,7 @@ mod legacy_paths;
 mod legacy_query;
 #[cfg(test)]
 mod legacy_read_tests;
+mod legacy_safety;
 mod legacy_schema;
 #[cfg(test)]
 mod legacy_test_support;
@@ -22,6 +23,11 @@ mod window_targets;
 #[tauri::command]
 fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
     legacy_data::read_legacy_stats()
+}
+
+#[tauri::command]
+fn get_legacy_safety_report() -> Result<legacy_safety::LegacySafetyReport, String> {
+    legacy_safety::read_legacy_safety_report()
 }
 
 #[tauri::command]
@@ -187,6 +193,7 @@ pub fn run() {
             copy_legacy_message_import_queue_item_to_clipboard,
             delete_legacy_message,
             get_legacy_stats,
+            get_legacy_safety_report,
             list_external_window_targets,
             list_legacy_messages,
             paste_legacy_import_queue,
