@@ -216,6 +216,7 @@
 - 已切换到 Tauri UI “已归档”视图并点击 `#114` 的“恢复”，页面显示“已恢复 #114”，普通计数回到 `11`、已归档计数回到 `103`，恢复备份为 `clipstash.db.bak-20260608-214231`。
 - 已在归档/恢复 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`，`max_id=114`，`#114 archived=0 archived_at=None`。
 - 已将底层旧库写入执行函数从 `legacy_data.rs` 拆到 `legacy_write_exec.rs`，包括新增文字、图片、图文、编辑文字、替换图片、删除消息和归档/恢复；`legacy_write_ops.rs` 继续负责备份包装和审计，外部 Tauri command 返回类型保持不变。
+- 已将系统剪贴板和导入队列逻辑从 `legacy_data.rs` 拆到 `legacy_clipboard.rs`，包括复制图片、复制消息文字、导入 staging、队列预览和队列项复制；`legacy_data.rs` 保持对外 command 门面和类型 re-export。
 
 ## 未完成
 
@@ -226,7 +227,7 @@
 - 阶段 3 文字复制和图片复制真实应用剪贴板 UI 验收已通过。
 - 用户提供的 UI 参考图已保存为 `clipstash-next/design-reference/clipstash-ui-reference.png`；同目录 `tauri-ui-smoke.png` 保留当前 Tauri UI 冒烟截图。
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
-- 阶段 4A 已开始：Rust 旧数据访问层已拆出备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装和底层写入执行模块。
+- 阶段 4A 已开始：Rust 旧数据访问层已拆出备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装、底层写入执行、剪贴板和导入队列模块。
 
 ## 阻塞
 
@@ -235,6 +236,7 @@
 ## 关键文件
 
 - `clipstash-next/src-tauri/src/legacy_data.rs`
+- `clipstash-next/src-tauri/src/legacy_clipboard.rs`
 - `clipstash-next/src-tauri/src/legacy_write_exec.rs`
 - `clipstash-next/src-tauri/src/import_executor.rs`
 - `clipstash-next/src-tauri/src/keyboard_input.rs`
@@ -255,4 +257,4 @@
 
 ## 下一步
 
-- 继续阶段 4A：把剪贴板/导入队列相关逻辑从 `legacy_data.rs` 进一步拆到独立模块，保持旧库只读/写入基线验证不变。
+- 继续阶段 4A：收敛 `legacy_data.rs` 剩余门面和测试职责，或把测试夹具拆到独立测试辅助模块，保持旧库只读/写入基线验证不变。

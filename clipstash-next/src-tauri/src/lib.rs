@@ -1,6 +1,7 @@
 mod import_executor;
 mod keyboard_input;
 mod legacy_backup;
+mod legacy_clipboard;
 mod legacy_data;
 mod legacy_image_files;
 mod legacy_paths;
