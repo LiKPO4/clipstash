@@ -37,7 +37,7 @@ pub enum SortOrder {
     Oldest,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct LegacyMessageImage {
     pub id: i64,
     pub filename: String,
@@ -129,6 +129,24 @@ pub struct LegacyImportStageResult {
     pub copied_image: Option<LegacyCopyImageResult>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LegacyImportQueueItem {
+    pub kind: String,
+    pub text: Option<String>,
+    pub text_length: usize,
+    pub image: Option<LegacyMessageImage>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LegacyImportQueuePreview {
+    pub message_id: i64,
+    pub item_count: usize,
+    pub text_length: usize,
+    pub image_count: usize,
+    pub skipped_missing_image_count: usize,
+    pub items: Vec<LegacyImportQueueItem>,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -212,6 +230,13 @@ pub fn stage_legacy_message_import_to_clipboard(
 ) -> Result<LegacyImportStageResult, String> {
     let data_dir = legacy_data_dir()?;
     stage_legacy_message_import_to_clipboard_from_dir(data_dir, message_id)
+}
+
+pub fn preview_legacy_message_import_queue(
+    message_id: i64,
+) -> Result<LegacyImportQueuePreview, String> {
+    let data_dir = legacy_data_dir()?;
+    preview_legacy_message_import_queue_from_dir(data_dir, message_id)
 }
 
 pub fn list_legacy_messages(
@@ -1062,6 +1087,67 @@ fn stage_legacy_message_import_to_clipboard_from_dir(
     ))
 }
 
+fn preview_legacy_message_import_queue_from_dir(
+    data_dir: PathBuf,
+    message_id: i64,
+) -> Result<LegacyImportQueuePreview, String> {
+    let db_path = data_dir.join("clipstash.db");
+    let message = read_message_for_update_precheck(&db_path, message_id)?;
+    import_queue_preview_from_message(message)
+}
+
+fn import_queue_preview_from_message(
+    message: LegacyMessage,
+) -> Result<LegacyImportQueuePreview, String> {
+    let text = message
+        .text_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    let text_length = text.map(|value| value.chars().count()).unwrap_or(0);
+    let existing_images: Vec<LegacyMessageImage> = message
+        .images
+        .iter()
+        .filter(|image| image.exists)
+        .cloned()
+        .collect();
+    let skipped_missing_image_count = message.images.len().saturating_sub(existing_images.len());
+
+    let mut items = Vec::new();
+    if let Some(text) = text {
+        items.push(LegacyImportQueueItem {
+            kind: "text".to_string(),
+            text: Some(text.to_string()),
+            text_length,
+            image: None,
+        });
+    }
+    for image in existing_images.iter().cloned() {
+        items.push(LegacyImportQueueItem {
+            kind: "image".to_string(),
+            text: None,
+            text_length: 0,
+            image: Some(image),
+        });
+    }
+
+    if items.is_empty() {
+        return Err(format!(
+            "导入消息失败，消息为空或图片文件缺失：#{}",
+            message.id
+        ));
+    }
+
+    Ok(LegacyImportQueuePreview {
+        message_id: message.id,
+        item_count: items.len(),
+        text_length,
+        image_count: existing_images.len(),
+        skipped_missing_image_count,
+        items,
+    })
+}
+
 fn resolve_legacy_image_path(data_dir: &Path, filename: &str) -> Result<PathBuf, String> {
     let trimmed = filename.trim();
     if trimmed.is_empty() {
@@ -1302,6 +1388,79 @@ mod tests {
         assert_eq!(archived_page.total_count, 1);
         assert_eq!(archived_page.messages[0].id, 3);
         assert!(archived_page.messages[0].archived);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn previews_import_queue_in_legacy_order_without_writing() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-import-queue-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+        fs::write(data_dir.join("images").join("second.png"), tiny_png_bytes())
+            .expect("seed second image");
+        fs::write(data_dir.join("images").join("first.png"), tiny_png_bytes())
+            .expect("seed first image");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (id, text_content, archived) VALUES
+                (1, '  hello queue  ', 0),
+                (2, NULL, 0);
+            INSERT INTO message_images (id, message_id, image_filename) VALUES
+                (21, 1, 'second.png'),
+                (20, 1, 'first.png'),
+                (22, 1, 'missing.png');
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let preview = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 1)
+            .expect("preview import queue");
+
+        assert_eq!(preview.message_id, 1);
+        assert_eq!(preview.item_count, 3);
+        assert_eq!(preview.text_length, 11);
+        assert_eq!(preview.image_count, 2);
+        assert_eq!(preview.skipped_missing_image_count, 1);
+        assert_eq!(preview.items[0].kind, "text");
+        assert_eq!(preview.items[0].text.as_deref(), Some("hello queue"));
+        assert_eq!(
+            preview.items[1]
+                .image
+                .as_ref()
+                .map(|image| image.filename.as_str()),
+            Some("first.png")
+        );
+        assert_eq!(
+            preview.items[2]
+                .image
+                .as_ref()
+                .map(|image| image.filename.as_str()),
+            Some("second.png")
+        );
+
+        let empty = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 2)
+            .expect_err("empty message should fail preview");
+        assert!(empty.contains("消息为空或图片文件缺失"));
 
         fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
     }

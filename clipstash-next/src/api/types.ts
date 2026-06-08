@@ -86,3 +86,19 @@ export type LegacyImportStageResult = {
   first_image_filename: string | null;
   copied_image: LegacyCopyImageResult | null;
 };
+
+export type LegacyImportQueueItem = {
+  kind: "text" | "image";
+  text: string | null;
+  text_length: number;
+  image: LegacyMessageImage | null;
+};
+
+export type LegacyImportQueuePreview = {
+  message_id: number;
+  item_count: number;
+  text_length: number;
+  image_count: number;
+  skipped_missing_image_count: number;
+  items: LegacyImportQueueItem[];
+};

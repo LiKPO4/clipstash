@@ -78,6 +78,13 @@ fn stage_legacy_message_import_to_clipboard(
 }
 
 #[tauri::command]
+fn preview_legacy_message_import_queue(
+    message_id: i64,
+) -> Result<legacy_data::LegacyImportQueuePreview, String> {
+    legacy_data::preview_legacy_message_import_queue(message_id)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -100,6 +107,7 @@ pub fn run() {
             delete_legacy_message,
             get_legacy_stats,
             list_legacy_messages,
+            preview_legacy_message_import_queue,
             replace_legacy_message_images,
             set_legacy_message_archived,
             stage_legacy_message_import_to_clipboard,

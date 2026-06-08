@@ -6,6 +6,7 @@ import type {
   LegacyCreateTextMessageResult,
   LegacyDeleteMessageResult,
   LegacyCopyImageResult,
+  LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
@@ -92,6 +93,12 @@ export function copyLegacyImageToClipboard(filename: string) {
 
 export function stageLegacyMessageImportToClipboard(messageId: number) {
   return invoke<LegacyImportStageResult>("stage_legacy_message_import_to_clipboard", {
+    messageId,
+  });
+}
+
+export function previewLegacyMessageImportQueue(messageId: number) {
+  return invoke<LegacyImportQueuePreview>("preview_legacy_message_import_queue", {
     messageId,
   });
 }
