@@ -3,9 +3,12 @@ use crate::legacy_backup::create_legacy_db_backup_for_path;
 #[cfg(test)]
 use crate::legacy_backup::next_backup_path;
 pub use crate::legacy_backup::{LegacyDbBackup, LegacyImageFilesBackup};
+use crate::legacy_image_files::{
+    next_image_filename, remove_old_message_image_files, resolve_legacy_image_path, save_image_file,
+};
 use crate::legacy_paths::{legacy_data_dir, path_to_string};
 use arboard::{Clipboard, ImageData};
-use chrono::{Local, Utc};
+use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -951,35 +954,6 @@ fn read_message_for_update_precheck(
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
-fn remove_old_message_image_files(images: &[LegacyMessageImage]) {
-    for image in images {
-        let _ = fs::remove_file(&image.path);
-    }
-}
-
-fn save_image_file(path: &Path, image_data: &[u8]) -> Result<(), String> {
-    fs::write(path, image_data).map_err(|err| format!("保存图片文件失败：{err}"))
-}
-
-fn next_image_filename(images_dir: &Path, index: usize) -> String {
-    let timestamp = Local::now().format("%Y%m%d%H%M%S%3f");
-    let process_id = std::process::id();
-
-    for attempt in 0.. {
-        let suffix = if attempt == 0 {
-            String::new()
-        } else {
-            format!("-{attempt}")
-        };
-        let filename = format!("clipstash-next-{timestamp}-{process_id}-{index}{suffix}.png");
-        if !images_dir.join(&filename).exists() {
-            return filename;
-        }
-    }
-
-    unreachable!("image filename suffix search is unbounded");
-}
-
 fn ensure_legacy_schema(conn: &Connection) -> Result<(), String> {
     let messages_exists: i64 = conn
         .query_row(
@@ -1215,27 +1189,6 @@ fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
     }
 
     Err(format!("复制导入队列项失败，未知队列项类型：{}", item.kind))
-}
-
-fn resolve_legacy_image_path(data_dir: &Path, filename: &str) -> Result<PathBuf, String> {
-    let trimmed = filename.trim();
-    if trimmed.is_empty() {
-        return Err("复制图片失败，图片文件名不能为空".to_string());
-    }
-    let candidate_name = Path::new(trimmed);
-    if candidate_name.components().count() != 1 {
-        return Err(format!("复制图片失败，非法图片文件名：{trimmed}"));
-    }
-
-    let image_path = data_dir.join("images").join(trimmed);
-    if !image_path.is_file() {
-        return Err(format!(
-            "复制图片失败，图片文件不存在：{}",
-            image_path.display()
-        ));
-    }
-
-    Ok(image_path)
 }
 
 #[allow(dead_code)]
