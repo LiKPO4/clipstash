@@ -25,6 +25,14 @@ pub struct LegacyImportQueuePasteResult {
     pub items: Vec<LegacyImportPasteResult>,
 }
 
+#[derive(Serialize)]
+pub struct LegacyImportQueuePasteArchiveResult {
+    pub paste: LegacyImportQueuePasteResult,
+    pub archive_requested: bool,
+    pub archive_result: Option<legacy_data::LegacyArchiveMessageResult>,
+    pub archive_error: Option<String>,
+}
+
 pub fn paste_legacy_import_queue_item(
     message_id: i64,
     item_index: usize,
@@ -108,6 +116,38 @@ pub fn paste_legacy_import_queue(
     })
 }
 
+pub fn paste_legacy_import_queue_with_optional_archive(
+    message_id: i64,
+    target_hwnd: isize,
+    delay_ms: Option<u64>,
+    archive_after_success: bool,
+) -> Result<LegacyImportQueuePasteArchiveResult, String> {
+    let paste = paste_legacy_import_queue(message_id, target_hwnd, delay_ms)?;
+    if !archive_after_success || paste.failure.is_some() {
+        return Ok(LegacyImportQueuePasteArchiveResult {
+            paste,
+            archive_requested: archive_after_success,
+            archive_result: None,
+            archive_error: None,
+        });
+    }
+
+    match legacy_data::set_legacy_message_archived(message_id, true) {
+        Ok(archive_result) => Ok(LegacyImportQueuePasteArchiveResult {
+            paste,
+            archive_requested: true,
+            archive_result: Some(archive_result),
+            archive_error: None,
+        }),
+        Err(err) => Ok(LegacyImportQueuePasteArchiveResult {
+            paste,
+            archive_requested: true,
+            archive_result: None,
+            archive_error: Some(err),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +219,54 @@ mod tests {
             result.requested_delay_ms,
             result.target.hwnd,
             result.target.title
+        );
+    }
+
+    #[test]
+    #[ignore = "pastes the full queue and optionally archives after success; set CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_ID, CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_HWND, CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_AFTER_SUCCESS, and optionally CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_DELAY_MS"]
+    fn manual_pastes_legacy_import_queue_with_optional_archive() {
+        let message_id = std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_ID")
+            .expect("set CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_ID")
+            .parse::<i64>()
+            .expect("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_ID must be an integer");
+        let target_hwnd = std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_HWND")
+            .expect("set CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_HWND")
+            .parse::<isize>()
+            .expect("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_HWND must be an integer");
+        let archive_after_success =
+            std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_AFTER_SUCCESS")
+                .expect("set CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_AFTER_SUCCESS")
+                == "1";
+        let delay_ms = std::env::var("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_DELAY_MS")
+            .ok()
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .expect("CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_DELAY_MS must be an integer")
+            });
+
+        let result = paste_legacy_import_queue_with_optional_archive(
+            message_id,
+            target_hwnd,
+            delay_ms,
+            archive_after_success,
+        )
+        .expect("paste legacy import queue with optional archive");
+
+        assert_eq!(result.paste.message_id, message_id);
+        assert_eq!(result.archive_requested, archive_after_success);
+        if archive_after_success {
+            assert!(result.archive_error.is_none());
+            assert!(result.archive_result.is_some());
+        } else {
+            assert!(result.archive_result.is_none());
+        }
+        eprintln!(
+            "legacy-import-queue-paste-archive-ok message_id={} completed_count={} archive_requested={} archived={}",
+            result.paste.message_id,
+            result.paste.completed_count,
+            result.archive_requested,
+            result.archive_result.is_some()
         );
     }
 }
