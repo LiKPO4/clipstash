@@ -2664,6 +2664,24 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "writes system clipboard; set CLIPSTASH_NEXT_COPY_LEGACY_IMAGE_FILENAME"]
+    fn manual_copies_local_legacy_image_to_system_clipboard() {
+        let filename = std::env::var("CLIPSTASH_NEXT_COPY_LEGACY_IMAGE_FILENAME")
+            .expect("set CLIPSTASH_NEXT_COPY_LEGACY_IMAGE_FILENAME to an existing image filename");
+
+        let result = copy_legacy_image_to_clipboard(filename).expect("copy local legacy image");
+
+        assert!(PathBuf::from(&result.path).is_file());
+        assert!(result.width > 0);
+        assert!(result.height > 0);
+
+        eprintln!(
+            "legacy-image-copy-ok filename={} width={} height={} path={}",
+            result.filename, result.width, result.height, result.path
+        );
+    }
+
     fn tiny_png_bytes() -> Vec<u8> {
         vec![
             137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
