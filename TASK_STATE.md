@@ -162,6 +162,7 @@
 - 已新增前端 mock 交互测试，覆盖刷新目标窗口 command 失败时显示错误，并确认不触发窗口校验、粘贴或旧库刷新；当前测试不写真实旧库。
 - 已新增前端 mock 交互测试，覆盖目标窗口校验 command 失败时显示错误，并确认粘贴按钮仍不可用、不触发粘贴或旧库刷新；当前测试不写真实旧库。
 - 已在扩展目标窗口失败分支测试后补跑非写库验证：`npm run build` 通过，`npm run verify:legacy-readonly` 通过，旧库审计结果保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
+- 已新增阶段 2/3 真实 UI 验收清单文档 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md`，明确图片/图文新增、编辑/删除、复制、导入队列、受控粘贴和可选归档的应用级验收步骤与回滚边界；本轮只新增文档，不写真实旧库。
 
 ## 未完成
 
@@ -194,7 +195,8 @@
 - `clipstash-next/package.json`
 - `clipstash-next/migration-notes/phase-2-write-safety.md`
 - `clipstash-next/migration-notes/phase-3-import-executor.md`
+- `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md`
 
 ## 下一步
 
-- 继续补浏览器之外的验收：优先扩展前端 API 合约测试和 mock 交互测试，逐步覆盖创建、编辑、删除、归档、复制、导入的前端/后端调用边界。
+- 按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收，优先从不写 DB 的文字复制 UI 验收开始。
