@@ -3,7 +3,7 @@
 ## 当前目标
 
 - 将 ClipStash 逐步从 Python + Tkinter/customtkinter 重构为 Tauri 2 + React + TypeScript + Rust + SQLite。
-- 当前阶段推进到阶段 4A：整理 Rust 旧数据访问层，逐步把 `legacy_data.rs` 拆成更清晰的查询、写入、备份、校验和执行模块。
+- 当前阶段切回功能优先：先把 Tauri 版做成可安心日常使用，再回头处理模块整理细节。
 
 ## 已完成
 
@@ -221,6 +221,7 @@
 - 已将 `legacy_data.rs` 测试模块中的通用测试辅助函数拆到 `legacy_test_support.rs`，包括 tiny PNG 夹具、分页收集、排序断言和图片关联查询；运行时代码不引入该模块。
 - 已将只读统计、消息列表、导入队列预览和本机旧库只读一致性测试从 `legacy_data.rs` 拆到 `legacy_read_tests.rs`；`npm run verify:legacy-readonly` 仍能按测试名执行迁移后的 ignored 测试。
 - 本轮只读验证发现真实旧库外部状态已变化：当前为 `normal=9 archived=106 total=115 max_id=119 joined_images=109 orphan_images=0`，其中 `#112/#113/#114` 已处于归档状态；本轮代码未执行写库命令，仅做只读查询确认。
+- 已新增功能优先 TODO：`clipstash-next/migration-notes/functional-todolist.md`，后续先按数据安全面板、日常主流程、设置页、托盘、快捷键、更新检查、发布替换推进；模块整理暂缓。
 
 ## 未完成
 
@@ -232,6 +233,7 @@
 - 用户提供的 UI 参考图已保存为 `clipstash-next/design-reference/clipstash-ui-reference.png`；同目录 `tauri-ui-smoke.png` 保留当前 Tauri UI 冒烟截图。
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
 - 阶段 4A 已开始：Rust 旧数据访问层已拆出模型、备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装、底层写入执行、剪贴板、导入队列、测试辅助和只读测试模块。
+- 功能优先 TODO 已建立，后续暂缓纯模块整理，优先补齐“可用版闭环”。
 
 ## 阻塞
 
@@ -261,7 +263,8 @@
 - `clipstash-next/migration-notes/phase-2-write-safety.md`
 - `clipstash-next/migration-notes/phase-3-import-executor.md`
 - `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md`
+- `clipstash-next/migration-notes/functional-todolist.md`
 
 ## 下一步
 
-- 继续阶段 4A：收敛 `legacy_data.rs` 剩余门面和测试职责，或把测试夹具拆到独立测试辅助模块，保持旧库只读/写入基线验证不变。
+- 按 `clipstash-next/migration-notes/functional-todolist.md` 推进 P0-1：数据安全面板。
