@@ -1,7 +1,13 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
-import { createLegacyTextMessage, getLegacyStats, listLegacyMessages } from "./api/legacy";
+import {
+  createLegacyImageMessage,
+  createLegacyMixedMessage,
+  createLegacyTextMessage,
+  getLegacyStats,
+  listLegacyMessages,
+} from "./api/legacy";
 import type {
   LegacyMessageImage,
   LegacyMessage,
@@ -34,6 +40,14 @@ function App() {
   const [creatingTextMessage, setCreatingTextMessage] = useState(false);
   const [createTextError, setCreateTextError] = useState<string | null>(null);
   const [createTextResult, setCreateTextResult] =
+    useState<LegacyCreateTextMessageResult | null>(null);
+  const [mediaTextDraft, setMediaTextDraft] = useState("");
+  const [mediaFiles, setMediaFiles] = useState<File[]>([]);
+  const [mediaInputKey, setMediaInputKey] = useState(0);
+  const [mediaWriteConfirmed, setMediaWriteConfirmed] = useState(false);
+  const [creatingMediaMessage, setCreatingMediaMessage] = useState(false);
+  const [createMediaError, setCreateMediaError] = useState<string | null>(null);
+  const [createMediaResult, setCreateMediaResult] =
     useState<LegacyCreateTextMessageResult | null>(null);
 
   useEffect(() => {
@@ -131,8 +145,47 @@ function App() {
     }
   }
 
+  function selectMediaFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    setMediaFiles(files);
+    setCreateMediaError(null);
+    setCreateMediaResult(null);
+  }
+
+  async function createMediaMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (mediaFiles.length === 0 || !mediaWriteConfirmed || creatingMediaMessage) return;
+
+    setCreatingMediaMessage(true);
+    setCreateMediaError(null);
+    setCreateMediaResult(null);
+
+    try {
+      const imagesData = await filesToNumberArrays(mediaFiles);
+      const text = mediaTextDraft.trim();
+      const result = text
+        ? await createLegacyMixedMessage(text, imagesData)
+        : await createLegacyImageMessage(imagesData);
+      const [nextStats, nextPage] = await loadLegacyData(view, sort);
+      setStats(nextStats);
+      setPage(nextPage);
+      setMediaTextDraft("");
+      setMediaFiles([]);
+      setMediaInputKey((key) => key + 1);
+      setMediaWriteConfirmed(false);
+      setCreateMediaResult(result);
+    } catch (err) {
+      setCreateMediaError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingMediaMessage(false);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
+  const canCreateMedia =
+    mediaFiles.length > 0 && mediaWriteConfirmed && !creatingMediaMessage;
 
   return (
     <main className="shell">
@@ -227,6 +280,87 @@ function App() {
                   label="备份"
                   value={createTextResult.backup.backup_path}
                   ok={createTextResult.backup.bytes_copied > 0}
+                />
+              </div>
+            )}
+          </section>
+
+          <section className="write-panel" aria-label="新增图片或图文消息">
+            <div className="write-panel-head">
+              <div>
+                <p className="eyebrow">Phase 2 / Media Guard</p>
+                <h2>新增图片 / 图文消息</h2>
+              </div>
+              <span className="write-badge media-badge">备份后写入</span>
+            </div>
+
+            <form className="text-create-form" onSubmit={createMediaMessage}>
+              <label className="field-label" htmlFor="new-media-message-text">
+                配套文字
+              </label>
+              <textarea
+                id="new-media-message-text"
+                value={mediaTextDraft}
+                onChange={(event) => setMediaTextDraft(event.target.value)}
+                placeholder="留空则创建纯图片消息"
+                rows={3}
+              />
+
+              <label className="field-label" htmlFor="new-media-message-files">
+                图片
+              </label>
+              <input
+                key={mediaInputKey}
+                id="new-media-message-files"
+                className="file-input"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={selectMediaFiles}
+              />
+
+              {mediaFiles.length > 0 && (
+                <div className="selected-files" aria-label="已选图片">
+                  {mediaFiles.map((file, index) => (
+                    <span key={`${file.name}-${file.size}-${index}`}>
+                      {file.name} · {formatBytes(file.size)}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <label className="write-confirm">
+                <input
+                  type="checkbox"
+                  checked={mediaWriteConfirmed}
+                  onChange={(event) => setMediaWriteConfirmed(event.target.checked)}
+                />
+                <span>确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。</span>
+              </label>
+
+              <button type="submit" className="write-submit" disabled={!canCreateMedia}>
+                {creatingMediaMessage ? "正在写入..." : "新增并备份"}
+              </button>
+            </form>
+
+            {createMediaError && (
+              <div className="write-result write-result-error" role="alert">
+                <strong>写入失败</strong>
+                <p>{createMediaError}</p>
+              </div>
+            )}
+
+            {createMediaResult && (
+              <div className="write-result write-result-ok" role="status">
+                <strong>已写入 #{createMediaResult.message.id}</strong>
+                <p>
+                  {createMediaResult.message.created_at} · 图片{" "}
+                  {createMediaResult.message.images.length}
+                </p>
+                <PathRow
+                  label="备份"
+                  value={createMediaResult.backup.backup_path}
+                  ok={createMediaResult.backup.bytes_copied > 0}
                 />
               </div>
             )}
@@ -434,6 +568,21 @@ function loadLegacyData(view: MessageView, sort: SortOrder) {
     getLegacyStats(),
     listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT }),
   ]);
+}
+
+async function filesToNumberArrays(files: File[]) {
+  return Promise.all(
+    files.map(async (file) => {
+      const buffer = await file.arrayBuffer();
+      return Array.from(new Uint8Array(buffer));
+    }),
+  );
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export default App;

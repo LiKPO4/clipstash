@@ -214,6 +214,10 @@ code {
   font-weight: 800;
 }
 
+.media-badge {
+  background: #1f5f7a;
+}
+
 .text-create-form {
   display: grid;
   gap: 12px;
@@ -242,6 +246,53 @@ textarea {
 textarea:focus {
   outline: 3px solid rgba(214, 83, 63, 0.28);
   border-color: #d6533f;
+}
+
+.file-input {
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed #b9c2bc;
+  border-radius: 8px;
+  color: #252927;
+  background: #f6fbf8;
+  font: inherit;
+}
+
+.file-input::file-selector-button {
+  min-height: 34px;
+  margin-right: 12px;
+  padding: 0 12px;
+  border: 1px solid #1f5f7a;
+  border-radius: 6px;
+  color: #fffdf8;
+  background: #1f5f7a;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.file-input:focus-visible {
+  outline: 3px solid rgba(31, 95, 122, 0.28);
+  outline-offset: 2px;
+}
+
+.selected-files {
+  display: grid;
+  gap: 8px;
+}
+
+.selected-files span {
+  min-width: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid #d7e2dc;
+  border-radius: 6px;
+  color: #2d332f;
+  background: #f6fbf8;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .write-confirm {
