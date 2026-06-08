@@ -1,7 +1,16 @@
-use crate::{legacy_paths::path_to_string, legacy_schema::ensure_legacy_schema};
-use rusqlite::{Connection, OpenFlags};
+use crate::{
+    legacy_data::{
+        list_images_for_message, LegacyMessage, LegacyMessagePage, MessageView, SortOrder,
+    },
+    legacy_paths::path_to_string,
+    legacy_schema::ensure_legacy_schema,
+};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use std::path::PathBuf;
+
+const DEFAULT_MESSAGE_LIMIT: i64 = 30;
+const MAX_MESSAGE_LIMIT: i64 = 100;
 
 #[derive(Serialize)]
 pub struct LegacyStats {
@@ -52,4 +61,118 @@ pub(crate) fn read_legacy_stats_from_dir(data_dir: PathBuf) -> Result<LegacyStat
 pub(crate) fn query_count(conn: &Connection, sql: &str) -> Result<i64, String> {
     conn.query_row(sql, [], |row| row.get(0))
         .map_err(|err| format!("查询旧数据库计数失败：{err}"))
+}
+
+pub(crate) fn list_legacy_messages_from_dir(
+    data_dir: PathBuf,
+    view: MessageView,
+    sort: SortOrder,
+    offset: Option<i64>,
+    limit: Option<i64>,
+) -> Result<LegacyMessagePage, String> {
+    let db_path = data_dir.join("clipstash.db");
+    let images_dir = data_dir.join("images");
+
+    if !db_path.is_file() {
+        return Err(format!("未找到旧数据库：{}", db_path.display()));
+    }
+
+    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| format!("只读打开旧数据库失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+
+    let offset = offset.unwrap_or(0).max(0);
+    let limit = limit
+        .unwrap_or(DEFAULT_MESSAGE_LIMIT)
+        .clamp(1, MAX_MESSAGE_LIMIT);
+    let total_count = query_count(&conn, view_count_sql(view))?;
+    let order = match sort {
+        SortOrder::Newest => "DESC",
+        SortOrder::Oldest => "ASC",
+    };
+    let sort_column = match view {
+        MessageView::Normal => "created_at",
+        MessageView::Archived => "COALESCE(archived_at, created_at)",
+    };
+    let sql = format!(
+        "SELECT id, text_content, created_at, archived, archived_at \
+         FROM messages \
+         WHERE {} \
+         ORDER BY {sort_column} {order}, id {order} \
+         LIMIT ? OFFSET ?",
+        view_where_sql(view)
+    );
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|err| format!("准备旧消息查询失败：{err}"))?;
+    let rows = stmt
+        .query_map(params![limit, offset], |row| {
+            let archived: i64 = row.get(3)?;
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                archived == 1,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|err| format!("查询旧消息失败：{err}"))?;
+
+    let mut messages = Vec::new();
+    for row in rows {
+        let (id, text_content, created_at, archived, archived_at) =
+            row.map_err(|err| format!("读取旧消息行失败：{err}"))?;
+        let images = list_images_for_message(&conn, &images_dir, id)?;
+        messages.push(LegacyMessage {
+            id,
+            text_content,
+            created_at,
+            archived,
+            archived_at,
+            images,
+        });
+    }
+
+    let has_more = offset + (messages.len() as i64) < total_count;
+
+    Ok(LegacyMessagePage {
+        view: view_key(view).to_string(),
+        sort: sort_key(sort).to_string(),
+        offset,
+        limit,
+        total_count,
+        has_more,
+        messages,
+    })
+}
+
+pub(crate) fn view_where_sql(view: MessageView) -> &'static str {
+    match view {
+        MessageView::Normal => "archived = 0 OR archived IS NULL",
+        MessageView::Archived => "archived = 1",
+    }
+}
+
+fn view_count_sql(view: MessageView) -> &'static str {
+    match view {
+        MessageView::Normal => {
+            "SELECT COUNT(*) FROM messages WHERE archived = 0 OR archived IS NULL"
+        }
+        MessageView::Archived => "SELECT COUNT(*) FROM messages WHERE archived = 1",
+    }
+}
+
+fn view_key(view: MessageView) -> &'static str {
+    match view {
+        MessageView::Normal => "normal",
+        MessageView::Archived => "archived",
+    }
+}
+
+fn sort_key(sort: SortOrder) -> &'static str {
+    match sort {
+        SortOrder::Newest => "newest",
+        SortOrder::Oldest => "oldest",
+    }
 }
