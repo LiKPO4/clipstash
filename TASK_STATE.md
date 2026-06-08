@@ -172,6 +172,8 @@
 - 已完成文字复制真实 UI 点击验收：点击消息 `#114` 的“复制文字”后页面显示“已复制 #114 / 52 个字符”，系统剪贴板读回 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，页面未出现 WebView 剪贴板权限提示“允许/阻止”；该验收不写 DB、不改图片。
 - 已根据真实截图修正消息卡片操作按钮换行问题：操作区按钮保持 `white-space: nowrap`，截图验证按钮不再被拆成单字换行。
 - 已在 UI 真实烟测后补跑验证：`npm test` 通过，3 个测试文件 46 项通过；`npm run build` 通过；`cargo check` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
+- 已完成图片复制真实 UI 点击验收：点击旧图片的“复制图片”后页面显示“已复制图片 / clipstash-next-20260608163309521-1896-0.png · 1 × 1”，页面未出现 WebView 剪贴板权限提示“允许/阻止”；旧 Python `clipboard_utils.get_clipboard_image()` 读回系统剪贴板图片 `width=1 height=1 mode=RGBA`。
+- 已在图片复制 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片。
 
 ## 未完成
 
@@ -180,7 +182,7 @@
 - 阶段 2 尚未完成图片/图文入口的浏览器截图验收；本轮尝试启动 Vite dev server 做前端真实 UI 验收，日志曾显示 `http://127.0.0.1:1420/` ready，但随后端口无监听；内置浏览器访问 `127.0.0.1:1420` 和 `localhost:1420` 均返回 `net::ERR_BLOCKED_BY_CLIENT`，未获得可用浏览器截图证据。
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
-- 阶段 3 文字复制真实应用剪贴板验收已通过；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
+- 阶段 3 文字复制和图片复制真实应用剪贴板 UI 验收已通过。
 - 用户提供的 UI 参考图原始 png 尚未保存到目录；当前只有 `clipstash-next/design-reference/README.md` 文字参考，需在拿到附件本地路径后补充图片文件。
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
 
@@ -210,4 +212,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；优先做不写 DB 的图片复制 UI 点击验收。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；优先做不写 DB 的“准备导入”或“查看队列/复制队列项”UI 点击验收。
