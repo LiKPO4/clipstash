@@ -7,6 +7,7 @@ mod legacy_paths;
 mod legacy_query;
 mod legacy_schema;
 mod legacy_write_audit;
+mod legacy_write_exec;
 mod legacy_write_ops;
 mod legacy_write_precheck;
 mod legacy_write_validation;
