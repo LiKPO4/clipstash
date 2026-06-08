@@ -254,6 +254,19 @@ fn create_text_message_with_backup_for_path(
     Ok(LegacyCreateTextMessageResult { backup, message })
 }
 
+#[allow(dead_code)]
+fn create_image_message_with_backup_for_path(
+    db_path: &Path,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyCreateTextMessageResult, String> {
+    validate_images_data(&images_data)?;
+    let backup = create_legacy_db_backup_for_path(db_path)?;
+    let message = create_image_message_for_path(db_path, images_data)
+        .map_err(|err| format!("{err}；已创建备份：{}", backup.backup_path))?;
+
+    Ok(LegacyCreateTextMessageResult { backup, message })
+}
+
 pub fn create_text_message_for_path(
     db_path: &Path,
     text_content: Option<String>,
@@ -280,6 +293,73 @@ pub fn create_text_message_for_path(
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
+#[allow(dead_code)]
+pub fn create_image_message_for_path(
+    db_path: &Path,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyMessage, String> {
+    validate_images_data(&images_data)?;
+
+    if !db_path.is_file() {
+        return Err(format!(
+            "新增图片消息失败，数据库不存在：{}",
+            db_path.display()
+        ));
+    }
+
+    let data_dir = db_path.parent().ok_or_else(|| {
+        format!(
+            "新增图片消息失败，无法定位数据库目录：{}",
+            db_path.display()
+        )
+    })?;
+    let images_dir = data_dir.join("images");
+    fs::create_dir_all(&images_dir).map_err(|err| format!("创建旧图片目录失败：{err}"))?;
+
+    let mut conn =
+        Connection::open(db_path).map_err(|err| format!("打开旧数据库准备写入失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+
+    let mut saved_paths = Vec::new();
+    let insert_result = {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启图片消息写入事务失败：{err}"))?;
+        tx.execute(
+            "INSERT INTO messages (text_content, archived) VALUES (NULL, 0)",
+            [],
+        )
+        .map_err(|err| format!("新增图片消息失败：{err}"))?;
+
+        let message_id = tx.last_insert_rowid();
+        for (index, image_data) in images_data.iter().enumerate() {
+            let filename = save_image_file(&images_dir, image_data, index)?;
+            saved_paths.push(images_dir.join(&filename));
+            tx.execute(
+                "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
+                params![message_id, filename],
+            )
+            .map_err(|err| format!("新增图片关联失败：{err}"))?;
+        }
+
+        tx.commit()
+            .map_err(|err| format!("提交图片消息写入失败：{err}"))?;
+        Ok::<i64, String>(message_id)
+    };
+
+    let message_id = match insert_result {
+        Ok(message_id) => message_id,
+        Err(err) => {
+            for path in saved_paths {
+                let _ = fs::remove_file(path);
+            }
+            return Err(err);
+        }
+    };
+
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
 fn normalize_text_message(text_content: String) -> Result<String, String> {
     let normalized = text_content.trim().to_string();
     if normalized.is_empty() {
@@ -287,6 +367,44 @@ fn normalize_text_message(text_content: String) -> Result<String, String> {
     }
 
     Ok(normalized)
+}
+
+fn validate_images_data(images_data: &[Vec<u8>]) -> Result<(), String> {
+    if images_data.is_empty() {
+        return Err("新增图片消息失败，至少需要一张图片".to_string());
+    }
+    if images_data.iter().any(|image_data| image_data.is_empty()) {
+        return Err("新增图片消息失败，图片数据不能为空".to_string());
+    }
+
+    Ok(())
+}
+
+fn save_image_file(images_dir: &Path, image_data: &[u8], index: usize) -> Result<String, String> {
+    let filename = next_image_filename(images_dir, index);
+    let path = images_dir.join(&filename);
+    fs::write(&path, image_data).map_err(|err| format!("保存图片文件失败：{err}"))?;
+
+    Ok(filename)
+}
+
+fn next_image_filename(images_dir: &Path, index: usize) -> String {
+    let timestamp = Local::now().format("%Y%m%d%H%M%S%3f");
+    let process_id = std::process::id();
+
+    for attempt in 0.. {
+        let suffix = if attempt == 0 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let filename = format!("clipstash-next-{timestamp}-{process_id}-{index}{suffix}.png");
+        if !images_dir.join(&filename).exists() {
+            return filename;
+        }
+    }
+
+    unreachable!("image filename suffix search is unbounded");
 }
 
 fn next_backup_path(parent: &Path, timestamp: &str) -> PathBuf {
@@ -792,6 +910,156 @@ mod tests {
         drop(conn);
 
         let result = create_text_message_with_backup_for_path(&db_path, "   ".to_string());
+
+        assert!(result.is_err());
+        assert!(!fs::read_dir(&data_dir)
+            .expect("read data dir")
+            .any(|entry| entry
+                .expect("read data dir entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with("clipstash.db.bak-")));
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn creates_image_message_in_temp_legacy_db_after_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-create-image-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('existing', 0);
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = create_image_message_with_backup_for_path(
+            &db_path,
+            vec![
+                b"first-image-bytes".to_vec(),
+                b"second-image-bytes".to_vec(),
+            ],
+        )
+        .expect("create image message with backup");
+
+        assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        assert!(result.message.text_content.is_none());
+        assert!(!result.message.archived);
+        assert_eq!(result.message.images.len(), 2);
+        assert_ne!(
+            result.message.images[0].filename,
+            result.message.images[1].filename
+        );
+
+        let first_image_path = PathBuf::from(&result.message.images[0].path);
+        let second_image_path = PathBuf::from(&result.message.images[1].path);
+        assert!(first_image_path.is_file());
+        assert!(second_image_path.is_file());
+        assert_eq!(
+            fs::read(first_image_path).expect("read first image"),
+            b"first-image-bytes"
+        );
+        assert_eq!(
+            fs::read(second_image_path).expect("read second image"),
+            b"second-image-bytes"
+        );
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            2
+        );
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM message_images").expect("count images"),
+            2
+        );
+        let image_rows = query_image_rows(&conn, result.message.id);
+        assert_eq!(image_rows.len(), 2);
+        assert_eq!(image_rows[0].1, result.message.images[0].filename);
+        assert_eq!(image_rows[1].1, result.message.images[1].filename);
+        assert!(image_rows[0].0 < image_rows[1].0);
+        drop(conn);
+
+        let page = list_legacy_messages_from_dir(
+            data_dir.clone(),
+            MessageView::Normal,
+            SortOrder::Newest,
+            Some(0),
+            Some(10),
+        )
+        .expect("read messages after image insert");
+        let listed = page
+            .messages
+            .iter()
+            .find(|item| item.id == result.message.id)
+            .expect("listed image message");
+        assert_eq!(listed.images.len(), 2);
+        assert!(listed.images.iter().all(|image| image.exists));
+
+        let backup_conn =
+            Connection::open(&result.backup.backup_path).expect("open backup sqlite fixture");
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM messages")
+                .expect("count backup messages"),
+            1
+        );
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM message_images")
+                .expect("count backup images"),
+            0
+        );
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn rejects_empty_image_message_before_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-create-empty-image-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = create_image_message_with_backup_for_path(&db_path, Vec::new());
 
         assert!(result.is_err());
         assert!(!fs::read_dir(&data_dir)
