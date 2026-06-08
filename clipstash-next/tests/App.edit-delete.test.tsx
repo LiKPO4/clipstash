@@ -471,6 +471,26 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
+  it("shows a copy error when text clipboard writes are unavailable", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({} as Clipboard);
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "复制文字",
+      }),
+    );
+
+    expect(await screen.findByText("复制失败")).toBeTruthy();
+    expect(screen.getByText("当前环境不支持剪贴板写入")).toBeTruthy();
+    expect(commandCallCount("update_legacy_message_text")).toBe(0);
+    expect(commandCallCount("set_legacy_message_archived")).toBe(0);
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
   it("copies a message image without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
