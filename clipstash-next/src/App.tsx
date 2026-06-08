@@ -12,6 +12,7 @@ import {
   listExternalWindowTargets,
   listLegacyMessages,
   pasteLegacyImportQueue,
+  pasteLegacyImportQueueWithOptionalArchive,
   pasteLegacyImportQueueItem,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
@@ -32,6 +33,7 @@ import type {
   ExternalWindowTarget,
   LegacyImportQueueCopyResult,
   LegacyImportPasteResult,
+  LegacyImportQueuePasteArchiveResult,
   LegacyImportQueuePasteResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
@@ -64,6 +66,8 @@ type ImportQueueCopyResult = LegacyImportQueueCopyResult;
 type ImportQueuePasteResult = LegacyImportPasteResult;
 
 type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
+
+type ImportQueuePasteArchiveResult = LegacyImportQueuePasteArchiveResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -134,6 +138,9 @@ function App() {
   const [importQueuePasteAllError, setImportQueuePasteAllError] = useState<string | null>(null);
   const [importQueuePasteAllResult, setImportQueuePasteAllResult] =
     useState<ImportQueuePasteAllResult | null>(null);
+  const [archiveAfterImport, setArchiveAfterImport] = useState(false);
+  const [importQueuePasteArchiveResult, setImportQueuePasteArchiveResult] =
+    useState<ImportQueuePasteArchiveResult | null>(null);
   const [targetWindows, setTargetWindows] = useState<ExternalWindowTarget[]>([]);
   const [selectedTargetWindow, setSelectedTargetWindow] =
     useState<ExternalWindowTarget | null>(null);
@@ -570,14 +577,29 @@ function App() {
     setPastingImportQueue(true);
     setImportQueuePasteAllError(null);
     setImportQueuePasteAllResult(null);
+    setImportQueuePasteArchiveResult(null);
 
     try {
-      const result = await pasteLegacyImportQueue(
-        importQueuePreview.message_id,
-        target.hwnd,
-        250,
-      );
-      setImportQueuePasteAllResult(result);
+      if (archiveAfterImport) {
+        const result = await pasteLegacyImportQueueWithOptionalArchive({
+          messageId: importQueuePreview.message_id,
+          targetHwnd: target.hwnd,
+          delayMs: 250,
+          archiveAfterSuccess: true,
+        });
+        setImportQueuePasteAllResult(result.paste);
+        setImportQueuePasteArchiveResult(result);
+        if (result.archive_result) {
+          await refreshLegacyData();
+        }
+      } else {
+        const result = await pasteLegacyImportQueue(
+          importQueuePreview.message_id,
+          target.hwnd,
+          250,
+        );
+        setImportQueuePasteAllResult(result);
+      }
     } catch (err) {
       setImportQueuePasteAllError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1078,6 +1100,14 @@ function App() {
                       {targetWindowValidation.target.process_id}
                     </p>
                   )}
+                  <label className="write-confirm import-archive-confirm">
+                    <input
+                      type="checkbox"
+                      checked={archiveAfterImport}
+                      onChange={(event) => setArchiveAfterImport(event.target.checked)}
+                    />
+                    <span>整队列粘贴成功后归档旧库消息，并在写入前自动创建备份。</span>
+                  </label>
                   <button
                     type="button"
                     disabled={!canPasteImportQueue}
@@ -1212,6 +1242,15 @@ function App() {
                       } 项：${importQueuePasteAllResult.failure}`
                     : `已发送到 ${importQueuePasteAllResult.target.title}，间隔 ${importQueuePasteAllResult.requested_delay_ms}ms`}
                 </p>
+                {importQueuePasteArchiveResult?.archive_result && (
+                  <p>
+                    已归档旧库消息，备份：
+                    {importQueuePasteArchiveResult.archive_result.backup.backup_path}
+                  </p>
+                )}
+                {importQueuePasteArchiveResult?.archive_error && (
+                  <p>归档失败：{importQueuePasteArchiveResult.archive_error}</p>
+                )}
               </>
             )
           )}

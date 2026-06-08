@@ -142,3 +142,10 @@ export type LegacyImportQueuePasteResult = {
   failure: string | null;
   items: LegacyImportPasteResult[];
 };
+
+export type LegacyImportQueuePasteArchiveResult = {
+  paste: LegacyImportQueuePasteResult;
+  archive_requested: boolean;
+  archive_result: LegacyArchiveMessageResult | null;
+  archive_error: string | null;
+};

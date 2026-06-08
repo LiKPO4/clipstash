@@ -192,6 +192,13 @@ const importQueuePasteAllResult = {
   ],
 };
 
+const importQueuePasteArchiveResult = {
+  paste: importQueuePasteAllResult,
+  archive_requested: true,
+  archive_result: archiveResult,
+  archive_error: null,
+};
+
 const externalWindowTargets = [
   {
     hwnd: 1001,
@@ -245,6 +252,9 @@ describe("edit and delete guarded actions", () => {
       }
       if (command === "paste_legacy_import_queue") {
         return Promise.resolve(importQueuePasteAllResult);
+      }
+      if (command === "paste_legacy_import_queue_with_optional_archive") {
+        return Promise.resolve(importQueuePasteArchiveResult);
       }
       if (command === "list_external_window_targets") {
         return Promise.resolve(externalWindowTargets);
@@ -651,8 +661,55 @@ describe("edit and delete guarded actions", () => {
     });
     expect(await screen.findByText("已粘贴整队列 #10 · 2 项")).toBeTruthy();
     expect(screen.getByText("已发送到 记事本，间隔 250ms")).toBeTruthy();
+    expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("archives after whole queue paste only when explicitly checked", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "查看队列",
+      }),
+    );
+    await screen.findByText("导入队列 #10");
+
+    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
+    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
+    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
+    await waitFor(() => {
+      expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
+    });
+
+    await user.click(
+      screen.getByLabelText(
+        "整队列粘贴成功后归档旧库消息，并在写入前自动创建备份。",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "粘贴整队列" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "paste_legacy_import_queue_with_optional_archive",
+        {
+          messageId: 10,
+          targetHwnd: 1001,
+          delayMs: 250,
+          archiveAfterSuccess: true,
+        },
+      );
+    });
+    expect(await screen.findByText("已粘贴整队列 #10 · 2 项")).toBeTruthy();
+    expect(
+      screen.getByText(`已归档旧库消息，备份：${archiveResult.backup.backup_path}`),
+    ).toBeTruthy();
+    expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
+    expect(commandCallCount("get_legacy_stats")).toBe(2);
+    expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
 });
 

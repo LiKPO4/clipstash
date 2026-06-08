@@ -140,6 +140,8 @@
 - 已新增前端 mock 交互测试，覆盖未校验目标窗口时整队列粘贴按钮禁用、校验后调用整队列粘贴 command，以及整队列粘贴不刷新旧库统计/列表。
 - 已新增阶段 3D 后端 command `paste_legacy_import_queue_with_optional_archive(message_id, target_hwnd, delay_ms, archive_after_success)`，先执行整队列受控粘贴；只有显式 `archive_after_success=true` 且粘贴结果无失败时才复用现有 `set_legacy_message_archived(message_id, true)` 写前备份归档；归档失败不会回滚外部粘贴，返回 `archive_error`；当前不接前端。
 - 已新增 ignored 手动验收测试 `manual_pastes_legacy_import_queue_with_optional_archive`，只有设置 `CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_ID`、`CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_HWND`、`CLIPSTASH_NEXT_PASTE_QUEUE_ARCHIVE_AFTER_SUCCESS` 和可选 delay 时才会真实逐项粘贴并可选写旧库归档；当前会话未执行该手动测试。
+- 已在前端导入队列浮层中新增默认关闭的“整队列粘贴成功后归档旧库消息”显式勾选项；未勾选时继续调用不归档的 `paste_legacy_import_queue`，勾选后才调用 `paste_legacy_import_queue_with_optional_archive`，归档成功后刷新旧库统计/列表。
+- 已新增前端 mock 交互测试，覆盖默认不调用可选归档 command、不刷新旧库；显式勾选后调用可选归档 command、显示 DB 备份路径并刷新旧库统计/列表。
 
 ## 未完成
 
@@ -149,7 +151,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入后可选自动归档前端入口和真实归档验收；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口、整队列受控粘贴后端 command 和前端手动触发入口、可选归档后端 command；3B 文字项/图片项和 3C 整队列真实粘贴验收均已通过。
+- 阶段 3 尚未完成导入后可选归档真实验收；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口、整队列受控粘贴后端 command 和前端手动触发入口、可选归档后端 command 和前端显式开关入口；3B 文字项/图片项和 3C 整队列真实粘贴验收均已通过。
 
 ## 阻塞
 

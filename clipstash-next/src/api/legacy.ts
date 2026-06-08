@@ -11,6 +11,7 @@ import type {
   LegacyImportQueueCopyResult,
   LegacyImportPasteResult,
   LegacyImportQueuePasteResult,
+  LegacyImportQueuePasteArchiveResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyMessagePage,
@@ -153,4 +154,26 @@ export function pasteLegacyImportQueue(
     targetHwnd,
     delayMs,
   });
+}
+
+export function pasteLegacyImportQueueWithOptionalArchive({
+  messageId,
+  targetHwnd,
+  delayMs,
+  archiveAfterSuccess,
+}: {
+  messageId: number;
+  targetHwnd: number;
+  delayMs?: number;
+  archiveAfterSuccess: boolean;
+}) {
+  return invoke<LegacyImportQueuePasteArchiveResult>(
+    "paste_legacy_import_queue_with_optional_archive",
+    {
+      messageId,
+      targetHwnd,
+      delayMs,
+      archiveAfterSuccess,
+    },
+  );
 }
