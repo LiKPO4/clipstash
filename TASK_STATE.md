@@ -149,6 +149,7 @@
 - 已扩展前端 API 合约测试，覆盖 `updateLegacyMessageText`、`replaceLegacyMessageImages`、`deleteLegacyMessage`、`setLegacyMessageArchived` 的 command 名和参数映射；这些路径仍未替代真实 UI 点击验收，但已补充前端/后端调用契约证据。
 - 已扩展前端 API 合约测试，覆盖 `createLegacyTextMessage`、`createLegacyImageMessage`、`createLegacyMixedMessage` 的 command 名和参数映射；当前仅验证前端/后端调用契约，不写真实旧库。
 - 已扩展前端 API 合约测试，覆盖统计、列表、外部窗口枚举/校验、图片复制、导入 staging、队列预览、队列单项复制和单项粘贴 wrapper 的 command 名与参数映射；当前仅验证调用契约，不写真实旧库。
+- 已在扩展前端 API 合约测试后补跑非写库验证：`npm run build` 通过，`npm run verify:legacy-readonly` 通过，旧库审计结果保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 
 ## 未完成
 
