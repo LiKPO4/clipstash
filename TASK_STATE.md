@@ -65,12 +65,16 @@
 - 已新增临时图文混合消息测试，覆盖写入前备份、文字 trim、双图文件内容、`message_images.id` 顺序、旧读取函数按 `(text, images)` 结构读回、备份库未变化。
 - 已新增受保护的 Rust command：`create_legacy_mixed_message`，内部会先备份旧 DB，再新增图文混合消息；当前仅暴露 command 和前端 API，未接入 UI。
 - 已新增前端 API/类型封装 `createLegacyMixedMessage`。
+- 已新增 ignored 手动验收测试 `manual_creates_local_legacy_mixed_message_with_backup`，只有设置 `CLIPSTASH_NEXT_WRITE_LEGACY_MIXED` 时才会写真实旧库和真实 `images/`。
+- 已执行一次真实旧库图文混合写入验收，新增消息 `id=114`，文本为 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，图片文件为 `clipstash-next-20260608163309521-1896-0.png`。
+- 已在图文写入前自动创建备份：`C:\Users\Administrator\AppData\Roaming\ClipStash\clipstash.db.bak-20260608-163309`，大小 `61440` 字节。
+- 已用旧 Python `db.py` 验证可读取新版创建的图文消息，普通列表最新项为 `id=114`，图片文件存在且大小 `70` 字节。
+- 已用 Rust 只读一致性审计验证写入后真实旧库：普通 `11`、归档 `103`、总计 `114`、关联图片 `107`、孤立图片 `0`。
 
 ## 未完成
 
 - 尚未实现复制、编辑、归档、恢复、导入等后续阶段功能。
 - 阶段 2 尚未为新增图片消息接入前端选择文件 UI。
-- 阶段 2 尚未执行真实旧库图文混合消息写入验收。
 - 阶段 2 尚未实现编辑消息文字和图片、删除消息。
 
 ## 阻塞
@@ -93,4 +97,4 @@
 
 ## 下一步
 
-- 进入阶段 2 下一步：执行一次可回滚的真实旧库新增图文混合消息手动验收，记录备份路径、新图片文件名，并验证旧 Python 应用可按 `(text, [images])` 结构读取。
+- 进入阶段 2 下一步：为新增图片/图文消息接入前端选择文件 UI，显示备份路径和写入结果，并保持写入前确认。

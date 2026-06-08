@@ -1490,6 +1490,51 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "writes local ClipStash app data; set CLIPSTASH_NEXT_WRITE_LEGACY_MIXED"]
+    fn manual_creates_local_legacy_mixed_message_with_backup() {
+        let text = std::env::var("CLIPSTASH_NEXT_WRITE_LEGACY_MIXED")
+            .expect("set CLIPSTASH_NEXT_WRITE_LEGACY_MIXED to the text message to create");
+        let result = create_legacy_mixed_message(text, vec![tiny_png_bytes()])
+            .expect("create local mixed message");
+        let backup_path = PathBuf::from(&result.backup.backup_path);
+
+        assert!(backup_path.is_file());
+        assert!(result.backup.bytes_copied > 0);
+        assert_eq!(
+            result.message.text_content.as_deref(),
+            Some("[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08")
+        );
+        assert!(!result.message.archived);
+        assert!(result.message.archived_at.is_none());
+        assert_eq!(result.message.images.len(), 1);
+        assert!(result.message.images[0].exists);
+        assert!(PathBuf::from(&result.message.images[0].path).is_file());
+
+        let latest_page =
+            list_legacy_messages(MessageView::Normal, SortOrder::Newest, Some(0), Some(1))
+                .expect("list latest local legacy message");
+        let latest = latest_page
+            .messages
+            .first()
+            .expect("latest local legacy message");
+
+        assert_eq!(latest.id, result.message.id);
+        assert_eq!(latest.text_content, result.message.text_content);
+        assert_eq!(latest.images.len(), 1);
+        assert_eq!(latest.images[0].filename, result.message.images[0].filename);
+
+        eprintln!(
+            "legacy-mixed-write-ok id={} image={} path={} backup={} bytes={} text={}",
+            result.message.id,
+            result.message.images[0].filename,
+            result.message.images[0].path,
+            result.backup.backup_path,
+            result.backup.bytes_copied,
+            result.message.text_content.as_deref().unwrap_or("")
+        );
+    }
+
     fn tiny_png_bytes() -> Vec<u8> {
         vec![
             137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
