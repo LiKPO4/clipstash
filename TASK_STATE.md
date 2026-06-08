@@ -113,6 +113,7 @@
 - 已执行真实系统剪贴板导入队列单项复制验收，目标消息 `id=114`：`index=0` 复制文字，旧 Python 读回 52 字符；`index=1` 复制图片 `clipstash-next-20260608163309521-1896-0.png`，旧 Python 读回尺寸 `(1, 1)`、模式 `RGBA`。
 - 已为前端消息卡片新增“查看队列”入口，可读取导入队列预览并在浮层中逐项“复制第 N 项”；当前仍不模拟粘贴、不聚焦外部窗口、不写 DB。
 - 已新增前端 mock 交互测试，覆盖导入队列预览、单项复制 command 参数，以及查看/复制队列不刷新旧库统计/列表。
+- 已新增阶段 3 导入执行器安全设计文档：`clipstash-next/migration-notes/phase-3-import-executor.md`，明确后续受控 Ctrl+V、窗口选择、整队列粘贴、导入后归档的分阶段边界和验收门槛。
 
 ## 未完成
 
@@ -141,7 +142,8 @@
 - `clipstash-next/src/api/types.ts`
 - `clipstash-next/package.json`
 - `clipstash-next/migration-notes/phase-2-write-safety.md`
+- `clipstash-next/migration-notes/phase-3-import-executor.md`
 
 ## 下一步
 
-- 进入阶段 3 下一步：对前端导入队列入口做真实 Tauri UI 点击验收，或在 Rust 侧设计受控 Ctrl+V 粘贴执行器。
+- 进入阶段 3 下一步：按 `phase-3-import-executor.md` 先实现目标窗口选择/校验，再做单步受控 Ctrl+V 粘贴。
