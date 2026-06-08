@@ -119,6 +119,8 @@
 - 已新增 ignored 手动验收测试 `manual_lists_external_window_targets`，只有设置 `CLIPSTASH_NEXT_LIST_WINDOWS` 时才读取本机桌面窗口；本机验收读到 14 个候选窗口。
 - 已在前端导入队列浮层中新增目标窗口选择 UI，可刷新 `list_external_window_targets` 并选择目标窗口；当前仅保存选择状态，不聚焦窗口、不发送 Ctrl+V、不写 DB。
 - 已新增前端 mock 交互测试，覆盖刷新目标窗口、选择目标窗口，以及选择窗口不触发队列复制或旧库刷新。
+- 已新增 `validate_external_window_target` command，用于粘贴前校验 hwnd 仍存在、可见、非自身进程，并返回当前窗口标题/进程；当前不聚焦窗口、不发送 Ctrl+V、不写 DB。
+- 已新增 ignored 手动验收测试 `manual_validates_external_window_target`，只有设置 `CLIPSTASH_NEXT_VALIDATE_WINDOW` 时才读取并校验本机候选窗口；本机验收通过，示例目标 `Cockpit Tools`。
 
 ## 未完成
 
@@ -152,4 +154,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：实现目标窗口校验 command，用于粘贴前确认 hwnd 仍存在且不是自身进程。
+- 进入阶段 3 下一步：将 `validate_external_window_target` 接入前端目标窗口选择后的确认状态，再实现单步受控 Ctrl+V 粘贴。

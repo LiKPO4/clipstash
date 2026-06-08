@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ExternalWindowTarget,
+  ExternalWindowValidation,
   LegacyCreateImageMessageResult,
   LegacyArchiveMessageResult,
   LegacyCreateMixedMessageResult,
@@ -24,6 +25,12 @@ export function getLegacyStats() {
 
 export function listExternalWindowTargets() {
   return invoke<ExternalWindowTarget[]>("list_external_window_targets");
+}
+
+export function validateExternalWindowTarget(hwnd: number) {
+  return invoke<ExternalWindowValidation>("validate_external_window_target", {
+    hwnd,
+  });
 }
 
 export function listLegacyMessages({

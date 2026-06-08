@@ -15,6 +15,11 @@ export type ExternalWindowTarget = {
   title: string;
 };
 
+export type ExternalWindowValidation = {
+  valid: boolean;
+  target: ExternalWindowTarget | null;
+};
+
 export type MessageView = "normal" | "archived";
 
 export type SortOrder = "newest" | "oldest";

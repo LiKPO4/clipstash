@@ -7,6 +7,12 @@ pub struct ExternalWindowTarget {
     pub title: String,
 }
 
+#[derive(Serialize)]
+pub struct ExternalWindowValidation {
+    pub valid: bool,
+    pub target: Option<ExternalWindowTarget>,
+}
+
 #[cfg(target_os = "windows")]
 pub fn list_external_window_targets() -> Result<Vec<ExternalWindowTarget>, String> {
     windows_impl::list_external_window_targets()
@@ -18,8 +24,18 @@ pub fn list_external_window_targets() -> Result<Vec<ExternalWindowTarget>, Strin
 }
 
 #[cfg(target_os = "windows")]
+pub fn validate_external_window_target(hwnd: isize) -> Result<ExternalWindowValidation, String> {
+    windows_impl::validate_external_window_target(hwnd)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn validate_external_window_target(_hwnd: isize) -> Result<ExternalWindowValidation, String> {
+    Err("目标窗口校验仅支持 Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::ExternalWindowTarget;
+    use super::{ExternalWindowTarget, ExternalWindowValidation};
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -48,6 +64,30 @@ mod windows_impl {
                 .then(left.hwnd.cmp(&right.hwnd))
         });
         Ok(windows)
+    }
+
+    pub fn validate_external_window_target(
+        hwnd_value: isize,
+    ) -> Result<ExternalWindowValidation, String> {
+        if hwnd_value == 0 {
+            return Err("目标窗口校验失败，hwnd 不能为空".to_string());
+        }
+
+        let hwnd = hwnd_value as HWND;
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        if unsafe { !is_candidate_window(hwnd, current_process_id) } {
+            return Err(format!("目标窗口不可用或属于当前进程：hwnd={hwnd_value}"));
+        }
+
+        let target = unsafe { target_from_hwnd(hwnd) }?;
+        if target.title.trim().is_empty() {
+            return Err(format!("目标窗口标题为空：hwnd={hwnd_value}"));
+        }
+
+        Ok(ExternalWindowValidation {
+            valid: true,
+            target: Some(target),
+        })
     }
 
     struct EnumState<'a> {
@@ -86,6 +126,17 @@ mod windows_impl {
         process_id != 0 && process_id != current_process_id
     }
 
+    unsafe fn target_from_hwnd(hwnd: HWND) -> Result<ExternalWindowTarget, String> {
+        let mut process_id = 0_u32;
+        GetWindowThreadProcessId(hwnd, &mut process_id);
+        let title = window_title(hwnd);
+        Ok(ExternalWindowTarget {
+            hwnd: hwnd as isize,
+            process_id,
+            title,
+        })
+    }
+
     unsafe fn window_title(hwnd: HWND) -> String {
         let length = GetWindowTextLengthW(hwnd);
         if length <= 0 {
@@ -121,5 +172,30 @@ mod tests {
         }
 
         eprintln!("external-window-count={}", windows.len());
+    }
+
+    #[test]
+    #[ignore = "reads local desktop windows; set CLIPSTASH_NEXT_VALIDATE_WINDOW"]
+    fn manual_validates_external_window_target() {
+        std::env::var("CLIPSTASH_NEXT_VALIDATE_WINDOW")
+            .expect("set CLIPSTASH_NEXT_VALIDATE_WINDOW to validate the first local window");
+
+        let windows = list_external_window_targets().expect("list external windows");
+        let first = windows
+            .first()
+            .expect("at least one external window is required for manual validation");
+        let validation =
+            validate_external_window_target(first.hwnd).expect("validate external window");
+        let target = validation.target.expect("validated target");
+
+        assert!(validation.valid);
+        assert_eq!(target.hwnd, first.hwnd);
+        assert_eq!(target.process_id, first.process_id);
+        assert!(!target.title.trim().is_empty());
+
+        eprintln!(
+            "external-window-validate-ok hwnd={} pid={} title={}",
+            target.hwnd, target.process_id, target.title
+        );
     }
 }

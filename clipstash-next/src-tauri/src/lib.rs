@@ -12,6 +12,13 @@ fn list_external_window_targets() -> Result<Vec<window_targets::ExternalWindowTa
 }
 
 #[tauri::command]
+fn validate_external_window_target(
+    hwnd: isize,
+) -> Result<window_targets::ExternalWindowValidation, String> {
+    window_targets::validate_external_window_target(hwnd)
+}
+
+#[tauri::command]
 fn create_legacy_db_backup() -> Result<legacy_data::LegacyDbBackup, String> {
     legacy_data::create_legacy_db_backup()
 }
@@ -127,7 +134,8 @@ pub fn run() {
             replace_legacy_message_images,
             set_legacy_message_archived,
             stage_legacy_message_import_to_clipboard,
-            update_legacy_message_text
+            update_legacy_message_text,
+            validate_external_window_target
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
