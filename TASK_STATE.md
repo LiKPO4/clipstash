@@ -114,6 +114,9 @@
 - 已为前端消息卡片新增“查看队列”入口，可读取导入队列预览并在浮层中逐项“复制第 N 项”；当前仍不模拟粘贴、不聚焦外部窗口、不写 DB。
 - 已新增前端 mock 交互测试，覆盖导入队列预览、单项复制 command 参数，以及查看/复制队列不刷新旧库统计/列表。
 - 已新增阶段 3 导入执行器安全设计文档：`clipstash-next/migration-notes/phase-3-import-executor.md`，明确后续受控 Ctrl+V、窗口选择、整队列粘贴、导入后归档的分阶段边界和验收门槛。
+- 已新增 Rust `windows-sys` 直接依赖，用于阶段 3 Windows 窗口枚举/后续受控输入；当前仅启用窗口枚举相关 feature，回滚时移除 `Cargo.toml` 与 `Cargo.lock` 中对应依赖即可。
+- 已新增 `list_external_window_targets` command 和 `window_targets.rs`，用于枚举可见外部窗口并排除 ClipStash Next 自身进程；当前不聚焦窗口、不发送 Ctrl+V、不写 DB。
+- 已新增 ignored 手动验收测试 `manual_lists_external_window_targets`，只有设置 `CLIPSTASH_NEXT_LIST_WINDOWS` 时才读取本机桌面窗口；本机验收读到 14 个候选窗口。
 
 ## 未完成
 
@@ -132,6 +135,7 @@
 ## 关键文件
 
 - `clipstash-next/src-tauri/src/legacy_data.rs`
+- `clipstash-next/src-tauri/src/window_targets.rs`
 - `clipstash-next/src-tauri/src/lib.rs`
 - `clipstash-next/src-tauri/tauri.conf.json`
 - `clipstash-next/src-tauri/Cargo.toml`
@@ -146,4 +150,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：按 `phase-3-import-executor.md` 先实现目标窗口选择/校验，再做单步受控 Ctrl+V 粘贴。
+- 进入阶段 3 下一步：将 `list_external_window_targets` 接入前端目标窗口选择 UI，然后实现目标窗口校验。

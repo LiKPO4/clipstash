@@ -1,8 +1,14 @@
 mod legacy_data;
+mod window_targets;
 
 #[tauri::command]
 fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
     legacy_data::read_legacy_stats()
+}
+
+#[tauri::command]
+fn list_external_window_targets() -> Result<Vec<window_targets::ExternalWindowTarget>, String> {
+    window_targets::list_external_window_targets()
 }
 
 #[tauri::command]
@@ -115,6 +121,7 @@ pub fn run() {
             copy_legacy_message_import_queue_item_to_clipboard,
             delete_legacy_message,
             get_legacy_stats,
+            list_external_window_targets,
             list_legacy_messages,
             preview_legacy_message_import_queue,
             replace_legacy_message_images,

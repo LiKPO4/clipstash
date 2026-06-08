@@ -9,6 +9,12 @@ export type LegacyStats = {
   total_count: number;
 };
 
+export type ExternalWindowTarget = {
+  hwnd: number;
+  process_id: number;
+  title: string;
+};
+
 export type MessageView = "normal" | "archived";
 
 export type SortOrder = "newest" | "oldest";
