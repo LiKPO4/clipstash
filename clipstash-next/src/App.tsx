@@ -5,8 +5,11 @@ import {
   createLegacyImageMessage,
   createLegacyMixedMessage,
   createLegacyTextMessage,
+  deleteLegacyMessage,
   getLegacyStats,
   listLegacyMessages,
+  replaceLegacyMessageImages,
+  updateLegacyMessageText,
 } from "./api/legacy";
 import type {
   LegacyMessageImage,
@@ -14,6 +17,7 @@ import type {
   LegacyMessagePage,
   LegacyStats,
   LegacyCreateTextMessageResult,
+  LegacyReplaceImagesResult,
   MessageView,
   SortOrder,
 } from "./api/types";
@@ -25,6 +29,8 @@ type PreviewImage = {
   path: string;
   src: string;
 };
+
+type EditResult = LegacyCreateTextMessageResult | LegacyReplaceImagesResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -49,6 +55,19 @@ function App() {
   const [createMediaError, setCreateMediaError] = useState<string | null>(null);
   const [createMediaResult, setCreateMediaResult] =
     useState<LegacyCreateTextMessageResult | null>(null);
+  const [editingMessage, setEditingMessage] = useState<LegacyMessage | null>(null);
+  const [editTextDraft, setEditTextDraft] = useState("");
+  const [editFiles, setEditFiles] = useState<File[]>([]);
+  const [editInputKey, setEditInputKey] = useState(0);
+  const [editConfirmed, setEditConfirmed] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editResult, setEditResult] = useState<EditResult | null>(null);
+  const [deletingMessage, setDeletingMessage] = useState<LegacyMessage | null>(null);
+  const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+  const [deletingLegacyMessage, setDeletingLegacyMessage] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteResult, setDeleteResult] = useState<EditResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -120,6 +139,12 @@ function App() {
     }
   }
 
+  async function refreshLegacyData() {
+    const [nextStats, nextPage] = await loadLegacyData(view, sort);
+    setStats(nextStats);
+    setPage(nextPage);
+  }
+
   async function createTextMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -132,9 +157,7 @@ function App() {
 
     try {
       const result = await createLegacyTextMessage(text);
-      const [nextStats, nextPage] = await loadLegacyData(view, sort);
-      setStats(nextStats);
-      setPage(nextPage);
+      await refreshLegacyData();
       setTextDraft("");
       setWriteConfirmed(false);
       setCreateTextResult(result);
@@ -167,9 +190,7 @@ function App() {
       const result = text
         ? await createLegacyMixedMessage(text, imagesData)
         : await createLegacyImageMessage(imagesData);
-      const [nextStats, nextPage] = await loadLegacyData(view, sort);
-      setStats(nextStats);
-      setPage(nextPage);
+      await refreshLegacyData();
       setMediaTextDraft("");
       setMediaFiles([]);
       setMediaInputKey((key) => key + 1);
@@ -182,10 +203,112 @@ function App() {
     }
   }
 
+  function openEditMessage(message: LegacyMessage) {
+    setEditingMessage(message);
+    setEditTextDraft(message.text_content ?? "");
+    setEditFiles([]);
+    setEditInputKey((key) => key + 1);
+    setEditConfirmed(false);
+    setEditError(null);
+    setEditResult(null);
+  }
+
+  function closeEditMessage() {
+    if (savingEdit) return;
+    setEditingMessage(null);
+    setEditError(null);
+    setEditResult(null);
+  }
+
+  function selectEditFiles(event: ChangeEvent<HTMLInputElement>) {
+    setEditFiles(Array.from(event.target.files ?? []));
+    setEditError(null);
+    setEditResult(null);
+  }
+
+  async function saveEditedMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingMessage || !canSaveEdit) return;
+
+    setSavingEdit(true);
+    setEditError(null);
+    setEditResult(null);
+
+    try {
+      let result: EditResult | null = null;
+      const text = editTextDraft.trim();
+      const normalizedText = text.length > 0 ? text : null;
+      if ((editingMessage.text_content ?? null) !== normalizedText) {
+        result = await updateLegacyMessageText(editingMessage.id, normalizedText);
+      }
+      if (editFiles.length > 0) {
+        const imagesData = await filesToNumberArrays(editFiles);
+        result = await replaceLegacyMessageImages(editingMessage.id, imagesData);
+      }
+      if (!result) {
+        throw new Error("没有需要保存的变更");
+      }
+      await refreshLegacyData();
+      setEditFiles([]);
+      setEditInputKey((key) => key + 1);
+      setEditConfirmed(false);
+      setEditResult(result);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function openDeleteMessage(message: LegacyMessage) {
+    setDeletingMessage(message);
+    setDeleteConfirmed(false);
+    setDeleteError(null);
+    setDeleteResult(null);
+  }
+
+  function closeDeleteMessage() {
+    if (deletingLegacyMessage) return;
+    setDeletingMessage(null);
+    setDeleteError(null);
+  }
+
+  async function confirmDeleteMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!deletingMessage || !deleteConfirmed || deletingLegacyMessage) return;
+
+    setDeletingLegacyMessage(true);
+    setDeleteError(null);
+    setDeleteResult(null);
+
+    try {
+      const result = await deleteLegacyMessage(deletingMessage.id);
+      await refreshLegacyData();
+      setDeleteResult(result);
+      setDeletingMessage(null);
+      setDeleteConfirmed(false);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingLegacyMessage(false);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
     mediaFiles.length > 0 && mediaWriteConfirmed && !creatingMediaMessage;
+  const editText = editTextDraft.trim();
+  const editWillHaveImages = (editingMessage?.images.length ?? 0) > 0 || editFiles.length > 0;
+  const editHasContent = editText.length > 0 || editWillHaveImages;
+  const canSaveEdit =
+    !!editingMessage &&
+    editConfirmed &&
+    !savingEdit &&
+    editHasContent &&
+    (((editingMessage.text_content ?? null) !==
+      (editText.length > 0 ? editText : null)) ||
+      editFiles.length > 0);
 
   return (
     <main className="shell">
@@ -409,7 +532,14 @@ function App() {
             </span>
           </section>
 
-          {page && <MessageList messages={page.messages} onPreview={setPreviewImage} />}
+          {page && (
+            <MessageList
+              messages={page.messages}
+              onDelete={openDeleteMessage}
+              onEdit={openEditMessage}
+              onPreview={setPreviewImage}
+            />
+          )}
 
           {page && page.messages.length === 0 && (
             <p className="empty">当前视图没有消息。</p>
@@ -430,6 +560,48 @@ function App() {
 
       {previewImage && (
         <ImagePreviewDialog image={previewImage} onClose={() => setPreviewImage(null)} />
+      )}
+
+      {editingMessage && (
+        <EditMessageDialog
+          confirmed={editConfirmed}
+          error={editError}
+          files={editFiles}
+          inputKey={editInputKey}
+          message={editingMessage}
+          result={editResult}
+          saving={savingEdit}
+          textDraft={editTextDraft}
+          canSave={canSaveEdit}
+          onClose={closeEditMessage}
+          onConfirmChange={setEditConfirmed}
+          onFileChange={selectEditFiles}
+          onSubmit={saveEditedMessage}
+          onTextChange={setEditTextDraft}
+        />
+      )}
+
+      {deletingMessage && (
+        <DeleteMessageDialog
+          confirmed={deleteConfirmed}
+          error={deleteError}
+          message={deletingMessage}
+          deleting={deletingLegacyMessage}
+          onClose={closeDeleteMessage}
+          onConfirmChange={setDeleteConfirmed}
+          onSubmit={confirmDeleteMessage}
+        />
+      )}
+
+      {deleteResult && (
+        <section className="floating-result" role="status">
+          <strong>已删除 #{deleteResult.message.id}</strong>
+          <PathRow
+            label="备份"
+            value={deleteResult.backup.backup_path}
+            ok={deleteResult.backup.bytes_copied > 0}
+          />
+        </section>
       )}
     </main>
   );
@@ -455,9 +627,13 @@ function PathRow({
 
 function MessageList({
   messages,
+  onDelete,
+  onEdit,
   onPreview,
 }: {
   messages: LegacyMessage[];
+  onDelete: (message: LegacyMessage) => void;
+  onEdit: (message: LegacyMessage) => void;
   onPreview: (image: PreviewImage) => void;
 }) {
   return (
@@ -465,9 +641,19 @@ function MessageList({
       {messages.map((message) => (
         <article className="message-card" key={message.id}>
           <header className="message-meta">
-            <strong>#{message.id}</strong>
-            <span>{message.created_at}</span>
-            {message.archived && <span>归档于 {message.archived_at ?? "未知时间"}</span>}
+            <div className="message-meta-text">
+              <strong>#{message.id}</strong>
+              <span>{message.created_at}</span>
+              {message.archived && <span>归档于 {message.archived_at ?? "未知时间"}</span>}
+            </div>
+            <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
+              <button type="button" onClick={() => onEdit(message)}>
+                编辑
+              </button>
+              <button type="button" className="danger-action" onClick={() => onDelete(message)}>
+                删除
+              </button>
+            </div>
           </header>
 
           <p className={message.text_content ? "message-text" : "message-text empty-text"}>
@@ -484,6 +670,206 @@ function MessageList({
         </article>
       ))}
     </section>
+  );
+}
+
+function EditMessageDialog({
+  canSave,
+  confirmed,
+  error,
+  files,
+  inputKey,
+  message,
+  result,
+  saving,
+  textDraft,
+  onClose,
+  onConfirmChange,
+  onFileChange,
+  onSubmit,
+  onTextChange,
+}: {
+  canSave: boolean;
+  confirmed: boolean;
+  error: string | null;
+  files: File[];
+  inputKey: number;
+  message: LegacyMessage;
+  result: EditResult | null;
+  saving: boolean;
+  textDraft: string;
+  onClose: () => void;
+  onConfirmChange: (confirmed: boolean) => void;
+  onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onTextChange: (text: string) => void;
+}) {
+  return (
+    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
+      <section
+        aria-label={`编辑消息 ${message.id}`}
+        aria-modal="true"
+        className="edit-dialog"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="edit-header">
+          <div>
+            <p className="eyebrow">Phase 2 / Edit Guard</p>
+            <h2>编辑 #{message.id}</h2>
+          </div>
+          <button type="button" className="preview-close" onClick={onClose} aria-label="关闭编辑">
+            ×
+          </button>
+        </header>
+
+        <form className="text-create-form" onSubmit={onSubmit}>
+          <label className="field-label" htmlFor="edit-message-text">
+            文字内容
+          </label>
+          <textarea
+            id="edit-message-text"
+            value={textDraft}
+            onChange={(event) => onTextChange(event.target.value)}
+            rows={5}
+          />
+
+          <label className="field-label" htmlFor="edit-message-files">
+            替换图片
+          </label>
+          <input
+            key={inputKey}
+            id="edit-message-files"
+            className="file-input"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={onFileChange}
+          />
+
+          {files.length > 0 && (
+            <div className="selected-files" aria-label="待替换图片">
+              {files.map((file, index) => (
+                <span key={`${file.name}-${file.size}-${index}`}>
+                  {file.name} · {formatBytes(file.size)}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <label className="write-confirm">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(event) => onConfirmChange(event.target.checked)}
+            />
+            <span>确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。</span>
+          </label>
+
+          <div className="dialog-actions">
+            <button type="submit" className="write-submit" disabled={!canSave}>
+              {saving ? "正在保存..." : "保存并备份"}
+            </button>
+            <button type="button" className="secondary-action" onClick={onClose}>
+              关闭
+            </button>
+          </div>
+        </form>
+
+        {error && (
+          <div className="write-result write-result-error" role="alert">
+            <strong>保存失败</strong>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {result && (
+          <div className="write-result write-result-ok" role="status">
+            <strong>已保存 #{result.message.id}</strong>
+            <PathRow
+              label="备份"
+              value={result.backup.backup_path}
+              ok={result.backup.bytes_copied > 0}
+            />
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function DeleteMessageDialog({
+  confirmed,
+  deleting,
+  error,
+  message,
+  onClose,
+  onConfirmChange,
+  onSubmit,
+}: {
+  confirmed: boolean;
+  deleting: boolean;
+  error: string | null;
+  message: LegacyMessage;
+  onClose: () => void;
+  onConfirmChange: (confirmed: boolean) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
+      <section
+        aria-label={`删除消息 ${message.id}`}
+        aria-modal="true"
+        className="delete-dialog"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="edit-header">
+          <div>
+            <p className="eyebrow">Phase 2 / Delete Guard</p>
+            <h2>删除 #{message.id}</h2>
+          </div>
+          <button type="button" className="preview-close" onClick={onClose} aria-label="关闭删除">
+            ×
+          </button>
+        </header>
+
+        <p className="delete-copy">
+          这会删除旧数据库中的消息记录和关联图片文件，执行前会自动备份数据库和现有图片。
+        </p>
+
+        <form className="text-create-form" onSubmit={onSubmit}>
+          <label className="write-confirm">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(event) => onConfirmChange(event.target.checked)}
+            />
+            <span>确认删除这条旧库消息，并保留自动备份用于回滚。</span>
+          </label>
+
+          <div className="dialog-actions">
+            <button
+              type="submit"
+              className="write-submit delete-submit"
+              disabled={!confirmed || deleting}
+            >
+              {deleting ? "正在删除..." : "删除并备份"}
+            </button>
+            <button type="button" className="secondary-action" onClick={onClose}>
+              取消
+            </button>
+          </div>
+        </form>
+
+        {error && (
+          <div className="write-result write-result-error" role="alert">
+            <strong>删除失败</strong>
+            <p>{error}</p>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
