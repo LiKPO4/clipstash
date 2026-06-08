@@ -145,6 +145,7 @@
 - 已完成阶段 3D 可选归档真实手动验收：确认消息 `id=114` 初始为未归档、文字 52 字符、1 张图片；启动临时 WinForms 目标窗口 `ClipStash Archive Paste Target`，枚举到目标 `hwnd=35785590`，执行 `manual_pastes_legacy_import_queue_with_optional_archive` 成功，返回 `completed_count=2 archive_requested=true archived=true`；目标文件读回 52 字符文字和 `image width=1 height=1`；旧库中 `id=114` 变为 `archived=1 archived_at=2026-06-08 11:27:55`，生成归档备份 `clipstash.db.bak-20260608-192755`。
 - 验收后已将测试消息 `id=114` 恢复为未归档：现有 `manual_toggles_local_legacy_archive_with_backup_and_restore` 不适合做“恢复为指定未归档状态”，因为它会恢复测试开始时状态；本轮改用手动复制 DB 备份 `clipstash.db.bak-20260608-192914-manual-restore-114` 后执行 SQL 将 `archived=0, archived_at=NULL`，随后 `npm run verify:legacy-readonly` 通过，旧库计数回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 - 已新增更安全的 ignored 手动验收工具 `manual_sets_local_legacy_archive_state_with_backup`，通过 `CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID` 和 `CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED` 显式设置目标消息归档状态并创建 DB 备份，后续可用于恢复测试消息到指定状态；常规测试不会执行该写库入口。
+- 已新增前端 API 合约测试 `tests/legacy-api.test.ts`，直接 mock Tauri `invoke`，覆盖 `pasteLegacyImportQueue` 与 `pasteLegacyImportQueueWithOptionalArchive` 的 command 名和参数映射；用于补足当前浏览器 UI 验收受阻时的前端/后端调用契约证据。
 
 ## 未完成
 
