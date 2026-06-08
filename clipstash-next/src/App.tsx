@@ -39,6 +39,7 @@ import type {
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyReplaceImagesResult,
+  LegacyWriteAudit,
   MessageView,
   SortOrder,
 } from "./api/types";
@@ -751,11 +752,7 @@ function App() {
                   <div className="write-result write-result-ok" role="status">
                     <strong>已写入 #{createTextResult.message.id}</strong>
                     <p>{createTextResult.message.created_at}</p>
-                    <PathRow
-                      label="备份"
-                      value={createTextResult.backup.backup_path}
-                      ok={createTextResult.backup.bytes_copied > 0}
-                    />
+                    <LegacyWriteAuditRows audit={createTextResult.audit} />
                   </div>
                 )}
               </section>
@@ -832,11 +829,7 @@ function App() {
                       {createMediaResult.message.created_at} · 图片{" "}
                       {createMediaResult.message.images.length}
                     </p>
-                    <PathRow
-                      label="备份"
-                      value={createMediaResult.backup.backup_path}
-                      ok={createMediaResult.backup.bytes_copied > 0}
-                    />
+                    <LegacyWriteAuditRows audit={createMediaResult.audit} />
                   </div>
                 )}
               </section>
@@ -958,11 +951,7 @@ function App() {
       {deleteResult && (
         <section className="floating-result" role="status">
           <strong>已删除 #{deleteResult.message.id}</strong>
-          <PathRow
-            label="备份"
-            value={deleteResult.backup.backup_path}
-            ok={deleteResult.backup.bytes_copied > 0}
-          />
+          <LegacyWriteAuditRows audit={deleteResult.audit} />
         </section>
       )}
 
@@ -983,11 +972,7 @@ function App() {
                   {archiveResult.message.archived ? "已归档" : "已恢复"} #
                   {archiveResult.message.id}
                 </strong>
-                <PathRow
-                  label="备份"
-                  value={archiveResult.backup.backup_path}
-                  ok={archiveResult.backup.bytes_copied > 0}
-                />
+                <LegacyWriteAuditRows audit={archiveResult.audit} />
               </>
             )
           )}
@@ -1306,6 +1291,18 @@ function PathRow({
   );
 }
 
+function LegacyWriteAuditRows({ audit }: { audit: LegacyWriteAudit }) {
+  return (
+    <>
+      <PathRow label="操作" value={`${audit.operation} #${audit.message_id}`} ok />
+      <PathRow label="DB备份" value={audit.db_backup_path} ok={audit.db_backup_path.length > 0} />
+      {audit.image_backup_dir && (
+        <PathRow label="图备份" value={audit.image_backup_dir} ok={audit.image_backup_dir.length > 0} />
+      )}
+    </>
+  );
+}
+
 function MessageList({
   archivingMessageId,
   importingMessageId,
@@ -1519,11 +1516,7 @@ function EditMessageDialog({
         {result && (
           <div className="write-result write-result-ok" role="status">
             <strong>已保存 #{result.message.id}</strong>
-            <PathRow
-              label="备份"
-              value={result.backup.backup_path}
-              ok={result.backup.bytes_copied > 0}
-            />
+            <LegacyWriteAuditRows audit={result.audit} />
           </div>
         )}
       </section>

@@ -68,6 +68,13 @@ const updateResult = {
       "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\clipstash.db.bak-20260608-171000",
     bytes_copied: 61440,
   },
+  audit: {
+    operation: "update_message_text",
+    message_id: 10,
+    db_backup_path:
+      "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\clipstash.db.bak-20260608-171000",
+    image_backup_dir: null,
+  },
   message: {
     ...message,
     text_content: "新文字",
@@ -76,6 +83,13 @@ const updateResult = {
 
 const replaceResult = {
   backup: updateResult.backup,
+  audit: {
+    operation: "replace_message_images",
+    message_id: 10,
+    db_backup_path: updateResult.backup.backup_path,
+    image_backup_dir:
+      "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images.bak-20260608-171000",
+  },
   image_backup: {
     backup_dir: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images.bak-20260608-171000",
     filenames: ["old.png"],
@@ -95,12 +109,25 @@ const replaceResult = {
 
 const deleteResult = {
   backup: updateResult.backup,
+  audit: {
+    operation: "delete_message",
+    message_id: 10,
+    db_backup_path: updateResult.backup.backup_path,
+    image_backup_dir:
+      "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images.bak-20260608-171000",
+  },
   image_backup: replaceResult.image_backup,
   message,
 };
 
 const archiveResult = {
   backup: updateResult.backup,
+  audit: {
+    operation: "set_message_archived",
+    message_id: 10,
+    db_backup_path: updateResult.backup.backup_path,
+    image_backup_dir: null,
+  },
   message: {
     ...message,
     archived: true,
@@ -110,6 +137,12 @@ const archiveResult = {
 
 const restoreResult = {
   backup: updateResult.backup,
+  audit: {
+    operation: "set_message_archived",
+    message_id: 10,
+    db_backup_path: updateResult.backup.backup_path,
+    image_backup_dir: null,
+  },
   message: {
     ...message,
     archived: false,
@@ -367,6 +400,7 @@ describe("edit and delete guarded actions", () => {
       expect.anything(),
     );
     expect(await within(dialog).findByText("已保存 #10")).toBeTruthy();
+    expect(within(dialog).getByText("update_message_text #10")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
@@ -430,6 +464,8 @@ describe("edit and delete guarded actions", () => {
         imagesData: [[9, 8]],
       });
     });
+    expect(await within(dialog).findByText("replace_message_images #10")).toBeTruthy();
+    expect(within(dialog).getByText(replaceResult.audit.image_backup_dir)).toBeTruthy();
   });
 
   it("deletes a message only after explicit confirmation", async () => {
@@ -454,6 +490,7 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已删除 #10")).toBeTruthy();
+    expect(screen.getByText("delete_message #10")).toBeTruthy();
   });
 
   it("archives a normal message and refreshes legacy data", async () => {
@@ -472,6 +509,7 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已归档 #10")).toBeTruthy();
+    expect(screen.getByText("set_message_archived #10")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
@@ -500,6 +538,7 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已恢复 #10")).toBeTruthy();
+    expect(screen.getByText("set_message_archived #10")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(3);
     expect(commandCallCount("list_legacy_messages")).toBe(3);
   });

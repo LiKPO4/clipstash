@@ -40,6 +40,13 @@ const createResult = {
       "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\clipstash.db.bak-20260608-170000",
     bytes_copied: 61440,
   },
+  audit: {
+    operation: "create_image_message",
+    message_id: 200,
+    db_backup_path:
+      "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\clipstash.db.bak-20260608-170000",
+    image_backup_dir: null,
+  },
   message: {
     id: 200,
     text_content: null,
@@ -66,6 +73,10 @@ describe("media create form", () => {
       if (command === "create_legacy_mixed_message") {
         return Promise.resolve({
           ...createResult,
+          audit: {
+            ...createResult.audit,
+            operation: "create_mixed_message",
+          },
           message: {
             ...createResult.message,
             text_content: "配套文字",
@@ -134,7 +145,8 @@ describe("media create form", () => {
       expect.anything(),
     );
     expect(await within(panel).findByText("已写入 #200")).toBeTruthy();
-    expect(within(panel).getByText(createResult.backup.backup_path)).toBeTruthy();
+    expect(within(panel).getByText("create_image_message #200")).toBeTruthy();
+    expect(within(panel).getByText(createResult.audit.db_backup_path)).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
@@ -167,6 +179,7 @@ describe("media create form", () => {
       expect.anything(),
     );
     expect(await within(panel).findByText("已写入 #200")).toBeTruthy();
+    expect(within(panel).getByText("create_mixed_message #200")).toBeTruthy();
   });
 });
 
