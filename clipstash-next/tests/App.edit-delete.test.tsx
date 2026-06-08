@@ -54,6 +54,7 @@ let writeTextMock: ReturnType<typeof vi.fn>;
 let failNextImageCopy = false;
 let failNextImportStage = false;
 let failNextImportQueuePreview = false;
+let failNextImportQueueCopy = false;
 
 const updateResult = {
   backup: {
@@ -226,6 +227,7 @@ describe("edit and delete guarded actions", () => {
     failNextImageCopy = false;
     failNextImportStage = false;
     failNextImportQueuePreview = false;
+    failNextImportQueueCopy = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
@@ -263,6 +265,10 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(importQueuePreview);
       }
       if (command === "copy_legacy_message_import_queue_item_to_clipboard") {
+        if (failNextImportQueueCopy) {
+          failNextImportQueueCopy = false;
+          return Promise.reject(new Error("导入队列项复制失败"));
+        }
         return Promise.resolve(importQueueCopyResult);
       }
       if (command === "paste_legacy_import_queue_item") {
@@ -649,6 +655,37 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
     expect(commandCallCount("copy_legacy_message_import_queue_item_to_clipboard")).toBe(0);
+  });
+
+  it("shows an import queue item copy error without refreshing legacy data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "查看队列",
+      }),
+    );
+    await screen.findByText("导入队列 #10");
+
+    failNextImportQueueCopy = true;
+    await user.click(screen.getByRole("button", { name: "复制第 1 项" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "copy_legacy_message_import_queue_item_to_clipboard",
+        {
+          messageId: 10,
+          itemIndex: 0,
+        },
+      );
+    });
+    expect(await screen.findByText("导入队列项复制失败")).toBeTruthy();
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+    expect(commandCallCount("paste_legacy_import_queue_item")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
   });
 
   it("loads, selects, and validates an external target window without pasting", async () => {
