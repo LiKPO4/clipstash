@@ -2,6 +2,7 @@ import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
 import {
+  copyLegacyImageToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
   createLegacyTextMessage,
@@ -18,6 +19,7 @@ import type {
   LegacyMessagePage,
   LegacyStats,
   LegacyArchiveMessageResult,
+  LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
   LegacyReplaceImagesResult,
   MessageView,
@@ -38,6 +40,8 @@ type CopyResult = {
   messageId: number;
   textLength: number;
 };
+
+type ImageCopyResult = LegacyCopyImageResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -80,6 +84,8 @@ function App() {
   const [archiveResult, setArchiveResult] = useState<LegacyArchiveMessageResult | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
+  const [copyImageError, setCopyImageError] = useState<string | null>(null);
+  const [copyImageResult, setCopyImageResult] = useState<ImageCopyResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -342,6 +348,20 @@ function App() {
     }
   }
 
+  async function copyMessageImage(image: LegacyMessageImage) {
+    if (!image.exists) return;
+
+    setCopyImageError(null);
+    setCopyImageResult(null);
+
+    try {
+      const result = await copyLegacyImageToClipboard(image.filename);
+      setCopyImageResult(result);
+    } catch (err) {
+      setCopyImageError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
@@ -587,6 +607,7 @@ function App() {
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
               onArchive={toggleArchiveMessage}
+              onCopyImage={copyMessageImage}
               onCopyText={copyMessageText}
               onPreview={setPreviewImage}
             />
@@ -703,6 +724,30 @@ function App() {
           )}
         </section>
       )}
+
+      {(copyImageError || copyImageResult) && (
+        <section
+          className={`floating-result ${copyImageError ? "floating-result-error" : ""}`}
+          role={copyImageError ? "alert" : "status"}
+        >
+          {copyImageError ? (
+            <>
+              <strong>复制图片失败</strong>
+              <p>{copyImageError}</p>
+            </>
+          ) : (
+            copyImageResult && (
+              <>
+                <strong>已复制图片</strong>
+                <p>
+                  {copyImageResult.filename} · {copyImageResult.width} ×{" "}
+                  {copyImageResult.height}
+                </p>
+              </>
+            )
+          )}
+        </section>
+      )}
     </main>
   );
 }
@@ -729,6 +774,7 @@ function MessageList({
   archivingMessageId,
   messages,
   onArchive,
+  onCopyImage,
   onCopyText,
   onDelete,
   onEdit,
@@ -737,6 +783,7 @@ function MessageList({
   archivingMessageId: number | null;
   messages: LegacyMessage[];
   onArchive: (message: LegacyMessage) => void;
+  onCopyImage: (image: LegacyMessageImage) => void;
   onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
@@ -786,7 +833,12 @@ function MessageList({
           {message.images.length > 0 && (
             <div className="image-grid" aria-label="图片缩略图">
               {message.images.map((image) => (
-                <MessageImageTile image={image} key={image.id} onPreview={onPreview} />
+                <MessageImageTile
+                  image={image}
+                  key={image.id}
+                  onCopy={onCopyImage}
+                  onPreview={onPreview}
+                />
               ))}
             </div>
           )}
@@ -998,9 +1050,11 @@ function DeleteMessageDialog({
 
 function MessageImageTile({
   image,
+  onCopy,
   onPreview,
 }: {
   image: LegacyMessageImage;
+  onCopy: (image: LegacyMessageImage) => void;
   onPreview: (image: PreviewImage) => void;
 }) {
   const [broken, setBroken] = useState(false);
@@ -1009,20 +1063,26 @@ function MessageImageTile({
 
   if (canRenderImage && src) {
     return (
-      <button
-        type="button"
-        className="image-tile"
-        title={image.path}
-        onClick={() => onPreview({ filename: image.filename, path: image.path, src })}
-      >
-        <img
-          alt={image.filename}
-          loading="lazy"
-          src={src}
-          onError={() => setBroken(true)}
-        />
+      <div className="image-tile" title={image.path}>
+        <button
+          type="button"
+          className="image-preview-action"
+          onClick={() => onPreview({ filename: image.filename, path: image.path, src })}
+        >
+          <img
+            alt={image.filename}
+            loading="lazy"
+            src={src}
+            onError={() => setBroken(true)}
+          />
+        </button>
+        <div className="image-tile-actions">
+          <button type="button" className="image-copy-action" onClick={() => onCopy(image)}>
+            复制图片
+          </button>
+        </div>
         <span className="image-caption">{image.filename}</span>
-      </button>
+      </div>
     );
   }
 

@@ -5,6 +5,7 @@ import type {
   LegacyCreateMixedMessageResult,
   LegacyCreateTextMessageResult,
   LegacyDeleteMessageResult,
+  LegacyCopyImageResult,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
   LegacyStats,
@@ -79,5 +80,11 @@ export function setLegacyMessageArchived(messageId: number, archived: boolean) {
   return invoke<LegacyArchiveMessageResult>("set_legacy_message_archived", {
     messageId,
     archived,
+  });
+}
+
+export function copyLegacyImageToClipboard(filename: string) {
+  return invoke<LegacyCopyImageResult>("copy_legacy_image_to_clipboard", {
+    filename,
   });
 }

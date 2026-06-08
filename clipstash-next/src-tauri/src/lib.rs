@@ -64,6 +64,13 @@ fn set_legacy_message_archived(
 }
 
 #[tauri::command]
+fn copy_legacy_image_to_clipboard(
+    filename: String,
+) -> Result<legacy_data::LegacyCopyImageResult, String> {
+    legacy_data::copy_legacy_image_to_clipboard(filename)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -82,6 +89,7 @@ pub fn run() {
             create_legacy_image_message,
             create_legacy_mixed_message,
             create_legacy_text_message,
+            copy_legacy_image_to_clipboard,
             delete_legacy_message,
             get_legacy_stats,
             list_legacy_messages,

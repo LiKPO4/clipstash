@@ -108,6 +108,13 @@ const restoreResult = {
   },
 };
 
+const copyImageResult = {
+  filename: "old.png",
+  path: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images\\old.png",
+  width: 12,
+  height: 8,
+};
+
 describe("edit and delete guarded actions", () => {
   beforeEach(() => {
     listedMessages = [message];
@@ -125,6 +132,9 @@ describe("edit and delete guarded actions", () => {
       if (command === "delete_legacy_message") return Promise.resolve(deleteResult);
       if (command === "set_legacy_message_archived") {
         return Promise.resolve(args?.archived ? archiveResult : restoreResult);
+      }
+      if (command === "copy_legacy_image_to_clipboard") {
+        return Promise.resolve(copyImageResult);
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
@@ -331,6 +341,24 @@ describe("edit and delete guarded actions", () => {
       "set_legacy_message_archived",
       expect.anything(),
     );
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("copies a message image without refreshing legacy data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const imageGrid = await screen.findByLabelText("图片缩略图");
+    await user.click(within(imageGrid).getByRole("button", { name: "复制图片" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+        filename: "old.png",
+      });
+    });
+    expect(await screen.findByText("已复制图片")).toBeTruthy();
+    expect(screen.getByText("old.png · 12 × 8")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });

@@ -70,3 +70,10 @@ export type LegacyReplaceImagesResult = {
 export type LegacyDeleteMessageResult = LegacyReplaceImagesResult;
 
 export type LegacyArchiveMessageResult = LegacyCreateTextMessageResult;
+
+export type LegacyCopyImageResult = {
+  filename: string;
+  path: string;
+  width: number;
+  height: number;
+};

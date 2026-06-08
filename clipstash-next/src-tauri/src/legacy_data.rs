@@ -1,7 +1,9 @@
+use arboard::{Clipboard, ImageData};
 use chrono::{Local, Utc};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -109,6 +111,14 @@ pub struct LegacyArchiveMessageResult {
     pub message: LegacyMessage,
 }
 
+#[derive(Serialize)]
+pub struct LegacyCopyImageResult {
+    pub filename: String,
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -180,6 +190,11 @@ pub fn set_legacy_message_archived(
 ) -> Result<LegacyArchiveMessageResult, String> {
     let data_dir = legacy_data_dir()?;
     set_message_archived_with_backup_for_path(&data_dir.join("clipstash.db"), message_id, archived)
+}
+
+pub fn copy_legacy_image_to_clipboard(filename: String) -> Result<LegacyCopyImageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    copy_legacy_image_to_clipboard_from_dir(data_dir, filename)
 }
 
 pub fn list_legacy_messages(
@@ -948,6 +963,56 @@ fn ensure_legacy_schema(conn: &Connection) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn copy_legacy_image_to_clipboard_from_dir(
+    data_dir: PathBuf,
+    filename: String,
+) -> Result<LegacyCopyImageResult, String> {
+    let image_path = resolve_legacy_image_path(&data_dir, &filename)?;
+    let image = image::open(&image_path)
+        .map_err(|err| format!("读取旧图片准备复制失败：{}：{err}", image_path.display()))?
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    let bytes = image.into_raw();
+
+    let mut clipboard =
+        Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制图片失败：{err}"))?;
+    clipboard
+        .set_image(ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(bytes),
+        })
+        .map_err(|err| format!("写入图片到系统剪贴板失败：{err}"))?;
+
+    Ok(LegacyCopyImageResult {
+        filename,
+        path: path_to_string(image_path),
+        width,
+        height,
+    })
+}
+
+fn resolve_legacy_image_path(data_dir: &Path, filename: &str) -> Result<PathBuf, String> {
+    let trimmed = filename.trim();
+    if trimmed.is_empty() {
+        return Err("复制图片失败，图片文件名不能为空".to_string());
+    }
+    let candidate_name = Path::new(trimmed);
+    if candidate_name.components().count() != 1 {
+        return Err(format!("复制图片失败，非法图片文件名：{trimmed}"));
+    }
+
+    let image_path = data_dir.join("images").join(trimmed);
+    if !image_path.is_file() {
+        return Err(format!(
+            "复制图片失败，图片文件不存在：{}",
+            image_path.display()
+        ));
+    }
+
+    Ok(image_path)
 }
 
 #[allow(dead_code)]
@@ -1942,6 +2007,39 @@ mod tests {
                 .starts_with("clipstash.db.bak-")));
 
         fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn resolves_legacy_image_path_only_for_images_dir_filenames() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-copy-image-path-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        let images_dir = data_dir.join("images");
+        fs::create_dir_all(&images_dir).expect("create images dir");
+        fs::write(images_dir.join("safe.png"), tiny_png_bytes()).expect("write image fixture");
+
+        let resolved =
+            resolve_legacy_image_path(&data_dir, "safe.png").expect("resolve image fixture");
+
+        assert_eq!(resolved, images_dir.join("safe.png"));
+        fs::remove_dir_all(data_dir).expect("remove image path fixture");
+    }
+
+    #[test]
+    fn rejects_legacy_image_path_traversal_before_copy() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-copy-image-traversal-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+
+        let result = resolve_legacy_image_path(&data_dir, "..\\clipstash.db");
+
+        assert!(result.is_err());
+        fs::remove_dir_all(data_dir).expect("remove image traversal fixture");
     }
 
     #[test]

@@ -557,9 +557,9 @@ button {
   margin-top: 14px;
 }
 
-.image-tile {
+.image-tile,
+.image-preview-action {
   display: grid;
-  grid-template-rows: 86px 28px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -570,17 +570,25 @@ button {
   text-align: left;
 }
 
-button.image-tile {
+.image-tile {
+  grid-template-rows: 86px 32px 28px;
+}
+
+.image-preview-action {
+  grid-template-rows: 86px;
+  border: 0;
+  border-radius: 0;
   color: inherit;
   cursor: zoom-in;
 }
 
-button.image-tile:hover {
+.image-preview-action:hover {
   border-color: #1f7a64;
   box-shadow: 0 0 0 3px rgba(31, 122, 100, 0.16);
 }
 
-button.image-tile:focus-visible {
+.image-preview-action:focus-visible,
+.image-copy-action:focus-visible {
   outline: 3px solid rgba(31, 122, 100, 0.32);
   outline-offset: 2px;
 }
@@ -590,6 +598,31 @@ button.image-tile:focus-visible {
   height: 86px;
   object-fit: cover;
   background: #dfe8e3;
+}
+
+.image-tile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: stretch;
+  padding: 4px;
+  border-top: 1px solid #d7e2dc;
+}
+
+.image-copy-action {
+  width: 100%;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid #1f5f7a;
+  border-radius: 6px;
+  color: #fffdf8;
+  background: #1f5f7a;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.image-copy-action:hover {
+  background: #184b60;
 }
 
 .image-placeholder {
