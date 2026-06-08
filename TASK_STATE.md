@@ -174,6 +174,8 @@
 - 已在 UI 真实烟测后补跑验证：`npm test` 通过，3 个测试文件 46 项通过；`npm run build` 通过；`cargo check` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 - 已完成图片复制真实 UI 点击验收：点击旧图片的“复制图片”后页面显示“已复制图片 / clipstash-next-20260608163309521-1896-0.png · 1 × 1”，页面未出现 WebView 剪贴板权限提示“允许/阻止”；旧 Python `clipboard_utils.get_clipboard_image()` 读回系统剪贴板图片 `width=1 height=1 mode=RGBA`。
 - 已在图片复制 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片。
+- 已完成“准备导入”真实 UI 点击验收：点击消息 `#114` 的“准备导入”后页面显示“已准备导入 #114 / 52 个字符已进入剪贴板”，页面未出现 WebView 剪贴板权限提示“允许/阻止”；旧 Python `clipboard_utils.get_clipboard_text()` 读回 52 字符文本 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`。
+- 已在“准备导入”UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片。
 
 ## 未完成
 
@@ -212,4 +214,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；优先做不写 DB 的“准备导入”或“查看队列/复制队列项”UI 点击验收。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；优先做不写 DB 的“查看队列/复制队列项”UI 点击验收。
