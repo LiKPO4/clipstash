@@ -94,6 +94,13 @@ pub fn create_legacy_text_message(
     create_text_message_with_backup_for_path(&data_dir.join("clipstash.db"), text_content)
 }
 
+pub fn create_legacy_image_message(
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyCreateTextMessageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    create_image_message_with_backup_for_path(&data_dir.join("clipstash.db"), images_data)
+}
+
 pub fn list_legacy_messages(
     view: MessageView,
     sort: SortOrder,
@@ -254,7 +261,6 @@ fn create_text_message_with_backup_for_path(
     Ok(LegacyCreateTextMessageResult { backup, message })
 }
 
-#[allow(dead_code)]
 fn create_image_message_with_backup_for_path(
     db_path: &Path,
     images_data: Vec<Vec<u8>>,
@@ -321,7 +327,7 @@ pub fn create_image_message_for_path(
     ensure_legacy_schema(&conn)?;
 
     let mut saved_paths = Vec::new();
-    let insert_result = {
+    let insert_result = (|| {
         let tx = conn
             .transaction()
             .map_err(|err| format!("开启图片消息写入事务失败：{err}"))?;
@@ -333,8 +339,10 @@ pub fn create_image_message_for_path(
 
         let message_id = tx.last_insert_rowid();
         for (index, image_data) in images_data.iter().enumerate() {
-            let filename = save_image_file(&images_dir, image_data, index)?;
-            saved_paths.push(images_dir.join(&filename));
+            let filename = next_image_filename(&images_dir, index);
+            let path = images_dir.join(&filename);
+            saved_paths.push(path.clone());
+            save_image_file(&path, image_data)?;
             tx.execute(
                 "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
                 params![message_id, filename],
@@ -345,7 +353,7 @@ pub fn create_image_message_for_path(
         tx.commit()
             .map_err(|err| format!("提交图片消息写入失败：{err}"))?;
         Ok::<i64, String>(message_id)
-    };
+    })();
 
     let message_id = match insert_result {
         Ok(message_id) => message_id,
@@ -380,12 +388,8 @@ fn validate_images_data(images_data: &[Vec<u8>]) -> Result<(), String> {
     Ok(())
 }
 
-fn save_image_file(images_dir: &Path, image_data: &[u8], index: usize) -> Result<String, String> {
-    let filename = next_image_filename(images_dir, index);
-    let path = images_dir.join(&filename);
-    fs::write(&path, image_data).map_err(|err| format!("保存图片文件失败：{err}"))?;
-
-    Ok(filename)
+fn save_image_file(path: &Path, image_data: &[u8]) -> Result<(), String> {
+    fs::write(path, image_data).map_err(|err| format!("保存图片文件失败：{err}"))
 }
 
 fn next_image_filename(images_dir: &Path, index: usize) -> String {
@@ -1069,6 +1073,51 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with("clipstash.db.bak-")));
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn removes_saved_image_files_when_db_insert_fails() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-image-cleanup-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create data dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            ",
+        )
+        .expect("seed fixture without message_images table");
+        drop(conn);
+
+        let result = create_image_message_for_path(&db_path, vec![b"orphan-risk".to_vec()]);
+
+        assert!(result.is_err());
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            0
+        );
+        drop(conn);
+
+        let images_dir = data_dir.join("images");
+        assert!(images_dir.is_dir());
+        assert_eq!(
+            fs::read_dir(&images_dir).expect("read images dir").count(),
+            0
+        );
 
         fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
     }

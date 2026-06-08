@@ -49,3 +49,5 @@ export type LegacyCreateTextMessageResult = {
   backup: LegacyDbBackup;
   message: LegacyMessage;
 };
+
+export type LegacyCreateImageMessageResult = LegacyCreateTextMessageResult;

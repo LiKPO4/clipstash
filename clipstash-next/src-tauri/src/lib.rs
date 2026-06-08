@@ -18,6 +18,13 @@ fn create_legacy_text_message(
 }
 
 #[tauri::command]
+fn create_legacy_image_message(
+    images_data: Vec<Vec<u8>>,
+) -> Result<legacy_data::LegacyCreateTextMessageResult, String> {
+    legacy_data::create_legacy_image_message(images_data)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -33,6 +40,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             create_legacy_db_backup,
+            create_legacy_image_message,
             create_legacy_text_message,
             get_legacy_stats,
             list_legacy_messages
