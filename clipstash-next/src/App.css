@@ -475,20 +475,25 @@ textarea:focus,
 .toolbar {
   padding: 8px;
   border-radius: 8px;
-  background: var(--panel);
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(9, 36, 71, 0.04);
 }
 
 .segmented {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid #e4ebf5;
+  border-radius: 9px;
+  background: #f5f8fc;
 }
 
 .segmented button,
 .load-more {
-  min-height: 40px;
+  min-height: 38px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   color: #405675;
   background: transparent;
   cursor: pointer;
@@ -498,6 +503,7 @@ textarea:focus,
 .segmented button.active {
   color: #fff;
   background: var(--blue);
+  box-shadow: 0 6px 14px rgba(63, 125, 241, 0.2);
 }
 
 .toolbar .segmented + .segmented {
@@ -510,11 +516,16 @@ textarea:focus,
   gap: 12px;
   align-items: baseline;
   color: var(--muted);
+  padding: 0 1px;
 }
 
 .list-head strong {
   color: var(--ink);
   font-size: 14px;
+}
+
+.list-head span {
+  font-size: 12px;
 }
 
 .message-list {
@@ -789,26 +800,28 @@ textarea:focus,
 
 .floating-result {
   position: fixed;
-  right: 12px;
-  bottom: 12px;
+  right: max(12px, calc((100vw - 420px) / 2 + 12px));
+  bottom: 14px;
   z-index: 30;
   display: grid;
-  width: min(370px, calc(100vw - 24px));
-  gap: 8px;
-  padding: 12px;
+  width: min(358px, calc(100vw - 24px));
+  gap: 7px;
+  padding: 12px 13px;
   border: 1px solid #bfe4d4;
-  border-radius: 8px;
-  background: #f0fbf6;
-  box-shadow: 0 16px 38px rgba(9, 36, 71, 0.18);
+  border-radius: 9px;
+  background: #effaf5;
+  box-shadow: 0 18px 42px rgba(9, 36, 71, 0.18);
 }
 
 .floating-result strong {
   color: #17815b;
+  font-size: 13px;
 }
 
 .floating-result p {
   margin: 0;
   color: var(--muted);
+  font-size: 12px;
 }
 
 .floating-result-error {
