@@ -13,6 +13,12 @@ import type {
 
 const PAGE_LIMIT = 30;
 
+type PreviewImage = {
+  filename: string;
+  path: string;
+  src: string;
+};
+
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
   const [page, setPage] = useState<LegacyMessagePage | null>(null);
@@ -21,6 +27,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -51,6 +58,24 @@ function App() {
       alive = false;
     };
   }, [view, sort]);
+
+  useEffect(() => {
+    if (!previewImage) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewImage(null);
+      }
+    };
+
+    document.body.classList.add("preview-open");
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.classList.remove("preview-open");
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [previewImage]);
 
   async function loadMore() {
     if (!page || loadingMore) return;
@@ -165,7 +190,7 @@ function App() {
             </span>
           </section>
 
-          {page && <MessageList messages={page.messages} />}
+          {page && <MessageList messages={page.messages} onPreview={setPreviewImage} />}
 
           {page && page.messages.length === 0 && (
             <p className="empty">当前视图没有消息。</p>
@@ -182,6 +207,10 @@ function App() {
             </button>
           )}
         </>
+      )}
+
+      {previewImage && (
+        <ImagePreviewDialog image={previewImage} onClose={() => setPreviewImage(null)} />
       )}
     </main>
   );
@@ -205,7 +234,13 @@ function PathRow({
   );
 }
 
-function MessageList({ messages }: { messages: LegacyMessage[] }) {
+function MessageList({
+  messages,
+  onPreview,
+}: {
+  messages: LegacyMessage[];
+  onPreview: (image: PreviewImage) => void;
+}) {
   return (
     <section className="message-list" aria-label="旧消息列表">
       {messages.map((message) => (
@@ -223,7 +258,7 @@ function MessageList({ messages }: { messages: LegacyMessage[] }) {
           {message.images.length > 0 && (
             <div className="image-grid" aria-label="图片缩略图">
               {message.images.map((image) => (
-                <MessageImageTile image={image} key={image.id} />
+                <MessageImageTile image={image} key={image.id} onPreview={onPreview} />
               ))}
             </div>
           )}
@@ -233,28 +268,71 @@ function MessageList({ messages }: { messages: LegacyMessage[] }) {
   );
 }
 
-function MessageImageTile({ image }: { image: LegacyMessageImage }) {
+function MessageImageTile({
+  image,
+  onPreview,
+}: {
+  image: LegacyMessageImage;
+  onPreview: (image: PreviewImage) => void;
+}) {
   const [broken, setBroken] = useState(false);
   const canRenderImage = image.exists && !broken;
   const src = canRenderImage ? getAssetSrc(image.path) : "";
 
-  return (
-    <figure
-      className={canRenderImage && src ? "image-tile" : "image-tile image-tile-missing"}
-      title={image.path}
-    >
-      {canRenderImage && src ? (
+  if (canRenderImage && src) {
+    return (
+      <button
+        type="button"
+        className="image-tile"
+        title={image.path}
+        onClick={() => onPreview({ filename: image.filename, path: image.path, src })}
+      >
         <img
           alt={image.filename}
           loading="lazy"
           src={src}
           onError={() => setBroken(true)}
         />
-      ) : (
-        <span>{image.exists ? "无法读取" : "文件缺失"}</span>
-      )}
-      <figcaption>{image.filename}</figcaption>
-    </figure>
+        <span className="image-caption">{image.filename}</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="image-tile image-tile-missing" title={image.path}>
+      <span className="image-placeholder">{image.exists ? "无法读取" : "文件缺失"}</span>
+      <span className="image-caption">{image.filename}</span>
+    </div>
+  );
+}
+
+function ImagePreviewDialog({
+  image,
+  onClose,
+}: {
+  image: PreviewImage;
+  onClose: () => void;
+}) {
+  return (
+    <div className="preview-backdrop" role="presentation" onClick={onClose}>
+      <section
+        aria-label={image.filename}
+        aria-modal="true"
+        className="preview-dialog"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="preview-header">
+          <strong title={image.path}>{image.filename}</strong>
+          <button type="button" className="preview-close" onClick={onClose} aria-label="关闭预览">
+            ×
+          </button>
+        </header>
+        <div className="preview-stage">
+          <img alt={image.filename} src={image.src} />
+        </div>
+      </section>
+    </div>
   );
 }
 
