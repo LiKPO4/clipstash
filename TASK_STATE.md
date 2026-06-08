@@ -147,6 +147,7 @@
 - 已新增更安全的 ignored 手动验收工具 `manual_sets_local_legacy_archive_state_with_backup`，通过 `CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID` 和 `CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED` 显式设置目标消息归档状态并创建 DB 备份，后续可用于恢复测试消息到指定状态；常规测试不会执行该写库入口。
 - 已新增前端 API 合约测试 `tests/legacy-api.test.ts`，直接 mock Tauri `invoke`，覆盖 `pasteLegacyImportQueue` 与 `pasteLegacyImportQueueWithOptionalArchive` 的 command 名和参数映射；用于补足当前浏览器 UI 验收受阻时的前端/后端调用契约证据。
 - 已扩展前端 API 合约测试，覆盖 `updateLegacyMessageText`、`replaceLegacyMessageImages`、`deleteLegacyMessage`、`setLegacyMessageArchived` 的 command 名和参数映射；这些路径仍未替代真实 UI 点击验收，但已补充前端/后端调用契约证据。
+- 已扩展前端 API 合约测试，覆盖 `createLegacyTextMessage`、`createLegacyImageMessage`、`createLegacyMixedMessage` 的 command 名和参数映射；当前仅验证前端/后端调用契约，不写真实旧库。
 
 ## 未完成
 
@@ -182,4 +183,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：实现单步受控粘贴 command，按顺序校验目标窗口、复制队列项、聚焦目标窗口、发送 Ctrl+V。
+- 继续补浏览器之外的验收：优先扩展前端 API 合约测试和 mock 交互测试，逐步覆盖创建、编辑、删除、归档、复制、导入的前端/后端调用边界。

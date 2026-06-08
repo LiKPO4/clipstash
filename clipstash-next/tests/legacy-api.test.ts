@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createLegacyImageMessage,
+  createLegacyMixedMessage,
+  createLegacyTextMessage,
   deleteLegacyMessage,
   pasteLegacyImportQueue,
   pasteLegacyImportQueueWithOptionalArchive,
@@ -52,6 +55,37 @@ describe("legacy api command contracts", () => {
         archiveAfterSuccess: true,
       },
     );
+  });
+
+  it("maps text creation arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ message: { id: 115 } });
+
+    await createLegacyTextMessage("新增文字");
+
+    expect(invokeMock).toHaveBeenCalledWith("create_legacy_text_message", {
+      textContent: "新增文字",
+    });
+  });
+
+  it("maps image creation arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ message: { id: 115 } });
+
+    await createLegacyImageMessage([[1, 2, 3]]);
+
+    expect(invokeMock).toHaveBeenCalledWith("create_legacy_image_message", {
+      imagesData: [[1, 2, 3]],
+    });
+  });
+
+  it("maps mixed creation arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ message: { id: 115 } });
+
+    await createLegacyMixedMessage("新增图文", [[1, 2, 3]]);
+
+    expect(invokeMock).toHaveBeenCalledWith("create_legacy_mixed_message", {
+      textContent: "新增图文",
+      imagesData: [[1, 2, 3]],
+    });
   });
 
   it("maps text update arguments to the backend command", async () => {
