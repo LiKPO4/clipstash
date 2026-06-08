@@ -8,3 +8,33 @@ export type LegacyStats = {
   archived_count: number;
   total_count: number;
 };
+
+export type MessageView = "normal" | "archived";
+
+export type SortOrder = "newest" | "oldest";
+
+export type LegacyMessageImage = {
+  id: number;
+  filename: string;
+  path: string;
+  exists: boolean;
+};
+
+export type LegacyMessage = {
+  id: number;
+  text_content: string | null;
+  created_at: string;
+  archived: boolean;
+  archived_at: string | null;
+  images: LegacyMessageImage[];
+};
+
+export type LegacyMessagePage = {
+  view: MessageView;
+  sort: SortOrder;
+  offset: number;
+  limit: number;
+  total_count: number;
+  has_more: boolean;
+  messages: LegacyMessage[];
+};

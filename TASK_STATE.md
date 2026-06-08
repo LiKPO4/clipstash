@@ -3,7 +3,7 @@
 ## 当前目标
 
 - 将 ClipStash 逐步从 Python + Tkinter/customtkinter 重构为 Tauri 2 + React + TypeScript + Rust + SQLite。
-- 当前阶段为 MVP-0：新应用只读旧 `clipstash.db`，显示普通消息数、已归档消息数、总消息数。
+- 当前阶段为阶段 1：只读读取旧 `messages` 与 `message_images`，逐步展示消息列表和图片。
 
 ## 已完成
 
@@ -17,11 +17,18 @@
 - 已运行 Rust 单元测试，临时旧库夹具计数通过。
 - 已运行本机旧库只读验证，读取到普通消息 `8`、已归档消息 `103`、总消息 `111`。
 - 已运行 `npm run tauri build`，Tauri release 构建通过，生成 exe/msi/nsis 产物。
+- 已实现 Rust 侧 `list_legacy_messages` command，支持普通/已归档视图、最新/最早排序、offset/limit 分页。
+- 已实现按 `message_images.id` 读取图片文件名，并检查旧 `images/` 中对应文件是否存在。
+- 已实现 React 首屏只读消息列表：普通/已归档切换、排序切换、加载更多、文本摘要和图片文件状态。
+- 已运行 Rust 单元测试覆盖消息排序、图片顺序和图片存在/缺失状态。
+- 已运行本机旧库只读列表验证，普通消息总数 `8`，首批返回 `5`，`has_more=true`。
+- 已用普通浏览器检查页面基础布局，1280px 和 390px 宽度均无横向溢出。
 
 ## 未完成
 
 - 尚未运行 `npm run tauri dev` 并人工查看真实 Tauri WebView 首屏。
-- 尚未实现消息列表、图片读取、复制、编辑、归档等后续阶段功能。
+- 阶段 1 尚未实现真实缩略图渲染和图片预览，只展示图片文件状态。
+- 尚未实现复制、编辑、归档、恢复、导入等后续阶段功能。
 
 ## 阻塞
 
@@ -38,5 +45,5 @@
 
 ## 下一步
 
-- 进入阶段 1：实现只读消息列表，读取 `messages` 与 `message_images`，展示普通/已归档列表和图片文件状态。
+- 继续阶段 1：实现旧图片缩略图只读展示，仍通过 DB filename + `images/` 解析，不移动、不改写图片。
 - 在进入写入阶段前继续保持只读，不改旧 DB、不改旧 `images/`。
