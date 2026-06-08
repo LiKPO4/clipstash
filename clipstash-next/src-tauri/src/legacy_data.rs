@@ -2517,6 +2517,55 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "writes local ClipStash app data; set CLIPSTASH_NEXT_WRITE_LEGACY_ARCHIVE_ID"]
+    fn manual_toggles_local_legacy_archive_with_backup_and_restore() {
+        let message_id = std::env::var("CLIPSTASH_NEXT_WRITE_LEGACY_ARCHIVE_ID")
+            .expect("set CLIPSTASH_NEXT_WRITE_LEGACY_ARCHIVE_ID to an existing message id")
+            .parse::<i64>()
+            .expect("CLIPSTASH_NEXT_WRITE_LEGACY_ARCHIVE_ID must be a positive integer");
+        assert!(message_id > 0);
+
+        let data_dir = legacy_data_dir().expect("locate local legacy data dir");
+        let db_path = data_dir.join("clipstash.db");
+        let original =
+            read_message_for_update_precheck(&db_path, message_id).expect("read original message");
+        let target_archived = !original.archived;
+
+        let toggled = set_legacy_message_archived(message_id, target_archived)
+            .expect("toggle local legacy archive state");
+        let toggle_backup_path = PathBuf::from(&toggled.backup.backup_path);
+
+        assert!(toggle_backup_path.is_file());
+        assert!(toggled.backup.bytes_copied > 0);
+        assert_eq!(toggled.message.id, message_id);
+        assert_eq!(toggled.message.archived, target_archived);
+        if target_archived {
+            assert!(toggled.message.archived_at.is_some());
+        } else {
+            assert!(toggled.message.archived_at.is_none());
+        }
+
+        let restored = set_legacy_message_archived(message_id, original.archived)
+            .expect("restore local legacy archive state");
+        let restore_backup_path = PathBuf::from(&restored.backup.backup_path);
+
+        assert!(restore_backup_path.is_file());
+        assert!(restored.backup.bytes_copied > 0);
+        assert_eq!(restored.message.id, message_id);
+        assert_eq!(restored.message.archived, original.archived);
+        assert_eq!(restored.message.archived_at, original.archived_at);
+
+        eprintln!(
+            "legacy-archive-toggle-ok id={} toggled_to={} restored_to={} toggle_backup={} restore_backup={}",
+            message_id,
+            toggled.message.archived,
+            restored.message.archived,
+            toggled.backup.backup_path,
+            restored.backup.backup_path
+        );
+    }
+
     fn tiny_png_bytes() -> Vec<u8> {
         vec![
             137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
