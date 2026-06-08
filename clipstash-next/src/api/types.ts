@@ -122,3 +122,13 @@ export type LegacyImportQueueCopyResult = {
   image_filename: string | null;
   copied_image: LegacyCopyImageResult | null;
 };
+
+export type LegacyImportPasteResult = {
+  message_id: number;
+  item_index: number;
+  staged_kind: "text" | "image";
+  text_length: number;
+  image_filename: string | null;
+  target: ExternalWindowTarget;
+  sent_ctrl_v: boolean;
+};

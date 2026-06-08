@@ -9,6 +9,7 @@ import type {
   LegacyDeleteMessageResult,
   LegacyCopyImageResult,
   LegacyImportQueueCopyResult,
+  LegacyImportPasteResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyMessagePage,
@@ -127,4 +128,16 @@ export function copyLegacyMessageImportQueueItemToClipboard(
       itemIndex,
     },
   );
+}
+
+export function pasteLegacyImportQueueItem(
+  messageId: number,
+  itemIndex: number,
+  targetHwnd: number,
+) {
+  return invoke<LegacyImportPasteResult>("paste_legacy_import_queue_item", {
+    messageId,
+    itemIndex,
+    targetHwnd,
+  });
 }

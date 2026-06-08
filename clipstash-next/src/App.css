@@ -892,6 +892,13 @@ button {
   white-space: nowrap;
 }
 
+.import-queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .import-queue-item button {
   background: #fffdf8;
   border: 1px solid #b8d1c8;

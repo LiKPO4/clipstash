@@ -11,6 +11,7 @@ import {
   getLegacyStats,
   listExternalWindowTargets,
   listLegacyMessages,
+  pasteLegacyImportQueueItem,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
   previewLegacyMessageImportQueue,
@@ -29,6 +30,7 @@ import type {
   ExternalWindowValidation,
   ExternalWindowTarget,
   LegacyImportQueueCopyResult,
+  LegacyImportPasteResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
   LegacyReplaceImagesResult,
@@ -56,6 +58,8 @@ type ImageCopyResult = LegacyCopyImageResult;
 type ImportStageResult = LegacyImportStageResult;
 
 type ImportQueueCopyResult = LegacyImportQueueCopyResult;
+
+type ImportQueuePasteResult = LegacyImportPasteResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -115,6 +119,13 @@ function App() {
   const [importQueueCopyError, setImportQueueCopyError] = useState<string | null>(null);
   const [importQueueCopyResult, setImportQueueCopyResult] =
     useState<ImportQueueCopyResult | null>(null);
+  const [pastingImportQueueItem, setPastingImportQueueItem] = useState<{
+    messageId: number;
+    itemIndex: number;
+  } | null>(null);
+  const [importQueuePasteError, setImportQueuePasteError] = useState<string | null>(null);
+  const [importQueuePasteResult, setImportQueuePasteResult] =
+    useState<ImportQueuePasteResult | null>(null);
   const [targetWindows, setTargetWindows] = useState<ExternalWindowTarget[]>([]);
   const [selectedTargetWindow, setSelectedTargetWindow] =
     useState<ExternalWindowTarget | null>(null);
@@ -506,6 +517,36 @@ function App() {
     }
   }
 
+  async function pasteImportQueueItem(itemIndex: number) {
+    const target = targetWindowValidation?.target;
+    if (
+      !importQueuePreview ||
+      !selectedTargetWindow ||
+      !target ||
+      target.hwnd !== selectedTargetWindow.hwnd ||
+      pastingImportQueueItem !== null
+    ) {
+      return;
+    }
+
+    setPastingImportQueueItem({ messageId: importQueuePreview.message_id, itemIndex });
+    setImportQueuePasteError(null);
+    setImportQueuePasteResult(null);
+
+    try {
+      const result = await pasteLegacyImportQueueItem(
+        importQueuePreview.message_id,
+        itemIndex,
+        target.hwnd,
+      );
+      setImportQueuePasteResult(result);
+    } catch (err) {
+      setImportQueuePasteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPastingImportQueueItem(null);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
@@ -521,6 +562,12 @@ function App() {
     (((editingMessage.text_content ?? null) !==
       (editText.length > 0 ? editText : null)) ||
       editFiles.length > 0);
+  const validatedTargetWindow = targetWindowValidation?.target ?? null;
+  const canPasteImportQueueItem =
+    !!selectedTargetWindow &&
+    !!validatedTargetWindow &&
+    selectedTargetWindow.hwnd === validatedTargetWindow.hwnd &&
+    pastingImportQueueItem === null;
 
   return (
     <main className="shell">
@@ -996,17 +1043,30 @@ function App() {
                           ? `文字 · ${item.text_length} 字符`
                           : `图片 · ${item.image?.filename ?? "未知图片"}`}
                       </span>
-                      <button
-                        type="button"
-                        disabled={copyingImportQueueItem !== null}
-                        onClick={() => copyImportQueueItem(index)}
-                      >
-                        {copyingImportQueueItem?.messageId ===
-                          importQueuePreview.message_id &&
-                        copyingImportQueueItem.itemIndex === index
-                          ? "复制中..."
-                          : `复制第 ${index + 1} 项`}
-                      </button>
+                      <div className="import-queue-actions">
+                        <button
+                          type="button"
+                          disabled={copyingImportQueueItem !== null}
+                          onClick={() => copyImportQueueItem(index)}
+                        >
+                          {copyingImportQueueItem?.messageId ===
+                            importQueuePreview.message_id &&
+                          copyingImportQueueItem.itemIndex === index
+                            ? "复制中..."
+                            : `复制第 ${index + 1} 项`}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canPasteImportQueueItem}
+                          onClick={() => pasteImportQueueItem(index)}
+                        >
+                          {pastingImportQueueItem?.messageId ===
+                            importQueuePreview.message_id &&
+                          pastingImportQueueItem.itemIndex === index
+                            ? "粘贴中..."
+                            : `粘贴第 ${index + 1} 项`}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1037,6 +1097,36 @@ function App() {
                   {importQueueCopyResult.staged_kind === "text"
                     ? `${importQueueCopyResult.text_length} 个字符已进入剪贴板`
                     : `${importQueueCopyResult.image_filename ?? "图片"} 已进入剪贴板`}
+                </p>
+              </>
+            )
+          )}
+        </section>
+      )}
+
+      {(importQueuePasteError || importQueuePasteResult) && (
+        <section
+          className={`floating-result ${importQueuePasteError ? "floating-result-error" : ""}`}
+          role={importQueuePasteError ? "alert" : "status"}
+        >
+          {importQueuePasteError ? (
+            <>
+              <strong>粘贴导入项失败</strong>
+              <p>{importQueuePasteError}</p>
+            </>
+          ) : (
+            importQueuePasteResult && (
+              <>
+                <strong>
+                  已粘贴导入项 #{importQueuePasteResult.message_id} /{" "}
+                  {importQueuePasteResult.item_index + 1}
+                </strong>
+                <p>
+                  {importQueuePasteResult.staged_kind === "text"
+                    ? `${importQueuePasteResult.text_length} 个字符已发送到 ${importQueuePasteResult.target.title}`
+                    : `${
+                        importQueuePasteResult.image_filename ?? "图片"
+                      } 已发送到 ${importQueuePasteResult.target.title}`}
                 </p>
               </>
             )

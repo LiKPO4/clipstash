@@ -129,6 +129,8 @@
 - 已新增 ignored 手动验收测试 `manual_focuses_external_window_target`，只有设置 `CLIPSTASH_NEXT_FOCUS_WINDOW` 时才会聚焦本机外部窗口；当前会话未执行该手动测试，避免抢焦点干扰。
 - 已新增单项受控粘贴后端 command `paste_legacy_import_queue_item(message_id, item_index, target_hwnd)`，按“校验目标窗口、复制队列项到剪贴板、聚焦目标窗口、发送一次 Ctrl+V”执行；当前不整队列自动粘贴、不自动归档、不写 DB。
 - 已新增 ignored 手动验收测试 `manual_pastes_legacy_import_queue_item_to_external_window`，只有设置 `CLIPSTASH_NEXT_PASTE_IMPORT_ID`、`CLIPSTASH_NEXT_PASTE_IMPORT_INDEX`、`CLIPSTASH_NEXT_PASTE_IMPORT_HWND` 时才会真实聚焦目标窗口并发送 Ctrl+V；当前会话未执行该手动测试。
+- 已在前端导入队列浮层中接入 `paste_legacy_import_queue_item`，只有当前选择窗口与校验通过窗口 hwnd 一致时才启用“粘贴第 N 项”；当前仍不整队列自动粘贴、不自动归档、不写 DB。
+- 已新增前端 mock 交互测试，覆盖未校验目标窗口时粘贴按钮禁用、校验后调用单项粘贴 command，以及粘贴不刷新旧库统计/列表。
 
 ## 未完成
 
@@ -138,7 +140,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入流程中的整队列 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command。
+- 阶段 3 尚未实现导入流程中的整队列 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command 和前端手动触发入口。
 
 ## 阻塞
 
