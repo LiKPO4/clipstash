@@ -58,6 +58,7 @@ let failNextImportQueueCopy = false;
 let failNextImportQueueItemPaste = false;
 let failNextImportQueuePaste = false;
 let failNextImportQueueArchivePaste = false;
+let failNextTargetWindowRefresh = false;
 
 const updateResult = {
   backup: {
@@ -234,6 +235,7 @@ describe("edit and delete guarded actions", () => {
     failNextImportQueueItemPaste = false;
     failNextImportQueuePaste = false;
     failNextImportQueueArchivePaste = false;
+    failNextTargetWindowRefresh = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
@@ -299,6 +301,10 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(importQueuePasteArchiveResult);
       }
       if (command === "list_external_window_targets") {
+        if (failNextTargetWindowRefresh) {
+          failNextTargetWindowRefresh = false;
+          return Promise.reject(new Error("目标窗口刷新失败"));
+        }
         return Promise.resolve(externalWindowTargets);
       }
       if (command === "validate_external_window_target") {
@@ -738,6 +744,33 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("copy_legacy_message_import_queue_item_to_clipboard")).toBe(0);
     expect(commandCallCount("paste_legacy_import_queue_item")).toBe(0);
     expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
+  });
+
+  it("shows a target window refresh error without validating or pasting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "查看队列",
+      }),
+    );
+    await screen.findByText("导入队列 #10");
+
+    failNextTargetWindowRefresh = true;
+    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_external_window_targets");
+    });
+    expect(await screen.findByText("目标窗口刷新失败")).toBeTruthy();
+    expect(commandCallCount("validate_external_window_target")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue_item")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
+    expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
