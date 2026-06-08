@@ -180,6 +180,8 @@
 - 已完成导入队列第 1 项文字复制 UI 验收：页面显示“已复制导入项 #114 / 1 / 52 个字符已进入剪贴板”，旧 Python `clipboard_utils.get_clipboard_text()` 读回 52 字符文本 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`。
 - 已完成导入队列第 2 项图片复制 UI 验收：页面显示“已复制导入项 #114 / 2 / clipstash-next-20260608163309521-1896-0.png 已进入剪贴板”，旧 Python `clipboard_utils.get_clipboard_image()` 读回系统剪贴板图片 `width=1 height=1 mode=RGBA`。
 - 已在导入队列项复制 UI 验收后两次运行 `npm run verify:legacy-readonly`，旧库审计均保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片，页面未出现 WebView 剪贴板权限提示“允许/阻止”。
+- 已完成目标窗口刷新/选择/校验真实 UI 验收：启动临时 WinForms 窗口 `ClipStash Validation Target`，在导入队列弹层点击“刷新目标窗口”后枚举到 21 个候选，选择 `ClipStash Validation Target · pid 28000 · hwnd 10554688` 后点击“校验目标窗口”，页面显示“校验通过：ClipStash Validation Target · pid 28000”。
+- 已在目标窗口 UI 校验后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片、不发送 Ctrl+V，页面未出现 WebView 权限提示“允许/阻止”。
 
 ## 未完成
 
@@ -218,4 +220,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做目标窗口刷新/选择/校验 UI 验收，仍不写旧库。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做单项粘贴 UI 验收，需使用临时外部窗口且仍不写旧库。
