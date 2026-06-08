@@ -1,7 +1,5 @@
 use crate::{
-    legacy_data::{
-        list_images_for_message, LegacyMessage, LegacyMessagePage, MessageView, SortOrder,
-    },
+    legacy_data::{LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessageView, SortOrder},
     legacy_paths::path_to_string,
     legacy_schema::ensure_legacy_schema,
 };
@@ -175,4 +173,74 @@ fn sort_key(sort: SortOrder) -> &'static str {
         SortOrder::Newest => "newest",
         SortOrder::Oldest => "oldest",
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn read_legacy_message_by_id(
+    conn: &Connection,
+    images_dir: &PathBuf,
+    message_id: i64,
+) -> Result<LegacyMessage, String> {
+    let (id, text_content, created_at, archived, archived_at) = conn
+        .query_row(
+            "SELECT id, text_content, created_at, archived, archived_at \
+             FROM messages \
+             WHERE id = ?",
+            [message_id],
+            |row| {
+                let archived: i64 = row.get(3)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    archived == 1,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .map_err(|err| format!("读取新增消息失败：{err}"))?;
+    let images = list_images_for_message(conn, images_dir, id)?;
+
+    Ok(LegacyMessage {
+        id,
+        text_content,
+        created_at,
+        archived,
+        archived_at,
+        images,
+    })
+}
+
+fn list_images_for_message(
+    conn: &Connection,
+    images_dir: &PathBuf,
+    message_id: i64,
+) -> Result<Vec<LegacyMessageImage>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, image_filename \
+             FROM message_images \
+             WHERE message_id = ? \
+             ORDER BY id",
+        )
+        .map_err(|err| format!("准备旧图片查询失败：{err}"))?;
+    let rows = stmt
+        .query_map([message_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| format!("查询旧图片失败：{err}"))?;
+
+    let mut images = Vec::new();
+    for row in rows {
+        let (id, filename) = row.map_err(|err| format!("读取旧图片行失败：{err}"))?;
+        let path = images_dir.join(&filename);
+        images.push(LegacyMessageImage {
+            id,
+            filename,
+            exists: path.is_file(),
+            path: path_to_string(path),
+        });
+    }
+
+    Ok(images)
 }

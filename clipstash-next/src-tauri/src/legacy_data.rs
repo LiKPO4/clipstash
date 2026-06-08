@@ -8,7 +8,9 @@ use crate::legacy_image_files::{
 };
 use crate::legacy_paths::{legacy_data_dir, path_to_string};
 pub use crate::legacy_query::LegacyStats;
-use crate::legacy_query::{list_legacy_messages_from_dir, read_legacy_stats_from_dir};
+use crate::legacy_query::{
+    list_legacy_messages_from_dir, read_legacy_message_by_id, read_legacy_stats_from_dir,
+};
 #[cfg(test)]
 use crate::legacy_query::{query_count, view_where_sql};
 use crate::legacy_schema::ensure_legacy_schema;
@@ -1045,76 +1047,6 @@ fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
     }
 
     Err(format!("复制导入队列项失败，未知队列项类型：{}", item.kind))
-}
-
-#[allow(dead_code)]
-fn read_legacy_message_by_id(
-    conn: &Connection,
-    images_dir: &PathBuf,
-    message_id: i64,
-) -> Result<LegacyMessage, String> {
-    let (id, text_content, created_at, archived, archived_at) = conn
-        .query_row(
-            "SELECT id, text_content, created_at, archived, archived_at \
-             FROM messages \
-             WHERE id = ?",
-            [message_id],
-            |row| {
-                let archived: i64 = row.get(3)?;
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    archived == 1,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            },
-        )
-        .map_err(|err| format!("读取新增消息失败：{err}"))?;
-    let images = list_images_for_message(conn, images_dir, id)?;
-
-    Ok(LegacyMessage {
-        id,
-        text_content,
-        created_at,
-        archived,
-        archived_at,
-        images,
-    })
-}
-
-pub(crate) fn list_images_for_message(
-    conn: &Connection,
-    images_dir: &PathBuf,
-    message_id: i64,
-) -> Result<Vec<LegacyMessageImage>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, image_filename \
-             FROM message_images \
-             WHERE message_id = ? \
-             ORDER BY id",
-        )
-        .map_err(|err| format!("准备旧图片查询失败：{err}"))?;
-    let rows = stmt
-        .query_map([message_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|err| format!("查询旧图片失败：{err}"))?;
-
-    let mut images = Vec::new();
-    for row in rows {
-        let (id, filename) = row.map_err(|err| format!("读取旧图片行失败：{err}"))?;
-        let path = images_dir.join(&filename);
-        images.push(LegacyMessageImage {
-            id,
-            filename,
-            exists: path.is_file(),
-            path: path_to_string(path),
-        });
-    }
-
-    Ok(images)
 }
 
 #[cfg(test)]
