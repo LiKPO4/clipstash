@@ -101,6 +101,18 @@ pub fn create_legacy_image_message(
     create_image_message_with_backup_for_path(&data_dir.join("clipstash.db"), images_data)
 }
 
+pub fn create_legacy_mixed_message(
+    text_content: String,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyCreateTextMessageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    create_mixed_message_with_backup_for_path(
+        &data_dir.join("clipstash.db"),
+        text_content,
+        images_data,
+    )
+}
+
 pub fn list_legacy_messages(
     view: MessageView,
     sort: SortOrder,
@@ -273,7 +285,6 @@ fn create_image_message_with_backup_for_path(
     Ok(LegacyCreateTextMessageResult { backup, message })
 }
 
-#[allow(dead_code)]
 fn create_mixed_message_with_backup_for_path(
     db_path: &Path,
     text_content: String,

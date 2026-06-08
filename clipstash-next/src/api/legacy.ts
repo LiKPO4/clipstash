@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   LegacyCreateImageMessageResult,
+  LegacyCreateMixedMessageResult,
   LegacyCreateTextMessageResult,
   LegacyMessagePage,
   LegacyStats,
@@ -39,6 +40,13 @@ export function createLegacyTextMessage(textContent: string) {
 
 export function createLegacyImageMessage(imagesData: number[][]) {
   return invoke<LegacyCreateImageMessageResult>("create_legacy_image_message", {
+    imagesData,
+  });
+}
+
+export function createLegacyMixedMessage(textContent: string, imagesData: number[][]) {
+  return invoke<LegacyCreateMixedMessageResult>("create_legacy_mixed_message", {
+    textContent,
     imagesData,
   });
 }

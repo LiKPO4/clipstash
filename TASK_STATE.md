@@ -63,6 +63,8 @@
 - 已用 Rust 只读一致性审计验证写入后真实旧库：普通 `10`、归档 `103`、总计 `113`、关联图片 `106`、孤立图片 `0`。
 - 已实现 Rust 侧临时数据库新增图文混合消息写入函数，复用图片文件保存、`messages.text_content` 和 `message_images` 写入路径。
 - 已新增临时图文混合消息测试，覆盖写入前备份、文字 trim、双图文件内容、`message_images.id` 顺序、旧读取函数按 `(text, images)` 结构读回、备份库未变化。
+- 已新增受保护的 Rust command：`create_legacy_mixed_message`，内部会先备份旧 DB，再新增图文混合消息；当前仅暴露 command 和前端 API，未接入 UI。
+- 已新增前端 API/类型封装 `createLegacyMixedMessage`。
 
 ## 未完成
 
@@ -91,4 +93,4 @@
 
 ## 下一步
 
-- 进入阶段 2 下一步：为新增图文混合消息增加受保护 command，先不接 UI；真实图文写入前必须自动备份 DB，并确认失败时不会留下孤立图片文件。
+- 进入阶段 2 下一步：执行一次可回滚的真实旧库新增图文混合消息手动验收，记录备份路径、新图片文件名，并验证旧 Python 应用可按 `(text, [images])` 结构读取。
