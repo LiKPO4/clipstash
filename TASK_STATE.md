@@ -127,6 +127,8 @@
 - 已新增 ignored 手动验收测试 `manual_sends_ctrl_v_to_foreground_window`，只有设置 `CLIPSTASH_NEXT_SEND_CTRL_V` 时才会向当前前台窗口发送 Ctrl+V；当前会话未执行该手动测试，避免误粘贴到 Codex/终端。
 - 已新增低层外部窗口聚焦函数 `focus_external_window_target`，复用窗口校验后执行 `ShowWindow(SW_RESTORE)` 和 `SetForegroundWindow`；当前未暴露给前端或导入 command。
 - 已新增 ignored 手动验收测试 `manual_focuses_external_window_target`，只有设置 `CLIPSTASH_NEXT_FOCUS_WINDOW` 时才会聚焦本机外部窗口；当前会话未执行该手动测试，避免抢焦点干扰。
+- 已新增单项受控粘贴后端 command `paste_legacy_import_queue_item(message_id, item_index, target_hwnd)`，按“校验目标窗口、复制队列项到剪贴板、聚焦目标窗口、发送一次 Ctrl+V”执行；当前不整队列自动粘贴、不自动归档、不写 DB。
+- 已新增 ignored 手动验收测试 `manual_pastes_legacy_import_queue_item_to_external_window`，只有设置 `CLIPSTASH_NEXT_PASTE_IMPORT_ID`、`CLIPSTASH_NEXT_PASTE_IMPORT_INDEX`、`CLIPSTASH_NEXT_PASTE_IMPORT_HWND` 时才会真实聚焦目标窗口并发送 Ctrl+V；当前会话未执行该手动测试。
 
 ## 未完成
 
@@ -136,7 +138,7 @@
 - 阶段 2 尚未对编辑/删除消息 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 尚未对文字复制执行真实应用剪贴板验收；图片复制 command 已完成真实系统剪贴板验收，但尚未做 UI 点击验收。
-- 阶段 3 尚未实现导入流程中的逐项 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数。
+- 阶段 3 尚未实现导入流程中的整队列 Ctrl+V 粘贴、导入后可选自动归档；当前已完成队列预检、首项剪贴板 staging、按索引复制队列项到剪贴板、低层外部窗口聚焦函数、单项受控粘贴后端 command。
 
 ## 阻塞
 
@@ -145,6 +147,7 @@
 ## 关键文件
 
 - `clipstash-next/src-tauri/src/legacy_data.rs`
+- `clipstash-next/src-tauri/src/import_executor.rs`
 - `clipstash-next/src-tauri/src/keyboard_input.rs`
 - `clipstash-next/src-tauri/src/window_targets.rs`
 - `clipstash-next/src-tauri/src/lib.rs`

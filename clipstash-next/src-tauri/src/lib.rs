@@ -1,3 +1,4 @@
+mod import_executor;
 mod keyboard_input;
 mod legacy_data;
 mod window_targets;
@@ -93,6 +94,15 @@ fn copy_legacy_message_import_queue_item_to_clipboard(
 }
 
 #[tauri::command]
+fn paste_legacy_import_queue_item(
+    message_id: i64,
+    item_index: usize,
+    target_hwnd: isize,
+) -> Result<import_executor::LegacyImportPasteResult, String> {
+    import_executor::paste_legacy_import_queue_item(message_id, item_index, target_hwnd)
+}
+
+#[tauri::command]
 fn stage_legacy_message_import_to_clipboard(
     message_id: i64,
 ) -> Result<legacy_data::LegacyImportStageResult, String> {
@@ -131,6 +141,7 @@ pub fn run() {
             get_legacy_stats,
             list_external_window_targets,
             list_legacy_messages,
+            paste_legacy_import_queue_item,
             preview_legacy_message_import_queue,
             replace_legacy_message_images,
             set_legacy_message_archived,
