@@ -1,4 +1,4 @@
-use crate::legacy_data::LegacyMessageImage;
+use crate::{legacy_data::LegacyMessageImage, legacy_paths::path_to_string};
 use chrono::Local;
 use serde::Serialize;
 use std::{
@@ -33,8 +33,8 @@ pub(crate) fn create_legacy_db_backup_for_path(db_path: &Path) -> Result<LegacyD
         fs::copy(db_path, &backup_path).map_err(|err| format!("备份旧数据库失败：{err}"))?;
 
     Ok(LegacyDbBackup {
-        source_path: path_to_string(db_path.to_path_buf()),
-        backup_path: path_to_string(backup_path),
+        source_path: path_to_string(db_path),
+        backup_path: path_to_string(&backup_path),
         bytes_copied,
     })
 }
@@ -66,7 +66,7 @@ pub(crate) fn backup_message_image_files(
     }
 
     Ok(Some(LegacyImageFilesBackup {
-        backup_dir: path_to_string(backup_dir),
+        backup_dir: path_to_string(&backup_dir),
         filenames,
     }))
 }
@@ -101,8 +101,4 @@ fn next_image_backup_dir(data_dir: &Path, timestamp: &str) -> PathBuf {
     }
 
     unreachable!("image backup suffix search is unbounded");
-}
-
-fn path_to_string(path: PathBuf) -> String {
-    path.to_string_lossy().into_owned()
 }

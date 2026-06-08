@@ -3,13 +3,14 @@ use crate::legacy_backup::create_legacy_db_backup_for_path;
 #[cfg(test)]
 use crate::legacy_backup::next_backup_path;
 pub use crate::legacy_backup::{LegacyDbBackup, LegacyImageFilesBackup};
+use crate::legacy_paths::{legacy_data_dir, path_to_string};
 use arboard::{Clipboard, ImageData};
 use chrono::{Local, Utc};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -979,18 +980,6 @@ fn next_image_filename(images_dir: &Path, index: usize) -> String {
     unreachable!("image filename suffix search is unbounded");
 }
 
-fn legacy_data_dir() -> Result<PathBuf, String> {
-    if let Some(appdata) = env::var_os("APPDATA") {
-        return Ok(PathBuf::from(appdata).join("ClipStash"));
-    }
-
-    if let Some(user_profile) = env::var_os("USERPROFILE") {
-        return Ok(PathBuf::from(user_profile).join("ClipStash"));
-    }
-
-    Err("无法定位 APPDATA 或 USERPROFILE，不能确定旧数据目录".to_string())
-}
-
 fn ensure_legacy_schema(conn: &Connection) -> Result<(), String> {
     let messages_exists: i64 = conn
         .query_row(
@@ -1354,14 +1343,10 @@ fn sort_key(sort: SortOrder) -> &'static str {
     }
 }
 
-fn path_to_string(path: PathBuf) -> String {
-    path.display().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, process};
+    use std::{env, fs, process};
 
     #[test]
     fn reads_counts_from_legacy_messages_table() {
