@@ -561,10 +561,18 @@ textarea:focus,
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.message-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .message-actions button,
 .secondary-action {
+  flex: 0 0 auto;
   min-height: 28px;
   padding: 0 9px;
   border: 0;
@@ -574,6 +582,8 @@ textarea:focus,
   cursor: pointer;
   font-size: 12px;
   font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .message-actions .archive-action,
