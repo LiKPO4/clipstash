@@ -1,6 +1,10 @@
+use chrono::Local;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::{env, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 const DEFAULT_MESSAGE_LIMIT: i64 = 30;
 const MAX_MESSAGE_LIMIT: i64 = 100;
@@ -60,9 +64,21 @@ pub struct LegacyMessagePage {
     pub messages: Vec<LegacyMessage>,
 }
 
+#[derive(Serialize)]
+pub struct LegacyDbBackup {
+    pub source_path: String,
+    pub backup_path: String,
+    pub bytes_copied: u64,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
+}
+
+pub fn create_legacy_db_backup() -> Result<LegacyDbBackup, String> {
+    let data_dir = legacy_data_dir()?;
+    create_legacy_db_backup_for_path(&data_dir.join("clipstash.db"))
 }
 
 pub fn list_legacy_messages(
@@ -73,6 +89,26 @@ pub fn list_legacy_messages(
 ) -> Result<LegacyMessagePage, String> {
     let data_dir = legacy_data_dir()?;
     list_legacy_messages_from_dir(data_dir, view, sort, offset, limit)
+}
+
+fn create_legacy_db_backup_for_path(db_path: &Path) -> Result<LegacyDbBackup, String> {
+    if !db_path.is_file() {
+        return Err(format!("备份失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let parent = db_path
+        .parent()
+        .ok_or_else(|| format!("备份失败，无法定位数据库目录：{}", db_path.display()))?;
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+    let backup_path = parent.join(format!("clipstash.db.bak-{timestamp}"));
+    let bytes_copied =
+        fs::copy(db_path, &backup_path).map_err(|err| format!("备份旧数据库失败：{err}"))?;
+
+    Ok(LegacyDbBackup {
+        source_path: path_to_string(db_path.to_path_buf()),
+        backup_path: path_to_string(backup_path),
+        bytes_copied,
+    })
 }
 
 fn read_legacy_stats_from_dir(data_dir: PathBuf) -> Result<LegacyStats, String> {
@@ -340,10 +376,8 @@ mod tests {
 
     #[test]
     fn lists_messages_with_ordered_image_status() {
-        let data_dir = env::temp_dir().join(format!(
-            "clipstash-next-legacy-list-test-{}",
-            process::id()
-        ));
+        let data_dir =
+            env::temp_dir().join(format!("clipstash-next-legacy-list-test-{}", process::id()));
         let _ = fs::remove_dir_all(&data_dir);
         fs::create_dir_all(data_dir.join("images")).expect("create images dir");
         fs::write(data_dir.join("images").join("existing.png"), b"png").expect("seed image");
@@ -411,6 +445,40 @@ mod tests {
     }
 
     #[test]
+    fn creates_timestamped_legacy_db_backup_without_mutating_source() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-backup-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).expect("create backup fixture dir");
+
+        let db_path = data_dir.join("clipstash.db");
+        fs::write(&db_path, b"legacy-db-bytes").expect("write fixture db");
+
+        let backup = create_legacy_db_backup_for_path(&db_path).expect("create db backup");
+        let backup_path = PathBuf::from(&backup.backup_path);
+
+        assert!(backup_path.is_file());
+        assert!(backup_path
+            .file_name()
+            .expect("backup filename")
+            .to_string_lossy()
+            .starts_with("clipstash.db.bak-"));
+        assert_eq!(backup.bytes_copied, 15);
+        assert_eq!(
+            fs::read(&db_path).expect("read source db"),
+            b"legacy-db-bytes"
+        );
+        assert_eq!(
+            fs::read(backup_path).expect("read backup db"),
+            b"legacy-db-bytes"
+        );
+
+        fs::remove_dir_all(data_dir).expect("remove backup fixture");
+    }
+
+    #[test]
     #[ignore = "requires local ClipStash app data"]
     fn reads_local_legacy_stats_when_available() {
         let stats = read_legacy_stats().expect("read local legacy stats");
@@ -427,13 +495,8 @@ mod tests {
     #[test]
     #[ignore = "requires local ClipStash app data"]
     fn lists_local_legacy_messages_when_available() {
-        let page = list_legacy_messages(
-            MessageView::Normal,
-            SortOrder::Newest,
-            Some(0),
-            Some(5),
-        )
-        .expect("list local legacy messages");
+        let page = list_legacy_messages(MessageView::Normal, SortOrder::Newest, Some(0), Some(5))
+            .expect("list local legacy messages");
 
         eprintln!(
             "view={} total={} returned={} has_more={}",
@@ -461,8 +524,10 @@ mod tests {
         let stats = read_legacy_stats_from_dir(data_dir.clone()).expect("read local stats");
         let normal_messages = collect_all_messages(data_dir.clone(), MessageView::Normal);
         let archived_messages = collect_all_messages(data_dir.clone(), MessageView::Archived);
-        let all_messages: Vec<&LegacyMessage> =
-            normal_messages.iter().chain(archived_messages.iter()).collect();
+        let all_messages: Vec<&LegacyMessage> = normal_messages
+            .iter()
+            .chain(archived_messages.iter())
+            .collect();
 
         assert_eq!(stats.normal_count, normal_messages.len() as i64);
         assert_eq!(stats.archived_count, archived_messages.len() as i64);
@@ -472,10 +537,18 @@ mod tests {
         );
 
         for message in &normal_messages {
-            assert!(!message.archived, "normal view included archived message {}", message.id);
+            assert!(
+                !message.archived,
+                "normal view included archived message {}",
+                message.id
+            );
         }
         for message in &archived_messages {
-            assert!(message.archived, "archived view included normal message {}", message.id);
+            assert!(
+                message.archived,
+                "archived view included normal message {}",
+                message.id
+            );
         }
 
         assert_message_order_matches_db(&conn, MessageView::Normal, SortOrder::Newest);
@@ -517,7 +590,11 @@ mod tests {
             let mut previous_image_id = None;
             for (index, image) in message.images.iter().enumerate() {
                 let (db_image_id, db_filename) = &db_images[index];
-                assert_eq!(&image.id, db_image_id, "image id mismatch for message {}", message.id);
+                assert_eq!(
+                    &image.id, db_image_id,
+                    "image id mismatch for message {}",
+                    message.id
+                );
                 assert_eq!(
                     &image.filename, db_filename,
                     "image filename mismatch for message {}",
@@ -596,14 +673,9 @@ mod tests {
         let mut messages = Vec::new();
 
         loop {
-            let page = list_legacy_messages_from_dir(
-                data_dir.clone(),
-                view,
-                sort,
-                Some(offset),
-                Some(17),
-            )
-            .expect("list sorted legacy messages page");
+            let page =
+                list_legacy_messages_from_dir(data_dir.clone(), view, sort, Some(offset), Some(17))
+                    .expect("list sorted legacy messages page");
             offset += page.messages.len() as i64;
             messages.extend(page.messages);
 

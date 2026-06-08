@@ -34,10 +34,15 @@
 - 已完成真实 Tauri WebView 视觉验收：首屏计数 `111/8/103` 和旧路径显示正确。
 - 已完成列表区域视觉验收：普通列表显示 `8/8`，消息卡片和旧图片缩略图可见。
 - 已完成图片预览视觉验收：点击缩略图能打开大图弹层，文件名和关闭按钮可见，图片未撑破窗口。
+- 已新增阶段 2 写入安全策略文档：`clipstash-next/migration-notes/phase-2-write-safety.md`。
+- 已新增 Rust DB 备份基础设施，备份文件命名为 `clipstash.db.bak-YYYYMMDD-HHMMSS`。
+- 已新增临时数据库备份测试，验证备份内容一致且源 DB 未改变。
+- 已为备份时间戳新增直接依赖 `chrono`，并安装 `rustfmt` 组件用于 Rust 格式化。
 
 ## 未完成
 
 - 尚未实现复制、编辑、归档、恢复、导入等后续阶段功能。
+- 阶段 2 尚未对真实旧库执行任何写入或备份。
 
 ## 阻塞
 
@@ -49,13 +54,14 @@
 - `clipstash-next/src-tauri/src/lib.rs`
 - `clipstash-next/src-tauri/tauri.conf.json`
 - `clipstash-next/src-tauri/Cargo.toml`
+- `clipstash-next/src-tauri/Cargo.lock`
 - `clipstash-next/src/App.tsx`
 - `clipstash-next/src/App.css`
 - `clipstash-next/src/api/legacy.ts`
 - `clipstash-next/src/api/types.ts`
 - `clipstash-next/package.json`
+- `clipstash-next/migration-notes/phase-2-write-safety.md`
 
 ## 下一步
 
-- 进入阶段 2 前置：确认基础写入的最小范围、只增不破坏策略和首次写入前 DB 备份策略。
-- 在进入写入阶段前继续保持只读，不改旧 DB、不改旧 `images/`。
+- 进入阶段 2：先实现新增纯文字消息的临时数据库写入测试和 Rust command，真实旧库写入前必须先创建备份并确认回滚路径。
