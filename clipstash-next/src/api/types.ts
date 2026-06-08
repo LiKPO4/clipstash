@@ -68,3 +68,5 @@ export type LegacyReplaceImagesResult = {
 };
 
 export type LegacyDeleteMessageResult = LegacyReplaceImagesResult;
+
+export type LegacyArchiveMessageResult = LegacyCreateTextMessageResult;

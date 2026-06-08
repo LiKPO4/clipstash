@@ -56,6 +56,14 @@ fn delete_legacy_message(
 }
 
 #[tauri::command]
+fn set_legacy_message_archived(
+    message_id: i64,
+    archived: bool,
+) -> Result<legacy_data::LegacyArchiveMessageResult, String> {
+    legacy_data::set_legacy_message_archived(message_id, archived)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -78,6 +86,7 @@ pub fn run() {
             get_legacy_stats,
             list_legacy_messages,
             replace_legacy_message_images,
+            set_legacy_message_archived,
             update_legacy_message_text
         ])
         .run(tauri::generate_context!())

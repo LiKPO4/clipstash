@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   LegacyCreateImageMessageResult,
+  LegacyArchiveMessageResult,
   LegacyCreateMixedMessageResult,
   LegacyCreateTextMessageResult,
   LegacyDeleteMessageResult,
@@ -71,5 +72,12 @@ export function replaceLegacyMessageImages(messageId: number, imagesData: number
 export function deleteLegacyMessage(messageId: number) {
   return invoke<LegacyDeleteMessageResult>("delete_legacy_message", {
     messageId,
+  });
+}
+
+export function setLegacyMessageArchived(messageId: number, archived: boolean) {
+  return invoke<LegacyArchiveMessageResult>("set_legacy_message_archived", {
+    messageId,
+    archived,
   });
 }
