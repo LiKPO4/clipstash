@@ -207,12 +207,16 @@
 - 已通过 Tauri UI 编辑 `#117` 文字为 `[ClipStash Next UI 验收] 已编辑临时消息 2026-06-08`，页面卡片显示新文本，SQLite 验证 `messages.id=117 text_content` 已更新，编辑备份为 `clipstash.db.bak-20260608-213312`。
 - 已通过 Tauri UI 删除测试消息 `#117` 完成清理：删除弹层勾选确认后页面显示“已删除 #117”，删除备份为 `clipstash.db.bak-20260608-213349`；随后 SQLite 验证 `messages` 和 `message_images` 中 `#117` 均为 0 行。
 - 已在编辑/删除 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`，`max_id=114`，`#114 archived=0 archived_at=None`。
+- 已完成阶段 2 替换图片真实 UI 验收：基线旧库 `normal=11 archived=103 total=114 max_id=114 joined_images=107 orphan_images=0`，通过 Tauri UI 新增临时图文消息 `#118`，初始图片 `clipstash-next-20260608213721092-14468-0.png` 为红色 1x1 像素，新增备份 `clipstash.db.bak-20260608-213721`。
+- 已通过 Tauri UI 编辑 `#118` 并替换图片为绿色 1x1 PNG，SQLite 验证 `message_images` 更新为 `clipstash-next-20260608213758125-14468-0.png`，新文件存在且像素为 `[25, 160, 96, 255]`；旧图片已从旧 `images/` 目录移除，并备份到 `images.bak-20260608-213758`，数据库备份为 `clipstash.db.bak-20260608-213758`。
+- 已通过 Tauri UI 删除测试消息 `#118` 完成清理：页面显示“已删除 #118”，删除备份为 `clipstash.db.bak-20260608-213831`；随后 SQLite 验证 `messages` 和 `message_images` 中 `#118` 均为 0 行，新旧测试图片均不在旧 `images/` 目录。
+- 已在替换图片/删除 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`，`max_id=114`，`#114 archived=0 archived_at=None`。
 
 ## 未完成
 
-- 阶段 2 已完成前端纯图片、图文新增和编辑文字入口真实点击写入验收，并均通过 UI 删除清理。
+- 阶段 2 已完成前端纯图片、图文新增、编辑文字和替换图片入口真实点击写入验收，并均通过 UI 删除清理。
 - 阶段 2 尚未完成图片/图文入口的浏览器截图验收；本轮尝试启动 Vite dev server 做前端真实 UI 验收，日志曾显示 `http://127.0.0.1:1420/` ready，但随后端口无监听；内置浏览器访问 `127.0.0.1:1420` 和 `localhost:1420` 均返回 `net::ERR_BLOCKED_BY_CLIENT`，未获得可用浏览器截图证据。
-- 阶段 2 尚未对替换图片 UI 执行真实旧库点击写入验收；当前 mock 测试不写真实旧库。
+- 阶段 2 写库主路径真实 UI 验收已覆盖新增纯图片、新增图文、编辑文字、替换图片和删除清理；后续可补充归档/恢复 UI 验收。
 - 阶段 3 尚未对归档/恢复 UI 执行真实旧库点击写入验收；手动验收入口已验证。
 - 阶段 3 文字复制和图片复制真实应用剪贴板 UI 验收已通过。
 - 用户提供的 UI 参考图已保存为 `clipstash-next/design-reference/clipstash-ui-reference.png`；同目录 `tauri-ui-smoke.png` 保留当前 Tauri UI 冒烟截图。
@@ -244,4 +248,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做阶段 2 替换图片 UI 验收并清理测试消息，或做归档/恢复 UI 验收并恢复旧库基线。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可做归档/恢复 UI 验收并恢复旧库基线，或整理阶段 2/3 验收清单。
