@@ -4,6 +4,7 @@ mod legacy_backup;
 mod legacy_data;
 mod legacy_image_files;
 mod legacy_paths;
+mod legacy_query;
 mod legacy_schema;
 mod window_targets;
 
