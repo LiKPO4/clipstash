@@ -41,6 +41,14 @@ fn update_legacy_message_text(
 }
 
 #[tauri::command]
+fn replace_legacy_message_images(
+    message_id: i64,
+    images_data: Vec<Vec<u8>>,
+) -> Result<legacy_data::LegacyReplaceImagesResult, String> {
+    legacy_data::replace_legacy_message_images(message_id, images_data)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -61,6 +69,7 @@ pub fn run() {
             create_legacy_text_message,
             get_legacy_stats,
             list_legacy_messages,
+            replace_legacy_message_images,
             update_legacy_message_text
         ])
         .run(tauri::generate_context!())

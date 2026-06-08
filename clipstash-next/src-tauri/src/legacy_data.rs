@@ -83,6 +83,19 @@ pub struct LegacyUpdateMessageResult {
     pub message: LegacyMessage,
 }
 
+#[derive(Serialize)]
+pub struct LegacyImageFilesBackup {
+    pub backup_dir: String,
+    pub filenames: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct LegacyReplaceImagesResult {
+    pub backup: LegacyDbBackup,
+    pub image_backup: Option<LegacyImageFilesBackup>,
+    pub message: LegacyMessage,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -128,6 +141,18 @@ pub fn update_legacy_message_text(
         &data_dir.join("clipstash.db"),
         message_id,
         text_content,
+    )
+}
+
+pub fn replace_legacy_message_images(
+    message_id: i64,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyReplaceImagesResult, String> {
+    let data_dir = legacy_data_dir()?;
+    replace_message_images_with_backup_for_path(
+        &data_dir.join("clipstash.db"),
+        message_id,
+        images_data,
     )
 }
 
@@ -331,6 +356,32 @@ fn update_text_message_with_backup_for_path(
     Ok(LegacyUpdateMessageResult { backup, message })
 }
 
+fn replace_message_images_with_backup_for_path(
+    db_path: &Path,
+    message_id: i64,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyReplaceImagesResult, String> {
+    validate_replace_images_request(db_path, message_id, &images_data)?;
+    let current_message = read_message_for_update_precheck(db_path, message_id)?;
+    let data_dir = db_path.parent().ok_or_else(|| {
+        format!(
+            "替换消息图片失败，无法定位数据库目录：{}",
+            db_path.display()
+        )
+    })?;
+    let backup = create_legacy_db_backup_for_path(db_path)?;
+    let image_backup = backup_message_image_files(data_dir, &current_message.images)
+        .map_err(|err| format!("{err}；已创建数据库备份：{}", backup.backup_path))?;
+    let message = replace_message_images_for_path(db_path, message_id, images_data)
+        .map_err(|err| format!("{err}；已创建数据库备份：{}", backup.backup_path))?;
+
+    Ok(LegacyReplaceImagesResult {
+        backup,
+        image_backup,
+        message,
+    })
+}
+
 pub fn create_text_message_for_path(
     db_path: &Path,
     text_content: Option<String>,
@@ -354,6 +405,65 @@ pub fn create_text_message_for_path(
     .map_err(|err| format!("新增纯文字消息失败：{err}"))?;
 
     let message_id = conn.last_insert_rowid();
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
+pub fn replace_message_images_for_path(
+    db_path: &Path,
+    message_id: i64,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacyMessage, String> {
+    validate_replace_images_request(db_path, message_id, &images_data)?;
+
+    let data_dir = db_path.parent().ok_or_else(|| {
+        format!(
+            "替换消息图片失败，无法定位数据库目录：{}",
+            db_path.display()
+        )
+    })?;
+    let images_dir = data_dir.join("images");
+    fs::create_dir_all(&images_dir).map_err(|err| format!("创建旧图片目录失败：{err}"))?;
+
+    let mut conn =
+        Connection::open(db_path).map_err(|err| format!("打开旧数据库准备替换图片失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+    let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
+
+    let mut saved_paths = Vec::new();
+    let replace_result = (|| {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启图片替换事务失败：{err}"))?;
+        tx.execute(
+            "DELETE FROM message_images WHERE message_id = ?",
+            params![message_id],
+        )
+        .map_err(|err| format!("删除旧图片关联失败：{err}"))?;
+
+        for (index, image_data) in images_data.iter().enumerate() {
+            let filename = next_image_filename(&images_dir, index);
+            let path = images_dir.join(&filename);
+            saved_paths.push(path.clone());
+            save_image_file(&path, image_data)?;
+            tx.execute(
+                "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
+                params![message_id, filename],
+            )
+            .map_err(|err| format!("新增图片关联失败：{err}"))?;
+        }
+
+        tx.commit()
+            .map_err(|err| format!("提交图片替换失败：{err}"))
+    })();
+
+    if let Err(err) = replace_result {
+        for path in saved_paths {
+            let _ = fs::remove_file(path);
+        }
+        return Err(err);
+    }
+
+    remove_old_message_image_files(&old_message.images);
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
@@ -495,6 +605,37 @@ fn validate_images_data(images_data: &[Vec<u8>]) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_replace_images_request(
+    db_path: &Path,
+    message_id: i64,
+    images_data: &[Vec<u8>],
+) -> Result<(), String> {
+    if message_id <= 0 {
+        return Err("替换消息图片失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!(
+            "替换消息图片失败，数据库不存在：{}",
+            db_path.display()
+        ));
+    }
+    if images_data.iter().any(|image_data| image_data.is_empty()) {
+        return Err("替换消息图片失败，图片数据不能为空".to_string());
+    }
+
+    let current_message = read_message_for_update_precheck(db_path, message_id)?;
+    let has_text = current_message
+        .text_content
+        .as_deref()
+        .map(|text| !text.trim().is_empty())
+        .unwrap_or(false);
+    if images_data.is_empty() && !has_text {
+        return Err("替换消息图片失败，不能清空无文字消息的所有图片".to_string());
+    }
+
+    Ok(())
+}
+
 fn ensure_message_exists_for_path(db_path: &Path, message_id: i64) -> Result<(), String> {
     if message_id <= 0 {
         return Err("更新消息失败，消息 id 必须大于 0".to_string());
@@ -519,6 +660,65 @@ fn ensure_message_exists_for_path(db_path: &Path, message_id: i64) -> Result<(),
     }
 
     Ok(())
+}
+
+fn read_message_for_update_precheck(
+    db_path: &Path,
+    message_id: i64,
+) -> Result<LegacyMessage, String> {
+    if message_id <= 0 {
+        return Err("读取消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("读取消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("读取消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
+fn backup_message_image_files(
+    data_dir: &Path,
+    images: &[LegacyMessageImage],
+) -> Result<Option<LegacyImageFilesBackup>, String> {
+    let images_dir = data_dir.join("images");
+    let existing_images: Vec<&LegacyMessageImage> = images
+        .iter()
+        .filter(|image| images_dir.join(&image.filename).is_file())
+        .collect();
+    if existing_images.is_empty() {
+        return Ok(None);
+    }
+
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+    let backup_dir = next_image_backup_dir(data_dir, &timestamp.to_string());
+    fs::create_dir_all(&backup_dir).map_err(|err| format!("创建旧图片备份目录失败：{err}"))?;
+
+    let mut filenames = Vec::new();
+    for image in existing_images {
+        let source = images_dir.join(&image.filename);
+        let target = backup_dir.join(&image.filename);
+        fs::copy(&source, &target)
+            .map_err(|err| format!("备份旧图片文件失败：{}：{err}", source.display()))?;
+        filenames.push(image.filename.clone());
+    }
+
+    Ok(Some(LegacyImageFilesBackup {
+        backup_dir: path_to_string(backup_dir),
+        filenames,
+    }))
+}
+
+fn remove_old_message_image_files(images: &[LegacyMessageImage]) {
+    for image in images {
+        let _ = fs::remove_file(&image.path);
+    }
 }
 
 fn save_image_file(path: &Path, image_data: &[u8]) -> Result<(), String> {
@@ -558,6 +758,22 @@ fn next_backup_path(parent: &Path, timestamp: &str) -> PathBuf {
     }
 
     unreachable!("backup suffix search is unbounded");
+}
+
+fn next_image_backup_dir(data_dir: &Path, timestamp: &str) -> PathBuf {
+    let first = data_dir.join(format!("images.bak-{timestamp}"));
+    if !first.exists() {
+        return first;
+    }
+
+    for index in 1.. {
+        let candidate = data_dir.join(format!("images.bak-{timestamp}-{index}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("image backup suffix search is unbounded");
 }
 
 fn legacy_data_dir() -> Result<PathBuf, String> {
@@ -1178,6 +1394,149 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with("clipstash.db.bak-")));
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn replaces_message_images_with_db_and_file_backups() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-replace-images-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        let images_dir = data_dir.join("images");
+        fs::create_dir_all(&images_dir).expect("create images dir");
+        fs::write(images_dir.join("old-a.png"), b"old-a").expect("write old image a");
+        fs::write(images_dir.join("old-b.png"), b"old-b").expect("write old image b");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES ('has text', 0);
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'old-a.png');
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'old-b.png');
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result =
+            replace_message_images_with_backup_for_path(&db_path, 1, vec![b"new-image".to_vec()])
+                .expect("replace message images with backup");
+
+        assert!(PathBuf::from(&result.backup.backup_path).is_file());
+        let image_backup = result.image_backup.expect("image backup");
+        let image_backup_dir = PathBuf::from(&image_backup.backup_dir);
+        assert!(image_backup_dir.is_dir());
+        assert_eq!(image_backup.filenames, vec!["old-a.png", "old-b.png"]);
+        assert_eq!(
+            fs::read(image_backup_dir.join("old-a.png")).expect("read old image a backup"),
+            b"old-a"
+        );
+        assert_eq!(
+            fs::read(image_backup_dir.join("old-b.png")).expect("read old image b backup"),
+            b"old-b"
+        );
+
+        assert_eq!(result.message.id, 1);
+        assert_eq!(result.message.text_content.as_deref(), Some("has text"));
+        assert_eq!(result.message.images.len(), 1);
+        assert!(result.message.images[0].exists);
+        assert_eq!(
+            fs::read(&result.message.images[0].path).expect("read new image"),
+            b"new-image"
+        );
+        assert!(!images_dir.join("old-a.png").exists());
+        assert!(!images_dir.join("old-b.png").exists());
+
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages").expect("count messages"),
+            1
+        );
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM message_images").expect("count images"),
+            1
+        );
+        let image_rows = query_image_rows(&conn, result.message.id);
+        assert_eq!(image_rows.len(), 1);
+        assert_eq!(image_rows[0].1, result.message.images[0].filename);
+        drop(conn);
+
+        let backup_conn =
+            Connection::open(&result.backup.backup_path).expect("open backup sqlite fixture");
+        assert_eq!(
+            query_count(&backup_conn, "SELECT COUNT(*) FROM message_images")
+                .expect("count backup images"),
+            2
+        );
+        drop(backup_conn);
+
+        fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+    }
+
+    #[test]
+    fn rejects_clearing_image_only_message_before_backup() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-legacy-clear-image-only-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        let images_dir = data_dir.join("images");
+        fs::create_dir_all(&images_dir).expect("create images dir");
+        fs::write(images_dir.join("only.png"), b"only-image").expect("write only image");
+
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("create sqlite fixture");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (text_content, archived) VALUES (NULL, 0);
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'only.png');
+            ",
+        )
+        .expect("seed fixture");
+        drop(conn);
+
+        let result = replace_message_images_with_backup_for_path(&db_path, 1, Vec::new());
+
+        assert!(result.is_err());
+        assert!(images_dir.join("only.png").is_file());
+        assert!(!fs::read_dir(&data_dir)
+            .expect("read data dir")
+            .any(|entry| {
+                let name = entry
+                    .expect("read data dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string();
+                name.starts_with("clipstash.db.bak-") || name.starts_with("images.bak-")
+            }));
 
         fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
     }

@@ -4,6 +4,7 @@ import type {
   LegacyCreateMixedMessageResult,
   LegacyCreateTextMessageResult,
   LegacyMessagePage,
+  LegacyReplaceImagesResult,
   LegacyStats,
   LegacyUpdateMessageResult,
   MessageView,
@@ -56,5 +57,12 @@ export function updateLegacyMessageText(messageId: number, textContent: string |
   return invoke<LegacyUpdateMessageResult>("update_legacy_message_text", {
     messageId,
     textContent,
+  });
+}
+
+export function replaceLegacyMessageImages(messageId: number, imagesData: number[][]) {
+  return invoke<LegacyReplaceImagesResult>("replace_legacy_message_images", {
+    messageId,
+    imagesData,
   });
 }

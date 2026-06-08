@@ -55,3 +55,14 @@ export type LegacyCreateImageMessageResult = LegacyCreateTextMessageResult;
 export type LegacyCreateMixedMessageResult = LegacyCreateTextMessageResult;
 
 export type LegacyUpdateMessageResult = LegacyCreateTextMessageResult;
+
+export type LegacyImageFilesBackup = {
+  backup_dir: string;
+  filenames: string[];
+};
+
+export type LegacyReplaceImagesResult = {
+  backup: LegacyDbBackup;
+  image_backup: LegacyImageFilesBackup | null;
+  message: LegacyMessage;
+};
