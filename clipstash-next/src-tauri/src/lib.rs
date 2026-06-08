@@ -7,6 +7,8 @@ mod legacy_image_files;
 mod legacy_model;
 mod legacy_paths;
 mod legacy_query;
+#[cfg(test)]
+mod legacy_read_tests;
 mod legacy_schema;
 #[cfg(test)]
 mod legacy_test_support;

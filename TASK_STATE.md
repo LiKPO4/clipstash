@@ -219,6 +219,8 @@
 - 已将系统剪贴板和导入队列逻辑从 `legacy_data.rs` 拆到 `legacy_clipboard.rs`，包括复制图片、复制消息文字、导入 staging、队列预览和队列项复制；`legacy_data.rs` 保持对外 command 门面和类型 re-export。
 - 已将旧消息模型类型拆到 `legacy_model.rs`，包括 `MessageView`、`SortOrder`、`LegacyMessageImage`、`LegacyMessage`、`LegacyMessagePage`；`legacy_data.rs` 继续 re-export，保持 Tauri command 签名路径不变。
 - 已将 `legacy_data.rs` 测试模块中的通用测试辅助函数拆到 `legacy_test_support.rs`，包括 tiny PNG 夹具、分页收集、排序断言和图片关联查询；运行时代码不引入该模块。
+- 已将只读统计、消息列表、导入队列预览和本机旧库只读一致性测试从 `legacy_data.rs` 拆到 `legacy_read_tests.rs`；`npm run verify:legacy-readonly` 仍能按测试名执行迁移后的 ignored 测试。
+- 本轮只读验证发现真实旧库外部状态已变化：当前为 `normal=9 archived=106 total=115 max_id=119 joined_images=109 orphan_images=0`，其中 `#112/#113/#114` 已处于归档状态；本轮代码未执行写库命令，仅做只读查询确认。
 
 ## 未完成
 
@@ -229,7 +231,7 @@
 - 阶段 3 文字复制和图片复制真实应用剪贴板 UI 验收已通过。
 - 用户提供的 UI 参考图已保存为 `clipstash-next/design-reference/clipstash-ui-reference.png`；同目录 `tauri-ui-smoke.png` 保留当前 Tauri UI 冒烟截图。
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
-- 阶段 4A 已开始：Rust 旧数据访问层已拆出模型、备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装、底层写入执行、剪贴板、导入队列和测试辅助模块。
+- 阶段 4A 已开始：Rust 旧数据访问层已拆出模型、备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装、底层写入执行、剪贴板、导入队列、测试辅助和只读测试模块。
 
 ## 阻塞
 
@@ -241,6 +243,7 @@
 - `clipstash-next/src-tauri/src/legacy_model.rs`
 - `clipstash-next/src-tauri/src/legacy_clipboard.rs`
 - `clipstash-next/src-tauri/src/legacy_test_support.rs`
+- `clipstash-next/src-tauri/src/legacy_read_tests.rs`
 - `clipstash-next/src-tauri/src/legacy_write_exec.rs`
 - `clipstash-next/src-tauri/src/import_executor.rs`
 - `clipstash-next/src-tauri/src/keyboard_input.rs`
