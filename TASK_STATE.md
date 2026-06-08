@@ -189,6 +189,8 @@
 - 已完成整队列粘贴真实 UI 验收：启动临时 WinForms 目标窗口 `ClipStash Queue Paste Target`，在消息 `#114` 导入队列中选择并校验目标窗口，默认不勾选“整队列粘贴成功后归档旧库消息”，点击“粘贴整队列”后页面显示“已粘贴整队列 #114 · 2 项 / 已发送到 ClipStash Queue Paste Target，间隔 250ms”。
 - 整队列粘贴目标文件读回文本包含 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，图片目标读回 `width=1 height=1`；本次临时文本框内容前后夹杂少量 `d` 字符，需后续确认是否来自验收自动化按键/焦点切换噪声。
 - 已在整队列粘贴 UI 验收后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该验收不写 DB、不改图片。
+- 已复核整队列粘贴文本中的额外 `d` 字符来源：改用干净临时目标窗口 `ClipStash Queue Clean Target` 并记录 `KeyPress` 事件后，整队列粘贴文本文件精确读回 `[ClipStash Next 验收] Tauri 阶段 2 图文混合写入兼容测试 2026-06-08`，图片文件读回 `width=1 height=1`，按键日志只有两次 Ctrl+V 控制字符 `code=22`；结论是先前 `d` 字符来自临时验收目标/焦点噪声，不是 ClipStash Next 粘贴逻辑。
+- 已在整队列粘贴复核后运行 `npm run verify:legacy-readonly`，旧库审计保持 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`；该复核不写 DB、不改图片。
 
 ## 未完成
 
@@ -227,4 +229,4 @@
 
 ## 下一步
 
-- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可复核整队列粘贴文本中的额外 `d` 字符来源，或在可控临时目标中执行“整队列粘贴成功后归档”UI 验收并恢复测试消息状态。
+- 继续按 `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md` 执行下一项真实应用级验收；下一步可在可控临时目标中执行“整队列粘贴成功后归档”UI 验收，并在验收后恢复测试消息状态。
