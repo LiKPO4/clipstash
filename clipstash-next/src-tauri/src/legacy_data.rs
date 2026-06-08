@@ -7,6 +7,7 @@ use crate::legacy_image_files::{
     next_image_filename, remove_old_message_image_files, resolve_legacy_image_path, save_image_file,
 };
 use crate::legacy_paths::{legacy_data_dir, path_to_string};
+use crate::legacy_schema::ensure_legacy_schema;
 use arboard::{Clipboard, ImageData};
 use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags};
@@ -952,22 +953,6 @@ fn read_message_for_update_precheck(
         .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
     ensure_legacy_schema(&conn)?;
     read_legacy_message_by_id(&conn, &images_dir, message_id)
-}
-
-fn ensure_legacy_schema(conn: &Connection) -> Result<(), String> {
-    let messages_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|err| format!("检查 messages 表失败：{err}"))?;
-
-    if messages_exists == 0 {
-        return Err("旧数据库缺少 messages 表".to_string());
-    }
-
-    Ok(())
 }
 
 fn copy_legacy_image_to_clipboard_from_dir(
