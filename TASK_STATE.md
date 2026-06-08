@@ -146,6 +146,7 @@
 - 验收后已将测试消息 `id=114` 恢复为未归档：现有 `manual_toggles_local_legacy_archive_with_backup_and_restore` 不适合做“恢复为指定未归档状态”，因为它会恢复测试开始时状态；本轮改用手动复制 DB 备份 `clipstash.db.bak-20260608-192914-manual-restore-114` 后执行 SQL 将 `archived=0, archived_at=NULL`，随后 `npm run verify:legacy-readonly` 通过，旧库计数回到 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0`。
 - 已新增更安全的 ignored 手动验收工具 `manual_sets_local_legacy_archive_state_with_backup`，通过 `CLIPSTASH_NEXT_SET_LEGACY_ARCHIVE_ID` 和 `CLIPSTASH_NEXT_SET_LEGACY_ARCHIVED` 显式设置目标消息归档状态并创建 DB 备份，后续可用于恢复测试消息到指定状态；常规测试不会执行该写库入口。
 - 已新增前端 API 合约测试 `tests/legacy-api.test.ts`，直接 mock Tauri `invoke`，覆盖 `pasteLegacyImportQueue` 与 `pasteLegacyImportQueueWithOptionalArchive` 的 command 名和参数映射；用于补足当前浏览器 UI 验收受阻时的前端/后端调用契约证据。
+- 已扩展前端 API 合约测试，覆盖 `updateLegacyMessageText`、`replaceLegacyMessageImages`、`deleteLegacyMessage`、`setLegacyMessageArchived` 的 command 名和参数映射；这些路径仍未替代真实 UI 点击验收，但已补充前端/后端调用契约证据。
 
 ## 未完成
 
