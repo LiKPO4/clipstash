@@ -119,6 +119,16 @@ pub struct LegacyCopyImageResult {
     pub height: u32,
 }
 
+#[derive(Serialize)]
+pub struct LegacyImportStageResult {
+    pub message_id: i64,
+    pub staged_kind: String,
+    pub text_length: usize,
+    pub image_count: usize,
+    pub first_image_filename: Option<String>,
+    pub copied_image: Option<LegacyCopyImageResult>,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -195,6 +205,13 @@ pub fn set_legacy_message_archived(
 pub fn copy_legacy_image_to_clipboard(filename: String) -> Result<LegacyCopyImageResult, String> {
     let data_dir = legacy_data_dir()?;
     copy_legacy_image_to_clipboard_from_dir(data_dir, filename)
+}
+
+pub fn stage_legacy_message_import_to_clipboard(
+    message_id: i64,
+) -> Result<LegacyImportStageResult, String> {
+    let data_dir = legacy_data_dir()?;
+    stage_legacy_message_import_to_clipboard_from_dir(data_dir, message_id)
 }
 
 pub fn list_legacy_messages(
@@ -992,6 +1009,57 @@ fn copy_legacy_image_to_clipboard_from_dir(
         width,
         height,
     })
+}
+
+fn stage_legacy_message_import_to_clipboard_from_dir(
+    data_dir: PathBuf,
+    message_id: i64,
+) -> Result<LegacyImportStageResult, String> {
+    let db_path = data_dir.join("clipstash.db");
+    let message = read_message_for_update_precheck(&db_path, message_id)?;
+    let text = message
+        .text_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    let first_existing_image = message.images.iter().find(|image| image.exists);
+    let text_length = text.map(str::len).unwrap_or(0);
+    let image_count = message.images.iter().filter(|image| image.exists).count();
+    let first_image_filename = first_existing_image.map(|image| image.filename.clone());
+
+    if let Some(text) = text {
+        let mut clipboard =
+            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
+        clipboard
+            .set_text(text.to_string())
+            .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+
+        return Ok(LegacyImportStageResult {
+            message_id,
+            staged_kind: "text".to_string(),
+            text_length,
+            image_count,
+            first_image_filename,
+            copied_image: None,
+        });
+    }
+
+    if let Some(image) = first_existing_image {
+        let copied_image =
+            copy_legacy_image_to_clipboard_from_dir(data_dir, image.filename.clone())?;
+        return Ok(LegacyImportStageResult {
+            message_id,
+            staged_kind: "image".to_string(),
+            text_length,
+            image_count,
+            first_image_filename,
+            copied_image: Some(copied_image),
+        });
+    }
+
+    Err(format!(
+        "导入消息失败，消息为空或图片文件缺失：#{message_id}"
+    ))
 }
 
 fn resolve_legacy_image_path(data_dir: &Path, filename: &str) -> Result<PathBuf, String> {

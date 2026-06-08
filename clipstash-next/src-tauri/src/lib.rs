@@ -71,6 +71,13 @@ fn copy_legacy_image_to_clipboard(
 }
 
 #[tauri::command]
+fn stage_legacy_message_import_to_clipboard(
+    message_id: i64,
+) -> Result<legacy_data::LegacyImportStageResult, String> {
+    legacy_data::stage_legacy_message_import_to_clipboard(message_id)
+}
+
+#[tauri::command]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -95,6 +102,7 @@ pub fn run() {
             list_legacy_messages,
             replace_legacy_message_images,
             set_legacy_message_archived,
+            stage_legacy_message_import_to_clipboard,
             update_legacy_message_text
         ])
         .run(tauri::generate_context!())

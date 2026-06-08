@@ -11,6 +11,7 @@ import {
   listLegacyMessages,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
 } from "./api/legacy";
 import type {
@@ -21,6 +22,7 @@ import type {
   LegacyArchiveMessageResult,
   LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
+  LegacyImportStageResult,
   LegacyReplaceImagesResult,
   MessageView,
   SortOrder,
@@ -42,6 +44,8 @@ type CopyResult = {
 };
 
 type ImageCopyResult = LegacyCopyImageResult;
+
+type ImportStageResult = LegacyImportStageResult;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -86,6 +90,9 @@ function App() {
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
   const [copyImageError, setCopyImageError] = useState<string | null>(null);
   const [copyImageResult, setCopyImageResult] = useState<ImageCopyResult | null>(null);
+  const [importingMessageId, setImportingMessageId] = useState<number | null>(null);
+  const [importStageError, setImportStageError] = useState<string | null>(null);
+  const [importStageResult, setImportStageResult] = useState<ImportStageResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -362,6 +369,23 @@ function App() {
     }
   }
 
+  async function stageMessageImport(message: LegacyMessage) {
+    if (importingMessageId !== null) return;
+
+    setImportingMessageId(message.id);
+    setImportStageError(null);
+    setImportStageResult(null);
+
+    try {
+      const result = await stageLegacyMessageImportToClipboard(message.id);
+      setImportStageResult(result);
+    } catch (err) {
+      setImportStageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImportingMessageId(null);
+    }
+  }
+
   const visibleCount = page?.messages.length ?? 0;
   const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
@@ -604,11 +628,13 @@ function App() {
             <MessageList
               messages={page.messages}
               archivingMessageId={archivingMessageId}
+              importingMessageId={importingMessageId}
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
               onArchive={toggleArchiveMessage}
               onCopyImage={copyMessageImage}
               onCopyText={copyMessageText}
+              onStageImport={stageMessageImport}
               onPreview={setPreviewImage}
             />
           )}
@@ -748,6 +774,31 @@ function App() {
           )}
         </section>
       )}
+
+      {(importStageError || importStageResult) && (
+        <section
+          className={`floating-result ${importStageError ? "floating-result-error" : ""}`}
+          role={importStageError ? "alert" : "status"}
+        >
+          {importStageError ? (
+            <>
+              <strong>准备导入失败</strong>
+              <p>{importStageError}</p>
+            </>
+          ) : (
+            importStageResult && (
+              <>
+                <strong>已准备导入 #{importStageResult.message_id}</strong>
+                <p>
+                  {importStageResult.staged_kind === "text"
+                    ? `${importStageResult.text_length} 个字符已进入剪贴板`
+                    : `${importStageResult.first_image_filename ?? "图片"} 已进入剪贴板`}
+                </p>
+              </>
+            )
+          )}
+        </section>
+      )}
     </main>
   );
 }
@@ -772,21 +823,25 @@ function PathRow({
 
 function MessageList({
   archivingMessageId,
+  importingMessageId,
   messages,
   onArchive,
   onCopyImage,
   onCopyText,
   onDelete,
   onEdit,
+  onStageImport,
   onPreview,
 }: {
   archivingMessageId: number | null;
+  importingMessageId: number | null;
   messages: LegacyMessage[];
   onArchive: (message: LegacyMessage) => void;
   onCopyImage: (image: LegacyMessageImage) => void;
   onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
+  onStageImport: (message: LegacyMessage) => void;
   onPreview: (image: PreviewImage) => void;
 }) {
   return (
@@ -817,6 +872,13 @@ function MessageList({
                   复制文字
                 </button>
               )}
+              <button
+                type="button"
+                disabled={importingMessageId !== null}
+                onClick={() => onStageImport(message)}
+              >
+                {importingMessageId === message.id ? "准备中..." : "准备导入"}
+              </button>
               <button type="button" onClick={() => onEdit(message)}>
                 编辑
               </button>

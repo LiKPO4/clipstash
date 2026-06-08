@@ -77,3 +77,12 @@ export type LegacyCopyImageResult = {
   width: number;
   height: number;
 };
+
+export type LegacyImportStageResult = {
+  message_id: number;
+  staged_kind: "text" | "image";
+  text_length: number;
+  image_count: number;
+  first_image_filename: string | null;
+  copied_image: LegacyCopyImageResult | null;
+};
