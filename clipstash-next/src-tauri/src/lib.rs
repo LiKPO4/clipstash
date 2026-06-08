@@ -1,3 +1,4 @@
+mod keyboard_input;
 mod legacy_data;
 mod window_targets;
 

@@ -123,6 +123,8 @@
 - 已新增 ignored 手动验收测试 `manual_validates_external_window_target`，只有设置 `CLIPSTASH_NEXT_VALIDATE_WINDOW` 时才读取并校验本机候选窗口；本机验收通过，示例目标 `Cockpit Tools`。
 - 已在前端目标窗口选择 UI 中接入 `validate_external_window_target`，可对已选窗口执行“校验目标窗口”并显示校验后的标题/pid；当前仍不聚焦窗口、不发送 Ctrl+V、不写 DB。
 - 已更新前端 mock 交互测试，覆盖刷新目标窗口、选择窗口、校验窗口，以及校验窗口不触发队列复制或旧库刷新。
+- 已新增低层 Windows Ctrl+V 输入模块 `keyboard_input.rs`，使用 `SendInput` 构造 Ctrl+V 按键序列；当前未暴露给前端或导入 command。
+- 已新增 ignored 手动验收测试 `manual_sends_ctrl_v_to_foreground_window`，只有设置 `CLIPSTASH_NEXT_SEND_CTRL_V` 时才会向当前前台窗口发送 Ctrl+V；当前会话未执行该手动测试，避免误粘贴到 Codex/终端。
 
 ## 未完成
 
@@ -141,6 +143,7 @@
 ## 关键文件
 
 - `clipstash-next/src-tauri/src/legacy_data.rs`
+- `clipstash-next/src-tauri/src/keyboard_input.rs`
 - `clipstash-next/src-tauri/src/window_targets.rs`
 - `clipstash-next/src-tauri/src/lib.rs`
 - `clipstash-next/src-tauri/tauri.conf.json`
@@ -156,4 +159,4 @@
 
 ## 下一步
 
-- 进入阶段 3 下一步：实现单步受控 Ctrl+V 粘贴 command，先只支持已校验目标窗口和单个队列项。
+- 进入阶段 3 下一步：实现单步受控粘贴 command，按顺序校验目标窗口、复制队列项、聚焦目标窗口、发送 Ctrl+V。
