@@ -24,11 +24,11 @@ cargo test migrates_legacy_data_once_and_skips_duplicates_without_touching_legac
 
 ## 发布产物
 
-版本号来自 `clipstash-next/src-tauri/tauri.conf.json` 和 `clipstash-next/package.json`，当前为 `2.0.0`。
+版本号来自 `clipstash-next/src-tauri/tauri.conf.json` 和 `clipstash-next/package.json`，当前为 `2.0.1`。
 
 - 主程序：`clipstash-next/src-tauri/target/release/clipstash-next.exe`
-- MSI：`clipstash-next/src-tauri/target/release/bundle/msi/clipstash-next_2.0.0_x64_en-US.msi`
-- NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/clipstash-next_2.0.0_x64-setup.exe`
+- MSI：`clipstash-next/src-tauri/target/release/bundle/msi/clipstash-next_2.0.1_x64_en-US.msi`
+- NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/clipstash-next_2.0.1_x64-setup.exe`
 
 GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 MSI 作为备用安装入口。
 
@@ -55,7 +55,7 @@ GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 M
 ### 1. 安装与首次迁移
 
 1. 关闭正在运行的 ClipStash Next。
-2. 运行 NSIS 安装包：`clipstash-next/src-tauri/target/release/bundle/nsis/clipstash-next_2.0.0_x64-setup.exe`。
+2. 运行 NSIS 安装包：`clipstash-next/src-tauri/target/release/bundle/nsis/clipstash-next_2.0.1_x64-setup.exe`。
 3. 启动 ClipStash Next。
 4. 打开设置页，确认“本地存储”指向 `%APPDATA%\ClipStash Next`。
 5. 确认 `%APPDATA%\ClipStash Next\clipstash.db` 和 `%APPDATA%\ClipStash Next\images` 存在。

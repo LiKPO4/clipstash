@@ -57,7 +57,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.0";
+const CURRENT_VERSION = "2.0.1";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const GITHUB_LATEST_RELEASE_API =
   "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
@@ -137,8 +137,6 @@ function App() {
   const [mediaInputKey, setMediaInputKey] = useState(0);
   const [creatingMediaMessage, setCreatingMediaMessage] = useState(false);
   const [createMediaError, setCreateMediaError] = useState<string | null>(null);
-  const [createMediaResult, setCreateMediaResult] =
-    useState<LegacyCreateTextMessageResult | null>(null);
   const [editingMessage, setEditingMessage] = useState<LegacyMessage | null>(null);
   const [editTextDraft, setEditTextDraft] = useState("");
   const [editFiles, setEditFiles] = useState<File[]>([]);
@@ -146,7 +144,6 @@ function App() {
   const [editInputKey, setEditInputKey] = useState(0);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [editResult, setEditResult] = useState<EditResult | null>(null);
   const [deletingMessage, setDeletingMessage] = useState<LegacyMessage | null>(null);
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const [deletingLegacyMessage, setDeletingLegacyMessage] = useState(false);
@@ -312,14 +309,14 @@ function App() {
   }, [importQueueError, importQueuePreview, importQueuePasteAllError, importQueuePasteAllResult]);
 
   useEffect(() => {
-    if (!createMediaResult && !deleteResult && !archiveError && !archiveResult) return;
+    if (!deleteResult && !archiveError && !archiveResult) return;
 
     const timer = window.setTimeout(() => {
       clearWriteFeedback();
     }, 2400);
 
     return () => window.clearTimeout(timer);
-  }, [archiveError, archiveResult, createMediaResult, deleteResult]);
+  }, [archiveError, archiveResult, deleteResult]);
 
   useEffect(() => {
     let alive = true;
@@ -459,7 +456,6 @@ function App() {
   }
 
   function clearWriteFeedback() {
-    setCreateMediaResult(null);
     setDeleteResult(null);
     setArchiveError(null);
     setArchiveResult(null);
@@ -659,7 +655,6 @@ function App() {
     const files = Array.from(event.target.files ?? []);
     setMediaFiles((currentFiles) => [...currentFiles, ...files]);
     setCreateMediaError(null);
-    setCreateMediaResult(null);
   }
 
   function pasteMediaContent(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -671,7 +666,6 @@ function App() {
     event.preventDefault();
     setMediaFiles((currentFiles) => [...currentFiles, ...pastedFiles]);
     setCreateMediaError(null);
-    setCreateMediaResult(null);
   }
 
   async function createMediaMessage(event: FormEvent<HTMLFormElement>) {
@@ -682,21 +676,20 @@ function App() {
 
     setCreatingMediaMessage(true);
     setCreateMediaError(null);
-    setCreateMediaResult(null);
 
     try {
       const imagesData = await filesToNumberArrays(mediaFiles);
-      const result =
-        text && imagesData.length > 0
-          ? await createLegacyMixedMessage(text, imagesData)
-          : text
-            ? await createLegacyTextMessage(text)
-            : await createLegacyImageMessage(imagesData);
+      if (text && imagesData.length > 0) {
+        await createLegacyMixedMessage(text, imagesData);
+      } else if (text) {
+        await createLegacyTextMessage(text);
+      } else {
+        await createLegacyImageMessage(imagesData);
+      }
       await refreshAppData();
       setMediaTextDraft("");
       setMediaFiles([]);
       setMediaInputKey((key) => key + 1);
-      setCreateMediaResult(result);
       setShowComposer(false);
     } catch (err) {
       setCreateMediaError(err instanceof Error ? err.message : String(err));
@@ -711,20 +704,17 @@ function App() {
     setEditFiles([]);
     setEditInputKey((key) => key + 1);
     setEditError(null);
-    setEditResult(null);
   }
 
   function closeEditMessage() {
     if (savingEdit) return;
     setEditingMessage(null);
     setEditError(null);
-    setEditResult(null);
   }
 
   function selectEditFiles(event: ChangeEvent<HTMLInputElement>) {
     setEditFiles((currentFiles) => [...currentFiles, ...Array.from(event.target.files ?? [])]);
     setEditError(null);
-    setEditResult(null);
   }
 
   function pasteEditMediaContent(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -736,7 +726,6 @@ function App() {
     event.preventDefault();
     setEditFiles((currentFiles) => [...currentFiles, ...pastedFiles]);
     setEditError(null);
-    setEditResult(null);
   }
 
   async function saveEditedMessage(event: FormEvent<HTMLFormElement>) {
@@ -745,7 +734,6 @@ function App() {
 
     setSavingEdit(true);
     setEditError(null);
-    setEditResult(null);
 
     try {
       let result: EditResult | null = null;
@@ -764,7 +752,7 @@ function App() {
       await refreshAppData();
       setEditFiles([]);
       setEditInputKey((key) => key + 1);
-      setEditResult(result);
+      setEditingMessage(null);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1041,14 +1029,6 @@ function App() {
                   </OperationFeedback>
                 )}
 
-                {createMediaResult && (
-                  <OperationFeedback variant="success" title={`已保存 #${createMediaResult.message.id}`}>
-                    <p>
-                      {createMediaResult.message.created_at} · 图片{" "}
-                      {createMediaResult.message.images.length}
-                    </p>
-                  </OperationFeedback>
-                )}
               </section>
             </div>
           )}
@@ -1141,7 +1121,6 @@ function App() {
           message={editingMessage}
           previewDelaySeconds={hoverDelay}
           previewImages={editPreviewImages}
-          result={editResult}
           saving={savingEdit}
           textDraft={editTextDraft}
           canSave={canSaveEdit}
@@ -1236,21 +1215,6 @@ function App() {
           title={`已删除 #${deleteResult.message.id}`}
         >
           <p>消息已移除。</p>
-        </OperationFeedback>
-      )}
-
-      {createMediaResult && (
-        <OperationFeedback
-          dismissLabel="关闭写入提示"
-          onDismiss={clearWriteFeedback}
-          surface="floating"
-          variant="success"
-          title={`已保存 #${createMediaResult.message.id}`}
-        >
-          <p>
-            {createMediaResult.message.created_at} · 图片{" "}
-            {createMediaResult.message.images.length}
-          </p>
         </OperationFeedback>
       )}
 
@@ -2026,7 +1990,6 @@ function EditMessageDialog({
   message,
   previewDelaySeconds,
   previewImages,
-  result,
   saving,
   textDraft,
   onClose,
@@ -2043,7 +2006,6 @@ function EditMessageDialog({
   message: LegacyMessage;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
-  result: EditResult | null;
   saving: boolean;
   textDraft: string;
   onClose: () => void;
@@ -2134,12 +2096,6 @@ function EditMessageDialog({
         {error && (
           <OperationFeedback variant="error" title="保存失败">
             <p>{error}</p>
-          </OperationFeedback>
-        )}
-
-        {result && (
-          <OperationFeedback variant="success" title={`已保存 #${result.message.id}`}>
-            <p>消息已更新。</p>
           </OperationFeedback>
         )}
       </section>

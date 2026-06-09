@@ -303,6 +303,10 @@
 - 已完成 release 前自动化与打包验证：`npm test -- --run` 通过 `53 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.0_x64_en-US.msi` 与 `clipstash-next_2.0.0_x64-setup.exe`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
 - 首次推送 `v2.0.0` 后 GitHub Actions 在 `Run Rust tests` 失败：workflow 版本同步误把 `Cargo.toml` 依赖版本也替换成 `2.0.0`，导致 CI 查找不存在的 `image = "^2.0.0"`；已修正为只替换 `[package]` 的行首 `version`。
 - 已发布 GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.0.0`，资产包含 `clipstash-next_2.0.0_x64-setup.exe` 和 `clipstash-next_2.0.0_x64_en-US.msi`；随后在修正后的 `main` 上手动触发 `Build ClipStash Next` workflow，通过前端测试、Rust 测试、Tauri 打包和 artifact 上传。
+- 已按用户反馈调整保存成功体验：新建消息和编辑消息保存成功后直接关闭对应弹窗，不再显示“已保存”提示；保存失败仍保留弹窗、输入内容和错误提示。已验证 `npm test -- --run` 通过 `53 passed | 9 skipped`，`npm run build` 通过。
+- 已按用户反馈确认沿用旧版蓝底剪贴板图标，并替换 ClipStash Next 默认 Tauri 图标；已用 `npm run tauri icon ..\assets\app_icon.png` 生成桌面图标资源，并清理未使用的移动端输出。
+- 准备补丁版 `2.0.1`：包含保存成功后自动关闭新建/编辑弹窗、不再显示“已保存”提示，以及沿用旧版蓝底剪贴板图标。
+- 已完成 `2.0.1` 发布前验证：`npm test -- --run` 通过 `53 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.1_x64_en-US.msi` 与 `clipstash-next_2.0.1_x64-setup.exe`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
 
 ## 未完成
 

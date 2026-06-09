@@ -171,7 +171,10 @@ describe("media create form", () => {
       "create_legacy_mixed_message",
       expect.anything(),
     );
-    expect(await screen.findByText("已保存 #200")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑新消息" })).toBeNull();
+    });
+    expect(screen.queryByText("已保存 #200")).toBeNull();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
@@ -198,7 +201,10 @@ describe("media create form", () => {
       "create_legacy_image_message",
       expect.anything(),
     );
-    expect(await screen.findByText("已保存 #200")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑新消息" })).toBeNull();
+    });
+    expect(screen.queryByText("已保存 #200")).toBeNull();
   });
 
   it("accepts pasted images in the same message composer", async () => {
@@ -223,8 +229,7 @@ describe("media create form", () => {
     });
   });
 
-  it("auto dismisses and click dismisses create feedback", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+  it("closes the composer after saving without showing create feedback", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -235,27 +240,11 @@ describe("media create form", () => {
     );
     await user.click(within(panel).getByRole("button", { name: "保存" }));
 
-    const feedback = await screen.findByText("已保存 #200");
-    await user.click(feedback.closest(".operation-feedback") as HTMLElement);
     await waitFor(() => {
-      expect(screen.queryByText("已保存 #200")).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "编辑新消息" })).toBeNull();
     });
-
-    await user.click(await screen.findByRole("button", { name: "+ 新建" }));
-    const nextPanel = await screen.findByRole("dialog", { name: "编辑新消息" });
-    await user.upload(
-      within(nextPanel).getByLabelText("选择图片"),
-      new File([new Uint8Array([1, 2, 3])], "pixel.png", { type: "image/png" }),
-    );
-    await user.click(within(nextPanel).getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("已保存 #200")).toBeTruthy();
-
-    await vi.advanceTimersByTimeAsync(2400);
-    await waitFor(() => {
-      expect(screen.queryByText("已保存 #200")).toBeNull();
-    });
-    vi.useRealTimers();
-  }, 5000);
+    expect(screen.queryByText("已保存 #200")).toBeNull();
+  });
 });
 
 function commandCallCount(command: string) {

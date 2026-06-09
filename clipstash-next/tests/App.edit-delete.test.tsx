@@ -533,8 +533,10 @@ describe("edit and delete guarded actions", () => {
       "replace_legacy_message_images",
       expect.anything(),
     );
-    expect(await within(dialog).findByText("已保存 #10")).toBeTruthy();
-    expect(within(dialog).getByText("消息已更新。")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
+    expect(screen.queryByText("已保存 #10")).toBeNull();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
@@ -617,8 +619,10 @@ describe("edit and delete guarded actions", () => {
         imagesData: [[9, 8]],
       });
     });
-    expect(await within(dialog).findByText("已保存 #10")).toBeTruthy();
-    expect(within(dialog).getByText("消息已更新。")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
+    expect(screen.queryByText("已保存 #10")).toBeNull();
   });
 
   it("deletes a message only after explicit confirmation", async () => {
