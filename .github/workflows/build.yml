@@ -72,7 +72,7 @@ jobs:
           '@
           node -e $syncPackageJson
 
-          (Get-Content $cargoTomlPath -Raw) -replace 'version = "[0-9]+\.[0-9]+\.[0-9]+"', "version = `"$ver`"" | Set-Content $cargoTomlPath -NoNewline
+          (Get-Content $cargoTomlPath -Raw) -replace '(?m)^version = "[0-9]+\.[0-9]+\.[0-9]+"', "version = `"$ver`"" | Set-Content $cargoTomlPath -NoNewline
           (Get-Content $tauriConfigPath -Raw) -replace '"version": "[0-9]+\.[0-9]+\.[0-9]+"', "`"version`": `"$ver`"" -replace '"title": ".*@linjianglu"', "`"title`": `"需求暂存站 v$ver  @linjianglu`"" | Set-Content $tauriConfigPath -NoNewline
           (Get-Content $appPath -Raw) -replace 'const CURRENT_VERSION = "[0-9]+\.[0-9]+\.[0-9]+";', "const CURRENT_VERSION = `"$ver`";" | Set-Content $appPath -NoNewline
 
