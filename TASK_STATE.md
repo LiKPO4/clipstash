@@ -313,6 +313,7 @@
 - 已将新建消息弹窗统一到编辑消息弹窗样式：同样使用宽版 `edit-message-dialog`、底部“保存 / 关闭 / 选择图片”一行、隐藏图片状态文字、应用文字区高度记忆，并保留粘贴图片缩略图和删除按钮。已验证 `npm test -- --run App.media-create.test.tsx App.edit-delete.test.tsx` 通过 `32 passed | 9 skipped`，`npm run build` 通过。
 - 已按用户反馈调整新建/编辑弹窗底部动作栏：左侧为“选择图片”，右侧依次为“关闭 / 保存”，保存位于最右。已验证 `npm test -- --run App.media-create.test.tsx App.edit-delete.test.tsx` 通过 `32 passed | 9 skipped`，`npm run build` 通过。
 - 已准备补丁版 `2.0.2` release：包含编辑/新建弹窗多图删除、统一滚动与按钮布局、文字区高度持久化、版本号/标题同步。发布前验证已通过：`npm test -- --run` 通过 `56 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.2_x64_en-US.msi` 与 `clipstash-next_2.0.2_x64-setup.exe`。
+- 已准备补丁版 `2.0.3`：接入 `tauri-plugin-single-instance` 防止重复启动导致多个托盘/窗口；bundle `productName` 从旧 `clipstash-next` 改为 `ClipStash Next`，安装后会生成区别于旧快捷方式的新桌面入口，窗口标题/应用内仍显示 `需求暂存站 v2.0.3`。已验证 `npm test -- --run` 通过 `56 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.0.3_x64_en-US.msi` 与 `ClipStash Next_2.0.3_x64-setup.exe`；实际单例烟测结果为第一次启动进程存活、第二次启动进程退出、进程数保持 `1`。
 
 ## 未完成
 

@@ -187,18 +187,18 @@ describe("settings storage panel", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.3",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.3",
+          tag_name: "v2.0.4",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.4",
           body: "更新说明",
         }),
       }),
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.3")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.0.4")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "打开 Release 页面" }));
     expect(openUrlMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.3",
+      "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.4",
     );
   });
 
