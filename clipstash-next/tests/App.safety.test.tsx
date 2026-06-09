@@ -57,6 +57,7 @@ const defaultAppSettings = {
   hover_delay: 0.8,
   scroll_lines: 1,
   font_scale: 0,
+  edit_textarea_height: 360,
   sort: "newest",
 };
 
@@ -186,18 +187,18 @@ describe("settings storage panel", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.2",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.2",
+          tag_name: "v2.0.3",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.3",
           body: "更新说明",
         }),
       }),
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.2")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.0.3")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "打开 Release 页面" }));
     expect(openUrlMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.2",
+      "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.3",
     );
   });
 

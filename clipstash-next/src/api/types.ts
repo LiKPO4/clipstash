@@ -35,6 +35,7 @@ export type AppSettings = {
   hover_delay: number;
   scroll_lines: number;
   font_scale: number;
+  edit_textarea_height: number;
   sort: SortOrder;
 };
 

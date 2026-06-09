@@ -643,10 +643,16 @@ textarea:focus,
   gap: 7px;
 }
 
+.composer-image-tile-wrap {
+  position: relative;
+  min-width: 0;
+}
+
 .composer-image-tile {
   display: grid;
   grid-template-rows: 58px auto;
   gap: 0;
+  width: 100%;
   min-width: 0;
   overflow: hidden;
   padding: 0;
@@ -674,6 +680,47 @@ textarea:focus,
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-image-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  width: 21px;
+  height: 21px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--control-radius);
+  color: #fff;
+  background: rgba(9, 36, 71, 0.76);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  font-size: 0;
+}
+
+.composer-image-remove:hover {
+  background: rgba(9, 36, 71, 0.92);
+}
+
+.composer-image-remove::before,
+.composer-image-remove::after {
+  position: absolute;
+  width: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
+.composer-image-remove::before {
+  transform: rotate(45deg);
+}
+
+.composer-image-remove::after {
+  transform: rotate(-45deg);
 }
 
 .write-confirm {
@@ -1168,6 +1215,7 @@ textarea:focus,
 .edit-backdrop {
   align-items: flex-start;
   overflow: hidden;
+  padding: 50px 10px;
 }
 
 .edit-dialog,
@@ -1187,12 +1235,35 @@ textarea:focus,
 }
 
 .edit-message-dialog {
-  width: min(840px, calc(100vw - 18px));
-  min-height: min(480px, calc(100vh - 18px));
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: calc(100vh - 100px);
+  min-height: min(560px, calc(100vh - 100px));
+  overflow: hidden;
+}
+
+.edit-message-dialog .text-create-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.edit-message-dialog .message-composer-box {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .edit-message-dialog .message-composer-box textarea {
-  min-height: clamp(180px, 36vh, 270px);
+  flex: 0 0 auto;
+  min-height: 180px;
+  margin-right: -7px;
+  padding-right: 10px;
 }
 
 .composer-dialog,
@@ -1369,6 +1440,17 @@ textarea:focus,
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.edit-dialog-actions {
+  position: relative;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.edit-dialog-actions .secondary-action {
+  margin-left: auto;
 }
 
 .delete-copy {

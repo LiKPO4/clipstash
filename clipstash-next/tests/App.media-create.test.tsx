@@ -55,6 +55,20 @@ const emptyPage = {
   messages: [],
 };
 
+const defaultAppSettings = {
+  always_on_top: false,
+  close_to_tray: true,
+  archive_after_import: false,
+  paste_interval_ms: 250,
+  show_hotkey: "<ctrl>+<shift>+v",
+  capture_hotkey: "<ctrl>+<alt>+v",
+  hover_delay: 0.8,
+  scroll_lines: 1,
+  font_scale: 0,
+  edit_textarea_height: 420,
+  sort: "newest",
+};
+
 const createResult = {
   backup: {
     source_path: stats.db_path,
@@ -87,10 +101,18 @@ const createResult = {
 };
 
 describe("media create form", () => {
+  let appSettings = { ...defaultAppSettings };
+
   beforeEach(() => {
+    appSettings = { ...defaultAppSettings };
     isAlwaysOnTopMock.mockResolvedValue(false);
     setAlwaysOnTopMock.mockResolvedValue(undefined);
-    invokeMock.mockImplementation((command: string) => {
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_app_settings") return Promise.resolve(appSettings);
+      if (command === "update_app_settings") {
+        appSettings = { ...appSettings, ...(args?.patch as Record<string, unknown>) };
+        return Promise.resolve(appSettings);
+      }
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") return Promise.resolve(emptyPage);
       if (command === "create_legacy_image_message") return Promise.resolve(createResult);
@@ -137,6 +159,24 @@ describe("media create form", () => {
     await waitFor(() => {
       expect((submit as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  it("uses the same roomy editor layout for new messages", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const panel = await openMediaCreateDialog(user);
+    expect(panel.classList.contains("edit-message-dialog")).toBe(true);
+    expect(within(panel).queryByText("可粘贴图片或选择文件")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "关闭" })).toBeTruthy();
+    expect(
+      Array.from(panel.querySelectorAll(".edit-dialog-actions :is(label, button)")).map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(["选择图片", "关闭", "保存"]);
+    expect((within(panel).getByLabelText("消息内容") as HTMLTextAreaElement).style.height).toBe(
+      "420px",
+    );
   });
 
   it("opens the composer when double clicking the empty list area", async () => {
@@ -217,7 +257,7 @@ describe("media create form", () => {
       type: "image/png",
     });
     firePaste(textarea, file);
-    expect(within(panel).getByText("已选择 1 张图片")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "删除图片 pasted.png" })).toBeTruthy();
     expect(await within(panel).findByRole("img", { name: "pasted.png" })).toBeTruthy();
 
     await user.click(within(panel).getByRole("button", { name: "保存" }));

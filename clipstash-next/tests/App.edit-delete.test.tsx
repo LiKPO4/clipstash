@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
@@ -298,6 +298,7 @@ const defaultAppSettings = {
   hover_delay: 0.8,
   scroll_lines: 1,
   font_scale: 0,
+  edit_textarea_height: 360,
   sort: "newest",
 };
 
@@ -515,6 +516,11 @@ describe("edit and delete guarded actions", () => {
     await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }));
 
     const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    expect(
+      Array.from(dialog.querySelectorAll(".edit-dialog-actions :is(label, button)")).map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(["选择图片", "关闭", "保存"]);
     const save = within(dialog).getByRole("button", { name: "保存" });
     expect((save as HTMLButtonElement).disabled).toBe(true);
 
@@ -599,6 +605,30 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
+  it("persists the edited text area height after manual resize", async () => {
+    appSettings = { ...defaultAppSettings, edit_textarea_height: 420 };
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    const textarea = within(dialog).getByLabelText("消息内容") as HTMLTextAreaElement;
+    expect(textarea.style.height).toBe("420px");
+
+    textarea.style.height = "512px";
+    fireEvent.mouseUp(textarea);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+        patch: { edit_textarea_height: 512 },
+      });
+    });
+  });
+
   it("replaces message images when replacement files are selected", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -623,6 +653,33 @@ describe("edit and delete guarded actions", () => {
       expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
     });
     expect(screen.queryByText("已保存 #10")).toBeNull();
+  });
+
+  it("removes a selected replacement image before saving", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    await user.upload(within(dialog).getByLabelText("选择图片"), [
+      new File([new Uint8Array([1, 2])], "remove.png", { type: "image/png" }),
+      new File([new Uint8Array([3, 4])], "keep.png", { type: "image/png" }),
+    ]);
+    await user.click(within(dialog).getByRole("button", { name: "删除图片 remove.png" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("replace_legacy_message_images", {
+        messageId: 10,
+        imagesData: [[3, 4]],
+      });
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("replace_legacy_message_images", {
+      messageId: 10,
+      imagesData: [[1, 2], [3, 4]],
+    });
   });
 
   it("deletes a message only after explicit confirmation", async () => {

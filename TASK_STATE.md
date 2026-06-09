@@ -307,6 +307,12 @@
 - 已按用户反馈确认沿用旧版蓝底剪贴板图标，并替换 ClipStash Next 默认 Tauri 图标；已用 `npm run tauri icon ..\assets\app_icon.png` 生成桌面图标资源，并清理未使用的移动端输出。
 - 准备补丁版 `2.0.1`：包含保存成功后自动关闭新建/编辑弹窗、不再显示“已保存”提示，以及沿用旧版蓝底剪贴板图标。
 - 已完成 `2.0.1` 发布前验证：`npm test -- --run` 通过 `53 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.1_x64_en-US.msi` 与 `clipstash-next_2.0.1_x64-setup.exe`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已按用户反馈调整编辑消息弹窗布局：编辑弹窗上下保留 `50px`、左右保留 `10px`；弹窗改为竖向 flex，底部一行放“保存 / 关闭 / 选择图片”三个按钮，选择图片不再显示状态文字；上方编辑框占用剩余高度，编辑框内部滚动条贴近右侧边框。已验证 `npm test -- --run App.edit-delete.test.tsx` 通过 `23 passed | 9 skipped`，`npm run build` 通过。
+- 已按用户反馈调整编辑/新建弹窗待选图片：每张缩略图右上角新增删除按钮；编辑弹窗内“文字 + 图片”同属一个组合输入区并由该区域统一纵向滚动，文字输入区保留 `180px` 最小高度，避免多图挤没文字。已验证 `npm test -- --run App.edit-delete.test.tsx App.media-create.test.tsx` 通过 `30 passed | 9 skipped`，`npm run build` 通过。
+- 已为编辑消息文字区高度增加设置持久化：手动拖拽 textarea 高度后会静默写入 Next `settings.json` 的 `edit_textarea_height`，下次打开编辑弹窗恢复该高度，并在后端限制到 `180..700`。已验证 `npm test -- --run App.edit-delete.test.tsx App.safety.test.tsx` 通过 `29 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test app_settings` 通过 `3 passed`。
+- 已将新建消息弹窗统一到编辑消息弹窗样式：同样使用宽版 `edit-message-dialog`、底部“保存 / 关闭 / 选择图片”一行、隐藏图片状态文字、应用文字区高度记忆，并保留粘贴图片缩略图和删除按钮。已验证 `npm test -- --run App.media-create.test.tsx App.edit-delete.test.tsx` 通过 `32 passed | 9 skipped`，`npm run build` 通过。
+- 已按用户反馈调整新建/编辑弹窗底部动作栏：左侧为“选择图片”，右侧依次为“关闭 / 保存”，保存位于最右。已验证 `npm test -- --run App.media-create.test.tsx App.edit-delete.test.tsx` 通过 `32 passed | 9 skipped`，`npm run build` 通过。
+- 已准备补丁版 `2.0.2` release：包含编辑/新建弹窗多图删除、统一滚动与按钮布局、文字区高度持久化、版本号/标题同步。发布前验证已通过：`npm test -- --run` 通过 `56 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.2_x64_en-US.msi` 与 `clipstash-next_2.0.2_x64-setup.exe`。
 
 ## 未完成
 

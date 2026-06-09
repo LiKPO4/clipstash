@@ -16,6 +16,7 @@ pub struct AppSettings {
     pub hover_delay: f64,
     pub scroll_lines: i64,
     pub font_scale: i64,
+    pub edit_textarea_height: i64,
     pub sort: String,
 }
 
@@ -31,6 +32,7 @@ impl Default for AppSettings {
             hover_delay: 0.8,
             scroll_lines: 1,
             font_scale: 0,
+            edit_textarea_height: 360,
             sort: "newest".to_string(),
         }
     }
@@ -47,6 +49,7 @@ pub struct AppSettingsPatch {
     pub hover_delay: Option<f64>,
     pub scroll_lines: Option<i64>,
     pub font_scale: Option<i64>,
+    pub edit_textarea_height: Option<i64>,
     pub sort: Option<String>,
 }
 
@@ -107,6 +110,9 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     }
     if let Some(value) = patch.font_scale {
         settings.font_scale = value;
+    }
+    if let Some(value) = patch.edit_textarea_height {
+        settings.edit_textarea_height = value;
     }
     if let Some(value) = patch.sort {
         settings.sort = value;
@@ -169,6 +175,7 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     settings.hover_delay = settings.hover_delay.clamp(0.0, 2.0);
     settings.scroll_lines = settings.scroll_lines.clamp(1, 8);
     settings.font_scale = settings.font_scale.clamp(-4, 4);
+    settings.edit_textarea_height = settings.edit_textarea_height.clamp(180, 700);
     if settings.sort != "oldest" {
         settings.sort = "newest".to_string();
     }
@@ -237,6 +244,7 @@ mod tests {
         assert!(settings.always_on_top);
         assert!(settings.close_to_tray);
         assert!(settings.archive_after_import);
+        assert_eq!(settings.edit_textarea_height, 360);
         assert_eq!(settings.sort, "oldest");
     }
 
@@ -257,6 +265,7 @@ mod tests {
             hover_delay: None,
             scroll_lines: None,
             font_scale: None,
+            edit_textarea_height: None,
             sort: None,
         })
         .unwrap();

@@ -1,8 +1,11 @@
 import {
   type ChangeEvent,
   type ClipboardEvent,
+  type FocusEvent,
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
+  type TouchEvent,
   type RefObject,
   type WheelEvent,
   useEffect,
@@ -57,8 +60,11 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.1";
+const CURRENT_VERSION = "2.0.2";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
+const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
+const MIN_EDIT_TEXTAREA_HEIGHT = 180;
+const MAX_EDIT_TEXTAREA_HEIGHT = 700;
 const GITHUB_LATEST_RELEASE_API =
   "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
 const GITHUB_RELEASES_URL = "https://github.com/LiKPO4/clipstash/releases/latest";
@@ -129,6 +135,7 @@ function App() {
   const [hoverDelay, setHoverDelay] = useState(0.8);
   const [scrollLines, setScrollLines] = useState(1);
   const [fontScale, setFontScale] = useState(0);
+  const [editTextareaHeight, setEditTextareaHeight] = useState(DEFAULT_EDIT_TEXTAREA_HEIGHT);
   const [pasteIntervalMs, setPasteIntervalMs] = useState(250);
   const [expandedImageMessageIds, setExpandedImageMessageIds] = useState<number[]>([]);
   const [mediaTextDraft, setMediaTextDraft] = useState("");
@@ -469,6 +476,7 @@ function App() {
     setHoverDelay(settings.hover_delay);
     setScrollLines(settings.scroll_lines);
     setFontScale(settings.font_scale);
+    setEditTextareaHeight(settings.edit_textarea_height);
     setSort(settings.sort);
     getCurrentWindow()
       .setAlwaysOnTop(settings.always_on_top)
@@ -532,6 +540,22 @@ function App() {
   function updateSort(nextSort: SortOrder) {
     setSort(nextSort);
     persistAppSettings({ sort: nextSort }, "消息排序已应用").catch(() => setSort(sort));
+  }
+
+  function persistEditTextareaHeight(height: number) {
+    const nextHeight = clampEditTextareaHeight(height);
+    if (nextHeight === editTextareaHeight) return;
+
+    setEditTextareaHeight(nextHeight);
+    updateAppSettings({ edit_textarea_height: nextHeight })
+      .then(applyAppSettings)
+      .catch((err: unknown) => {
+        setSettingsError(err instanceof Error ? err.message : String(err));
+      });
+  }
+
+  function persistTextAreaElementHeight(element: HTMLTextAreaElement) {
+    persistEditTextareaHeight(readTextAreaHeight(element));
   }
 
   async function loadMore() {
@@ -668,6 +692,14 @@ function App() {
     setCreateMediaError(null);
   }
 
+  function removeMediaFile(indexToRemove: number) {
+    setMediaFiles((currentFiles) =>
+      currentFiles.filter((_, index) => index !== indexToRemove),
+    );
+    setMediaInputKey((key) => key + 1);
+    setCreateMediaError(null);
+  }
+
   async function createMediaMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -725,6 +757,14 @@ function App() {
 
     event.preventDefault();
     setEditFiles((currentFiles) => [...currentFiles, ...pastedFiles]);
+    setEditError(null);
+  }
+
+  function removeEditFile(indexToRemove: number) {
+    setEditFiles((currentFiles) =>
+      currentFiles.filter((_, index) => index !== indexToRemove),
+    );
+    setEditInputKey((key) => key + 1);
     setEditError(null);
   }
 
@@ -952,7 +992,7 @@ function App() {
           {showComposer && (
             <div className="preview-backdrop edit-backdrop" role="presentation" onClick={() => setShowComposer(false)}>
               <section
-                className="edit-dialog composer-dialog"
+                className="edit-dialog composer-dialog edit-message-dialog"
                 role="dialog"
                 aria-label="编辑新消息"
                 aria-modal="true"
@@ -974,9 +1014,13 @@ function App() {
                       aria-label="消息内容"
                       value={mediaTextDraft}
                       onChange={(event) => setMediaTextDraft(event.target.value)}
+                      onBlur={(event) => persistTextAreaElementHeight(event.currentTarget)}
+                      onMouseUp={(event) => persistTextAreaElementHeight(event.currentTarget)}
                       onPaste={pasteMediaContent}
+                      onTouchEnd={(event) => persistTextAreaElementHeight(event.currentTarget)}
                       placeholder="输入文字，或直接粘贴图片"
                       rows={6}
+                      style={{ height: `${editTextareaHeight}px` }}
                     />
                     {mediaFiles.length > 0 && (
                       <div className="composer-image-grid" aria-label="已选图片">
@@ -986,39 +1030,33 @@ function App() {
                             index={index}
                             key={`${file.name}-${file.size}-${index}`}
                             onPreview={setPreviewImage}
+                            onRemove={removeMediaFile}
                             previewDelaySeconds={hoverDelay}
                             previewImages={mediaPreviewImages}
                           />
                         ))}
                       </div>
                     )}
-                    <div className="composer-file-row">
-                      <label className="composer-file-action" htmlFor="new-media-message-files">
-                        选择图片
-                      </label>
-                      <span>
-                        {mediaFiles.length > 0
-                          ? `已选择 ${mediaFiles.length} 张图片`
-                          : "可粘贴图片或选择文件"}
-                      </span>
-                      <input
-                        key={mediaInputKey}
-                        id="new-media-message-files"
-                        className="composer-file-input"
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        onChange={selectMediaFiles}
-                      />
-                    </div>
                   </section>
 
-                  <div className="dialog-actions">
+                  <div className="dialog-actions edit-dialog-actions">
+                    <label className="composer-file-action" htmlFor="new-media-message-files">
+                      选择图片
+                    </label>
+                    <input
+                      key={mediaInputKey}
+                      id="new-media-message-files"
+                      className="composer-file-input"
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={selectMediaFiles}
+                    />
+                    <button type="button" className="secondary-action" onClick={() => setShowComposer(false)}>
+                      关闭
+                    </button>
                     <button type="submit" className="write-submit" disabled={!canCreateMedia}>
                       {creatingMediaMessage ? "正在保存..." : "保存"}
-                    </button>
-                    <button type="button" className="secondary-action" onClick={() => setShowComposer(false)}>
-                      取消
                     </button>
                   </div>
                 </form>
@@ -1122,13 +1160,16 @@ function App() {
           previewDelaySeconds={hoverDelay}
           previewImages={editPreviewImages}
           saving={savingEdit}
+          textAreaHeight={editTextareaHeight}
           textDraft={editTextDraft}
           canSave={canSaveEdit}
           onClose={closeEditMessage}
           onFileChange={selectEditFiles}
           onPaste={pasteEditMediaContent}
           onPreview={setPreviewImage}
+          onRemoveFile={removeEditFile}
           onSubmit={saveEditedMessage}
+          onTextAreaHeightCommit={persistEditTextareaHeight}
           onTextChange={setEditTextDraft}
         />
       )}
@@ -1991,12 +2032,15 @@ function EditMessageDialog({
   previewDelaySeconds,
   previewImages,
   saving,
+  textAreaHeight,
   textDraft,
   onClose,
   onFileChange,
   onPaste,
   onPreview,
+  onRemoveFile,
   onSubmit,
+  onTextAreaHeightCommit,
   onTextChange,
 }: {
   canSave: boolean;
@@ -2007,14 +2051,29 @@ function EditMessageDialog({
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
   saving: boolean;
+  textAreaHeight: number;
   textDraft: string;
   onClose: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onPreview: (image: PreviewImage | null) => void;
+  onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
 }) {
+  function commitTextAreaHeight(
+    event:
+      | FocusEvent<HTMLTextAreaElement>
+      | MouseEvent<HTMLTextAreaElement>
+      | TouchEvent<HTMLTextAreaElement>,
+  ) {
+    const height = readTextAreaHeight(event.currentTarget);
+    if (Number.isFinite(height) && height > 0) {
+      onTextAreaHeightCommit(height);
+    }
+  }
+
   return (
     <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
       <section
@@ -2041,9 +2100,13 @@ function EditMessageDialog({
               aria-label="消息内容"
               value={textDraft}
               onChange={(event) => onTextChange(event.target.value)}
+              onBlur={commitTextAreaHeight}
+              onMouseUp={commitTextAreaHeight}
               onPaste={onPaste}
+              onTouchEnd={commitTextAreaHeight}
               placeholder="编辑文字，或选择图片替换原图片"
               rows={9}
+              style={{ height: `${textAreaHeight}px` }}
             />
 
             {files.length > 0 && (
@@ -2054,6 +2117,7 @@ function EditMessageDialog({
                     index={index}
                     key={`${file.name}-${file.size}-${index}`}
                     onPreview={onPreview}
+                    onRemove={onRemoveFile}
                     previewDelaySeconds={previewDelaySeconds}
                     previewImages={previewImages}
                   />
@@ -2061,34 +2125,25 @@ function EditMessageDialog({
               </div>
             )}
 
-            <div className="composer-file-row">
-              <label className="composer-file-action" htmlFor="edit-message-files">
-                选择图片
-              </label>
-              <span>
-                {files.length > 0
-                  ? `将替换为 ${files.length} 张图片`
-                  : message.images.length > 0
-                    ? `保留原有 ${message.images.length} 张图片`
-                    : "可选择图片替换原图片"}
-              </span>
-              <input
-                key={inputKey}
-                id="edit-message-files"
-                className="composer-file-input"
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={onFileChange}
-              />
-            </div>
           </section>
-          <div className="dialog-actions">
-            <button type="submit" className="write-submit" disabled={!canSave}>
-              {saving ? "正在保存..." : "保存"}
-            </button>
+          <div className="dialog-actions edit-dialog-actions">
+            <label className="composer-file-action" htmlFor="edit-message-files">
+              选择图片
+            </label>
+            <input
+              key={inputKey}
+              id="edit-message-files"
+              className="composer-file-input"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={onFileChange}
+            />
             <button type="button" className="secondary-action" onClick={onClose}>
               关闭
+            </button>
+            <button type="submit" className="write-submit" disabled={!canSave}>
+              {saving ? "正在保存..." : "保存"}
             </button>
           </div>
         </form>
@@ -2181,12 +2236,14 @@ function ComposerImageTile({
   file,
   index,
   onPreview,
+  onRemove,
   previewDelaySeconds,
   previewImages,
 }: {
   file: File;
   index: number;
   onPreview: (image: PreviewImage | null) => void;
+  onRemove?: (index: number) => void;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
 }) {
@@ -2235,19 +2292,39 @@ function ComposerImageTile({
     onPreview(null);
   }
 
+  function removeFile(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    hidePreview();
+    onRemove?.(index);
+  }
+
   return (
-    <button
-      type="button"
-      className="composer-image-tile"
-      onMouseEnter={(event) => showPreview(event.currentTarget)}
-      onMouseLeave={hidePreview}
-      onFocus={(event) => showPreview(event.currentTarget)}
-      onBlur={hidePreview}
-      title={`${file.name} · ${formatBytes(file.size)}`}
-    >
-      {previewImage && <img alt={file.name} src={previewImage.src} />}
-      <span>{file.name}</span>
-    </button>
+    <div className="composer-image-tile-wrap">
+      <button
+        type="button"
+        className="composer-image-tile"
+        onMouseEnter={(event) => showPreview(event.currentTarget)}
+        onMouseLeave={hidePreview}
+        onFocus={(event) => showPreview(event.currentTarget)}
+        onBlur={hidePreview}
+        title={`${file.name} · ${formatBytes(file.size)}`}
+      >
+        {previewImage && <img alt={file.name} src={previewImage.src} />}
+        <span>{file.name}</span>
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          className="composer-image-remove"
+          onClick={removeFile}
+          aria-label={`删除图片 ${file.name}`}
+          title="删除图片"
+        >
+          ×
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -2627,6 +2704,20 @@ function getStoredSort(): SortOrder {
   return localStorage.getItem("clipstash.setting.messageSort") === "oldest"
     ? "oldest"
     : "newest";
+}
+
+function clampEditTextareaHeight(height: number) {
+  return Math.round(
+    Math.min(MAX_EDIT_TEXTAREA_HEIGHT, Math.max(MIN_EDIT_TEXTAREA_HEIGHT, height)),
+  );
+}
+
+function readTextAreaHeight(element: HTMLTextAreaElement) {
+  return Math.round(
+    element.getBoundingClientRect().height ||
+      element.clientHeight ||
+      Number.parseFloat(element.style.height),
+  );
 }
 
 function readLegacyLocalSettingsPatch(): AppSettingsPatch {
