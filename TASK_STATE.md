@@ -302,6 +302,7 @@
 - release 前 review 发现并修正发布阻塞项：`.github/workflows/build.yml` 原本仍构建旧 Python/Inno 安装包，已改为构建 `clipstash-next` 的 Tauri MSI/NSIS，并在 tag release 时上传新版安装包。
 - 已完成 release 前自动化与打包验证：`npm test -- --run` 通过 `53 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.0_x64_en-US.msi` 与 `clipstash-next_2.0.0_x64-setup.exe`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
 - 首次推送 `v2.0.0` 后 GitHub Actions 在 `Run Rust tests` 失败：workflow 版本同步误把 `Cargo.toml` 依赖版本也替换成 `2.0.0`，导致 CI 查找不存在的 `image = "^2.0.0"`；已修正为只替换 `[package]` 的行首 `version`。
+- 已发布 GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.0.0`，资产包含 `clipstash-next_2.0.0_x64-setup.exe` 和 `clipstash-next_2.0.0_x64_en-US.msi`；随后在修正后的 `main` 上手动触发 `Build ClipStash Next` workflow，通过前端测试、Rust 测试、Tauri 打包和 artifact 上传。
 
 ## 未完成
 
