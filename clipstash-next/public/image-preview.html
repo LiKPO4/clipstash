@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>图片预览</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #ffffff;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+      }
+
+      img {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        object-fit: contain;
+      }
+    </style>
+  </head>
+  <body>
+    <img alt="" id="preview-image" />
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key");
+      const image = document.getElementById("preview-image");
+
+      if (key) {
+        const rawPayload = localStorage.getItem(key);
+        if (rawPayload) {
+          const payload = JSON.parse(rawPayload);
+          image.alt = payload.filename || "图片预览";
+          image.src = payload.src || "";
+          document.title = payload.filename || "图片预览";
+        }
+      }
+    </script>
+  </body>
+</html>

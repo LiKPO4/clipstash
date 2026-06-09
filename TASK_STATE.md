@@ -4,6 +4,10 @@
 
 - 将 ClipStash 逐步从 Python + Tkinter/customtkinter 重构为 Tauri 2 + React + TypeScript + Rust + SQLite。
 - 当前阶段切回功能优先：先把 Tauri 版做成可安心日常使用，再回头处理模块整理细节。
+- 根目录 `start-latest.bat` 现在应直接启动 `clipstash-next` 的 Tauri dev 入口，避免旧 release exe 打开过期界面。
+- 当前 UI 收敛方向：主页保持轻量工具窗口，只用于快速新建、复制、导入和列表操作；数据安全进入设置页。
+- 本轮继续按旧版体验校准：默认 Tauri 窗口宽度为 `370`，消息卡片头部信息与操作按钮同一行，归档时间上下分行，图片 hover 预览按原图尺寸优先并限制长边最大 `1000`，设置页补回旧版主要控件外观，图片目录打开权限已补 `opener:allow-open-path`，窗口置顶按钮已接入 Tauri always-on-top API。
+- 最新数据策略已切换：新版本首次打开时从旧 `%APPDATA%\ClipStash` 只读迁移到新 `%APPDATA%\ClipStash Next`，迁移状态写入新库后日常读写、复制、导入、归档、删除都走新库；界面不再展示旧库、安全审计、备份等旧库信息。
 
 ## 已完成
 
@@ -228,6 +232,75 @@
 - 已为 P0-1 数据安全面板补充旧库基线变化提示：当当前审计计数偏离功能重构前基线 `normal=11 archived=103 total=114 joined_images=107 orphan_images=0` 时，UI 显示“旧库可能被其他版本改动过”及逐项变化。
 - 已新增前端 mock UI 测试覆盖数据安全面板基线变化提示、DB 备份列表和图片备份列表；App 组件测试已补 `@tauri-apps/plugin-opener` mock，避免 `openPath` import 破坏测试环境。
 - 已验证本轮数据安全面板增量：`npm test` 通过 4 个测试文件 48 项；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 22 项、18 项 ignored；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 已完成 P0-1 数据安全面板真实 Tauri UI 只读验收：窗口展开“数据安全”后可见旧数据目录、数据库路径、图片目录、基线变化提示“旧库可能被其他版本改动过”、图片关联 `109`、孤立图片 `0`、DB 备份 `23`、图备份 `4`；向下滚动可见最近 DB 备份和最近图片备份列表。验收后运行 `npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 已推进 P0-2 日常主流程打磨：新增通用 `OperationFeedback` 提示组件，统一新增、编辑、删除、归档/恢复、复制、导入队列相关成功/失败提示的外壳和视觉样式；新增通用 `WriteSafetyNote`，在新增纯文字、新增图片/图文、编辑、删除入口展示写旧库与备份策略。
+- 已补充前端测试覆盖 P0-2：编辑保存失败时弹窗、输入和确认状态保持；删除失败时弹窗和确认状态保持；新增图片/图文、编辑、删除入口显示备份策略说明。
+- 已验证 P0-2 本轮增量：`npm test` 通过 4 个测试文件 50 项；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 已完成 P0-2 列表刷新体验增量：写库刷新前记录 `.message-list` 的 `scrollTop`，刷新后恢复，继续沿用当前 `view/sort`；前端测试覆盖归档刷新后仍使用 `normal/newest` 参数并恢复滚动位置。
+- 已完成 P0-2 真实 Tauri UI 全流程验收并清理：通过 UI 新增临时纯文字消息 `#120`，编辑为 `ClipStash Next P0-2 UI edited temp 2026-06-08`，归档后只读查询确认 `archived=1`，恢复后只读查询确认 `archived=0 archived_at=NULL`，最后通过 UI 删除；删除后只读查询确认 `messages` 和 `message_images` 中 `#120` 均为 0 行。
+- 已在 P0-2 全流程验收后运行 `npm run verify:legacy-readonly`，旧库审计回到 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`；本轮纯文字 UI 验收没有写旧 `images/`。
+- 已推进 P0-3 图片与列表体验：多图消息默认显示前 3 张，超过 3 张时提供“展开 N 张图片/收起图片”；缺图或无法读取图片显示明确占位和文件名；图片预览支持上一张/下一张按钮和方向键切换，并显示当前序号。
+- 已补充前端测试覆盖 P0-3：多图默认折叠、缺图文件名显示、展开剩余图片、预览下一张/上一张切换；`npm test` 通过 4 个测试文件 51 项，`npm run build` 通过，`npm run verify:legacy-readonly` 通过，旧库保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 本机真实旧库只读抽查：存在多图消息（例如归档消息 `#85` 有 18 张），当前未发现缺图引用；P0-3 仍需用真实 Tauri UI 对多图、已归档大列表做截图/点击验收，缺图 UI 需要测试库或构造缺图样本验证。
+- 已按用户反馈修正当前轻量 UI：图片 hover 预览先按原图尺寸显示，若原图长边超过 `1000` 则按长边 `1000` 等比缩放，仅在视口本身放不下时再整体缩小；预览优先贴着缩略图左右侧并做屏幕内位置修正。
+- 已调整归档消息头部：`#id + 原本时间` 保持第一行，`归档于 xxx` 独立第二行，右侧恢复/删除按钮仍和左侧信息块在同一个卡片头部行内。
+- 已接入顶部置顶按钮：使用 `getCurrentWindow().isAlwaysOnTop()` 初始化状态，点击调用 `setAlwaysOnTop()` 切换，并补 Tauri capability `core:window:allow-is-always-on-top` / `core:window:allow-set-always-on-top`。
+- 已验证本轮 UI 修正增量：`npm test` 通过 4 个测试文件，`48 passed | 6 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`；`npm run tauri build` 通过并生成 release exe/msi/nsis。
+- 已按用户反馈调整设置页：设置弹窗改为整体上下滚动，不再只有上半部分滚动；设置项修改即自动保存到本机，移除“保存/取消”按钮；消息排序、快速导入后自动归档、悬浮预览延迟、滚动速度和文字大小已接入实际主页行为；检查更新按钮显示“当前版本暂未接入在线更新检查”而非空操作。
+- 已验证设置页自动保存增量：`npm test` 通过 4 个测试文件，`49 passed | 6 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 已按用户反馈移除主页列表标题行“普通消息/已归档消息”；切换普通/已归档或排序时不再显示“正在读取旧数据库...”，改为保留当前界面并静默刷新，避免闪烁。
+- 已验证主页轻量化增量：`npm test` 通过 4 个测试文件，`49 passed | 6 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 已按旧版 `main.py` 导入逻辑调整新版导入：旧版通过 `_track_foreground_window` 每 500ms 记录最近外部前台窗口，点击导入后隐藏自身、聚焦该窗口、按文字优先再图片顺序逐项复制并发送 Ctrl+V，完成后恢复窗口；新版已新增同等的 Rust 前台窗口跟踪与 `paste_legacy_import_queue_to_recent_window` command。
+- 已移除新版导入浮层中的“刷新目标窗口 / 选择目标窗口 / 校验目标窗口 / 开始导入”手动流程；普通消息点击“导入”后直接使用最近一次激活的外部窗口自动导入，导入成功后是否归档仍由设置项“快速导入后自动归档”控制。
+- 已验证自动导入到最近外部窗口增量：`npm test` 通过 4 个测试文件，`46 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过，`22 passed | 18 ignored`；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=6 archived=109 total=115 joined_images=109 orphan_images=0`。
+- 已修正导入后的浮动提示不会关闭的问题：导入读取提示、导入成功/失败提示现在可点击关闭，并会在 2.4 秒后自动关闭；前端测试覆盖导入成功提示自动消失。
+- 已验证导入提示自动关闭增量：`npm test` 通过 4 个测试文件，`46 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过。本轮只读审计发现真实旧库当前为 `normal=5 archived=110 total=115 joined_images=109 orphan_images=0`，较上一轮 `normal=6 archived=109` 多归档 1 条；本轮未执行写库命令，仅做只读审计。
+- 已按用户反馈调整新建消息弹窗：文字和图片合并到同一个输入框视觉区域，支持在文字框内直接粘贴图片，也可用“选择图片”追加图片；去掉新增弹窗里的旧库/备份提示和写入确认 checkbox，后端仍按既有安全路径自动备份。
+- 已调整图片 hover 预览定位：优先放在缩略图右侧或左侧；左右空间不足时改贴在缩略图下方或上方，尽量不遮住原缩略图。
+- 已验证本轮输入框与图片预览增量：`npm test` 通过 4 个测试文件，`47 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=5 archived=110 total=115 joined_images=109 orphan_images=0`。
+- 已按用户反馈补齐新建消息内粘贴图片的缩略图：粘贴或选择图片后在同一输入框区域显示缩略图，缩略图支持沿用 hover 原图预览；同时将软件内按钮/按钮状控件圆角收敛到统一 `--control-radius: 8px`。已验证：`npm test` 通过 4 个测试文件，`47 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=5 archived=110 total=115 joined_images=109 orphan_images=0`。
+- 已按用户反馈修正图片 hover 预览和浮动提示：预览改为独立无边框 Tauri 窗口，先读取图片真实尺寸，原图不超过 `1000` 时按原尺寸显示，超过则长边压到 `1000`，并基于屏幕可用区域贴近缩略图定位；新增/删除/归档/恢复等浮动提示已补齐点击关闭和 `2.4s` 自动关闭。已验证：`npm test` 通过 4 个测试文件，`48 passed | 9 skipped`；`npm run build` 通过；`npm run tauri build` 通过；`npm run verify:legacy-readonly` 通过。本轮只读审计发现真实旧库当前为 `normal=6 archived=110 total=116 joined_images=110 orphan_images=0`，较上一轮多 1 条普通消息和 1 张关联图片；本轮未执行写库命令，仅做只读审计。
+- 已按用户反馈继续收敛 UI：Tauri 默认窗口高度从 `600` 提到 `720`、最小高度提到 `600`；编辑消息弹窗改用和新建消息同一套组合输入框视觉，支持文字区粘贴图片并显示待替换图片缩略图；设置页“检查更新”接入 GitHub latest release：`https://github.com/LiKPO4/clipstash/releases/latest`；全局滚动条统一为和主消息列表一致的蓝色细条。已验证：`npm test` 通过 4 个测试文件，`48 passed | 9 skipped`；`npm run build` 通过；`npm run tauri build` 通过；`npm run verify:legacy-readonly` 通过。本轮只读审计发现真实旧库当前为 `normal=7 archived=110 total=117 joined_images=130 orphan_images=0`，较上一轮多 1 条普通消息和 20 张关联图片；本轮未执行写库命令，仅做只读审计。
+- 已按用户反馈移除纯图片消息的“无文字内容”占位：当消息没有文字但有图片时，只显示图片缩略图；仅在消息既无文字也无图片时保留空文案兜底。已验证：`npm test` 通过 4 个测试文件，`49 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=7 archived=110 total=117 joined_images=130 orphan_images=0`。
+- 已按用户反馈调整设置弹窗滚动：设置页标题和关闭按钮固定在顶部，只有下方设置内容区域滚动；外层遮罩不再产生第二个滚动条，普通新建/编辑/删除弹窗保留自身滚动以兼容小屏。已验证：`npm test` 通过 4 个测试文件，`49 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，旧库审计保持 `normal=7 archived=110 total=117 joined_images=130 orphan_images=0`。
+- 已按用户反馈调整设置页滚动条位置：取消设置弹窗外层 padding，改由固定标题和内容区分别提供内边距，使唯一滚动条贴近弹窗右侧边缘。已验证：`npm test` 通过 4 个测试文件，`49 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过。本轮只读审计发现真实旧库当前为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`，较上一轮普通消息少 2 条、归档多 2 条；本轮未执行写库命令，仅做只读审计。
+- 已新增 `app_data.rs`：创建新应用数据目录 `%APPDATA%\ClipStash Next`、新 `clipstash.db` 和 `images/`，用 `migration_state` 记录一次性迁移；首次没有迁移状态时只读扫描旧库并复制旧图片，之后不再扫描旧库。
+- 已将 Tauri 启动、列表、创建文字/图片/图文、编辑文字、替换图片、删除、归档/恢复、复制文字/图片和自动导入归档全部切到新库入口；旧库安全审计和手动备份 command 已从 Tauri 注册中移除。
+- 已清理用户可见旧库信息：设置页改为“本地存储”，移除旧库审计/备份列表/基线警告；新建、编辑、删除、归档、导入反馈不再显示旧数据库、旧图片目录、备份路径等文案。
+- 已验证迁移策略增量：`cargo test` 通过 `22 passed | 18 ignored`；`npm test -- --run` 通过 `48 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`npm run verify:legacy-readonly` 通过，旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已补设置页底部“迁移旧数据”按钮：可重复触发旧库只读拉取，并按消息 id 完全一致或消息内容/创建时间/归档状态/图片文件名完全一致跳过重复；id 冲突但内容不同会插入为新消息，不覆盖现有新库。
+- 已补新库图片目录 asset scope：`$DATA/ClipStash Next/images/*`，用于修正迁移后图片缩略图“无法读取”的权限问题。
+- 已补旧版交互：空列表区域双击打开新建消息窗口；普通/已归档切换按钮下方显示消息数量，并调整为上下两行避免挤出框。
+- 已验证本轮迁移按钮和旧版交互增量：`npm test -- --run` 通过 `51 passed | 9 skipped`；`cargo test` 通过 `22 passed | 18 ignored`；`npm run build` 通过；`cargo fmt -- --check` 通过；`npm run verify:legacy-readonly` 通过，旧库只读审计保持 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已移除手动“加载更多”按钮，改为消息列表滚动/滑块接近底部时自动加载下一页；自定义滚轮加速滚动后也会检查是否需要加载更多。
+- 已验证自动加载增量：`npm test -- --run` 通过 `52 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`npm run verify:legacy-readonly` 通过，旧库只读审计保持 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已将 release 前旧版差异项写入 `clipstash-next/migration-notes/functional-todolist.md`：托盘、全局呼出/快速保存快捷键、主页剪贴板快捷导入、开机自启动、Rust 设置持久化、GitHub release 检查、安装包/回滚口径。
+- 已推进 P1 托盘与窗口行为第一版：启用 Tauri `tray-icon` feature，应用启动时创建托盘；托盘菜单包含“显示/隐藏主窗口”“打开数据目录”“退出”；主窗口关闭默认隐藏到托盘，托盘退出才结束进程；左键点击/双击托盘图标显示主窗口。
+- 已验证托盘代码增量：`cargo fmt -- --check` 通过；`cargo test` 通过 `22 passed | 18 ignored`；`npm run tauri build` 通过并生成 release exe/msi/nsis；`npm run verify:legacy-readonly` 通过，旧库只读审计保持 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已推进 P1/P2 系统能力：接入 `tauri-plugin-global-shortcut`，默认注册 `<ctrl>+<shift>+v` 呼出/隐藏和 `<ctrl>+<alt>+v` 快速保存当前剪贴板；快捷键冲突不会阻塞启动，设置页会显示注册失败原因。
+- 已新增主窗口 `Ctrl+V` / `Shift+Insert` 剪贴板读取：不在输入框/弹窗内时读取系统剪贴板，文字或图片会打开统一新建消息窗口并预填内容；全局快速保存仍直接写入新库。
+- 已接入 `tauri-plugin-autostart`：设置页开机自启动读取/写入系统启动项，失败时回滚 UI 并显示错误。
+- 已新增 Rust 设置持久化：`%APPDATA%\ClipStash Next\settings.json` 读写窗口置顶、导入后归档、粘贴间隔、快捷键、悬浮预览延迟、滚动速度、字体大小、排序；前端会迁移旧 `localStorage` 设置并清理旧键。
+- 已将设置页“检查更新”改为 GitHub latest release API 检查：比较当前 `2.0.0` 与 latest tag，显示 release notes、失败原因和 Release 页面入口。
+- 已验证本轮系统能力增量：`npm test -- --run` 通过 `52 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `22 passed | 18 ignored`；`npm run tauri build` 通过并生成 exe/msi/nsis；`npm run verify:legacy-readonly` 通过，旧库只读审计保持 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已补 P1/P2 收尾项：设置页新增“关闭窗口时隐藏到托盘”开关并自动保存到 Rust 设置；Tauri 主窗口关闭事件会按 `close_to_tray` 决定隐藏或退出。
+- 已增强 Rust 设置读取：Next 设置缺失字段时用默认值；首次没有 Next 设置时会只读旧 `%APPDATA%\ClipStash\settings.json`，迁移悬浮预览延迟、导入后归档、排序、快捷键、滚动速度和字体大小到 `%APPDATA%\ClipStash Next\settings.json`，不写旧设置。
+- 已新增发布与回滚文档：`clipstash-next/migration-notes/release-checklist.md`，固化 `npm run tauri build` 产物路径、新旧数据目录策略、重复迁移跳过策略和旧 Python 版回滚方法。
+- 已新增回归数据集文档：`clipstash-next/migration-notes/regression-dataset.md`；已生成仓库内测试库 `clipstash-next/test-data/regression/legacy/clipstash.db` 与图片夹具，覆盖纯文字、单图、4 图、18 图、已归档、纯图片、长文本和缺图引用。
+- 已验证本轮收尾增量：`npm test -- --run App.safety.test.tsx` 通过 `3 passed`；`cargo test app_settings` 通过 `3 passed`；`cargo test generates_regression_fixture -- --ignored --nocapture` 通过并输出回归库 `normal=7 archived=1 total=8 joined_images=26 orphan_images=0`；`cargo test verifies_regression_fixture_readonly_consistency -- --ignored --nocapture` 通过；`cargo fmt -- --check` 通过。
+- 已完成本轮完整自动化验证：`npm test -- --run` 通过 `52 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `25 passed | 20 ignored`；`npm run tauri build` 通过并生成 `clipstash-next_0.1.0_x64_en-US.msi` 与 `clipstash-next_0.1.0_x64-setup.exe`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已补强 P2 安装包迁移自动化证据：`app_data.rs` 新增隔离测试 `migrates_legacy_data_once_and_skips_duplicates_without_touching_legacy_files`，覆盖首次迁移、重复迁移跳过、缺失图片引用保留、旧 DB 字节不变、旧图片字节不变；已验证 `cargo test migrates_legacy_data_once_and_skips_duplicates_without_touching_legacy_files` 通过，随后 `cargo test` 通过 `26 passed | 20 ignored`，`npm run verify:legacy-readonly` 通过且真实旧库仍为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已补强 P2 更新检查失败场景证据：设置页前端测试覆盖网络异常、HTTP 503、GitHub latest release 响应缺少版本号三类失败，确认 UI 显示具体错误且不出现“待实现”；已验证 `npm test -- --run App.safety.test.tsx` 通过 `4 passed`。
+- 已将发布前人工验收扩展为逐项清单：`clipstash-next/migration-notes/release-checklist.md` 现在覆盖安装与首次迁移、重复迁移、旧 Python 回滚、主界面视觉和列表、设置持久化、托盘、全局快捷键、主窗口剪贴板入口、开机自启动、更新检查失败。
+- 已按用户反馈放大编辑消息弹窗：编辑弹窗单独使用 `edit-message-dialog`，桌面目标宽度从 `560px` 提到 `840px`，高度目标约 `480px`，文本区从 `rows=6` 提到 `rows=9` 并用 `clamp` 控制高度；新建消息弹窗保持原尺寸。已验证 `npm test -- --run App.edit-delete.test.tsx` 通过 `23 passed | 9 skipped`，`npm run build` 通过。
+- 已按用户反馈调整主消息列表滚动条位置：`.message-list` 右侧使用 `margin-right: -12px` 贴近 shell 右边缘，并保留 `padding-right: 12px` 避免卡片内容贴住滚动条。已验证 `npm run build` 通过，`npm test -- --run App.edit-delete.test.tsx` 通过 `23 passed | 9 skipped`。
+- 已按用户反馈增强更新检查失败提示：设置页检查更新失败时除具体错误外，会显示“打开 Release 页面”按钮并跳转 `https://github.com/LiKPO4/clipstash/releases/latest`。已验证 `npm test -- --run App.safety.test.tsx` 通过 `4 passed`，`npm run build` 通过。
+- 已按用户反馈收敛全局浮动提示：`OperationFeedback` 的 floating 样式改为窗口底部一行小字状态栏，标题与首行内容横向排布，关闭按钮缩小到右侧，后续多行内容自动隐藏以减少遮挡；业务逻辑和自动关闭机制不变。已验证 `npm test -- --run App.edit-delete.test.tsx App.media-create.test.tsx` 通过 `29 passed | 9 skipped`，`npm run build` 通过。
+- 已按用户反馈重新修正消息正文半行裁切：消息正文外层只负责点击和背景，内部 `.message-text-content` 使用固定 `20px` 行高、`max-height: 100px` 与 5 行 line clamp，避免 padding/max-height 混算露出半行；消息列表底部保留 `34px` 内边距，避免底部状态提示遮住最后一行。
+- 已恢复新版标题/版本显示：版本从 `2.0.0` 开始迭代，`package.json`、`package-lock.json`、`Cargo.toml`、`Cargo.lock`、`tauri.conf.json`、前端 `CURRENT_VERSION` 和 release checklist 均已同步；Tauri 窗口标题为 `需求暂存站 v2.0.0  @linjianglu`，前端 `document.title` 与顶部副标题也显示 `v2.0.0 @linjianglu`。
+- 已验证本轮标题与正文裁切增量：`npm test -- --run App.edit-delete.test.tsx App.safety.test.tsx App.media-create.test.tsx` 通过 `33 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`。本轮未运行真实 UI 截图验收和 `verify:legacy-readonly`。
+- release 前 review 发现并修正发布阻塞项：`.github/workflows/build.yml` 原本仍构建旧 Python/Inno 安装包，已改为构建 `clipstash-next` 的 Tauri MSI/NSIS，并在 tag release 时上传新版安装包。
+- 已完成 release 前自动化与打包验证：`npm test -- --run` 通过 `53 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run tauri build` 通过并生成 `clipstash-next_2.0.0_x64_en-US.msi` 与 `clipstash-next_2.0.0_x64-setup.exe`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
 
 ## 未完成
 
@@ -240,15 +313,21 @@
 - 阶段 3 导入执行器主路径已完成：队列预检、首项剪贴板 staging、按索引复制队列项、低层外部窗口聚焦、单项受控粘贴、整队列受控粘贴、可选归档后端 command 和前端显式开关入口均已实现；3B 文字项/图片项、3C 整队列和 3D 可选归档真实验收均已通过。
 - 阶段 4A 已开始：Rust 旧数据访问层已拆出模型、备份、路径、图片文件、schema、查询、写入校验、写入预检、写入审计、写入备份包装、底层写入执行、剪贴板、导入队列、测试辅助和只读测试模块。
 - 功能优先 TODO 已建立，后续暂缓纯模块整理，优先补齐“可用版闭环”。
-- P0-1 数据安全面板基础能力和“基线变化 UI 提示”已落地；仍缺真实 Tauri UI 截图/点击验收。
+- P0-1 数据安全面板基础能力、“基线变化 UI 提示”和真实 Tauri UI 只读验收已落地。
+- P0-2 日常主流程打磨已完成：提示样式、失败保留状态、写库/备份策略说明、刷新后滚动保持，以及真实 Tauri UI 创建/编辑/归档/恢复/删除清理验收。
+- P0-3 图片与列表体验已完成多图展开/收起、缺图占位、预览上一张/下一张、自动加载更多和回归数据集；仍缺用户侧真实 Tauri UI 检查。
+- 新库迁移已完成第一版代码与自动化验证，但尚未做用户侧真实打开验收；首次真实打开会在 `%APPDATA%\ClipStash Next` 生成新库并复制旧图片，不移动或删除旧 `clipstash.db` / `images/`。
+- P1 托盘与窗口行为已完成可编译/可打包代码路径，并已接入“关闭时隐藏到托盘或退出”的设置项；仍缺用户侧真实托盘菜单操作验收。
+- P1 全局快捷键、开机自启动、设置持久化和 P2 更新检查已完成代码路径与自动化验证；仍缺用户侧真实系统行为验收，例如全局热键从外部窗口触发、注销/重启后的自启动、设置重启后仍生效、断网更新检查和安装包迁移。
 
 ## 阻塞
 
-- 当前无阻塞。
+- 剩余未勾选 todolist 均为真实 Windows/用户侧验收项：多图/缺图 UI、设置重启保持、托盘、全局快捷键、剪贴板快速保存、开机自启动、安装包迁移和旧 Python 回滚打开原旧库。代码路径、文档和自动化证据已补齐到当前可验证范围。
 
 ## 关键文件
 
 - `clipstash-next/src-tauri/src/legacy_data.rs`
+- `clipstash-next/src-tauri/src/app_data.rs`
 - `clipstash-next/src-tauri/src/legacy_model.rs`
 - `clipstash-next/src-tauri/src/legacy_clipboard.rs`
 - `clipstash-next/src-tauri/src/legacy_test_support.rs`
@@ -272,7 +351,10 @@
 - `clipstash-next/migration-notes/phase-3-import-executor.md`
 - `clipstash-next/migration-notes/phase-2-3-ui-acceptance.md`
 - `clipstash-next/migration-notes/functional-todolist.md`
+- `clipstash-next/migration-notes/release-checklist.md`
+- `clipstash-next/migration-notes/regression-dataset.md`
+- `clipstash-next/test-data/regression/legacy/clipstash.db`
 
 ## 下一步
 
-- 继续 P0-1：做一次真实 Tauri UI 验收数据安全面板，确认当前路径、备份列表和基线变化提示可见。
+- 下一步最小行动：交给用户做托盘、全局快捷键、开机自启动、安装包迁移和真实 UI 走查；若验收通过，再准备 release tag/说明和上传产物。

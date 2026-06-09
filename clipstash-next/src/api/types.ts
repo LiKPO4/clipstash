@@ -9,6 +9,37 @@ export type LegacyStats = {
   total_count: number;
 };
 
+export type AppMigrationResult = {
+  inserted_messages: number;
+  skipped_messages: number;
+  copied_images: number;
+  skipped_images: number;
+  legacy_message_count: number;
+  legacy_image_count: number;
+  stats: LegacyStats;
+};
+
+export type ClipboardContent = {
+  kind: "text" | "image";
+  text: string | null;
+  image_data: number[] | null;
+};
+
+export type AppSettings = {
+  always_on_top: boolean;
+  close_to_tray: boolean;
+  archive_after_import: boolean;
+  paste_interval_ms: number;
+  show_hotkey: string;
+  capture_hotkey: string;
+  hover_delay: number;
+  scroll_lines: number;
+  font_scale: number;
+  sort: SortOrder;
+};
+
+export type AppSettingsPatch = Partial<AppSettings>;
+
 export type LegacyBackupFileInfo = {
   name: string;
   path: string;

@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::time::Duration;
 
-use crate::{keyboard_input, legacy_data, window_targets};
+use crate::{app_data, keyboard_input, legacy_data, window_targets};
 
 #[derive(Serialize)]
 pub struct LegacyImportPasteResult {
@@ -39,8 +39,7 @@ pub fn paste_legacy_import_queue_item(
     target_hwnd: isize,
 ) -> Result<LegacyImportPasteResult, String> {
     window_targets::validate_external_window_target(target_hwnd)?;
-    let copied =
-        legacy_data::copy_legacy_message_import_queue_item_to_clipboard(message_id, item_index)?;
+    let copied = app_data::copy_message_import_queue_item_to_clipboard(message_id, item_index)?;
     let focused = window_targets::focus_external_window_target(target_hwnd)?;
     keyboard_input::send_ctrl_v()?;
 
@@ -60,7 +59,7 @@ pub fn paste_legacy_import_queue(
     target_hwnd: isize,
     delay_ms: Option<u64>,
 ) -> Result<LegacyImportQueuePasteResult, String> {
-    let preview = legacy_data::preview_legacy_message_import_queue(message_id)?;
+    let preview = app_data::preview_message_import_queue(message_id)?;
     if preview.item_count == 0 {
         return Err(format!("粘贴导入队列失败，队列为空：#{message_id}"));
     }
@@ -132,7 +131,7 @@ pub fn paste_legacy_import_queue_with_optional_archive(
         });
     }
 
-    match legacy_data::set_legacy_message_archived(message_id, true) {
+    match app_data::set_message_archived(message_id, true) {
         Ok(archive_result) => Ok(LegacyImportQueuePasteArchiveResult {
             paste,
             archive_requested: true,

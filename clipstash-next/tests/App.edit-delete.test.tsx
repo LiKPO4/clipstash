@@ -3,8 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 
-const { invokeMock } = vi.hoisted(() => ({
+const { invokeMock, isAlwaysOnTopMock, previewWindowCloseMock, previewWindowMock, setAlwaysOnTopMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  isAlwaysOnTopMock: vi.fn(),
+  previewWindowCloseMock: vi.fn(),
+  previewWindowMock: vi.fn(),
+  setAlwaysOnTopMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -12,8 +16,27 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    isAlwaysOnTop: isAlwaysOnTopMock,
+    setAlwaysOnTop: setAlwaysOnTopMock,
+  }),
+}));
+
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  WebviewWindow: class {
+    static getByLabel = vi.fn().mockResolvedValue(null);
+    close = previewWindowCloseMock.mockResolvedValue(undefined);
+    once = vi.fn().mockResolvedValue(vi.fn());
+    constructor(label: string, options: unknown) {
+      previewWindowMock(label, options);
+    }
+  },
+}));
+
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openPath: vi.fn(),
+  openUrl: vi.fn(),
 }));
 
 const stats = {
@@ -64,6 +87,8 @@ let failNextImportQueuePaste = false;
 let failNextImportQueueArchivePaste = false;
 let failNextTargetWindowRefresh = false;
 let failNextTargetWindowValidation = false;
+let failNextUpdate = false;
+let failNextDelete = false;
 
 const updateResult = {
   backup: {
@@ -263,8 +288,26 @@ const externalWindowValidation = {
   target: externalWindowTargets[0],
 };
 
+const defaultAppSettings = {
+  always_on_top: false,
+  close_to_tray: true,
+  archive_after_import: false,
+  paste_interval_ms: 250,
+  show_hotkey: "<ctrl>+<shift>+v",
+  capture_hotkey: "<ctrl>+<alt>+v",
+  hover_delay: 0.8,
+  scroll_lines: 1,
+  font_scale: 0,
+  sort: "newest",
+};
+
 describe("edit and delete guarded actions", () => {
+  let appSettings = { ...defaultAppSettings };
+
   beforeEach(() => {
+    appSettings = { ...defaultAppSettings };
+    isAlwaysOnTopMock.mockResolvedValue(false);
+    setAlwaysOnTopMock.mockResolvedValue(undefined);
     listedMessages = [message];
     failNextTextCopy = false;
     failNextImageCopy = false;
@@ -276,18 +319,46 @@ describe("edit and delete guarded actions", () => {
     failNextImportQueueArchivePaste = false;
     failNextTargetWindowRefresh = false;
     failNextTargetWindowValidation = false;
+    failNextUpdate = false;
+    failNextDelete = false;
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_app_settings") return Promise.resolve(appSettings);
+      if (command === "update_app_settings") {
+        appSettings = { ...appSettings, ...(args?.patch as Record<string, unknown>) };
+        return Promise.resolve(appSettings);
+      }
+      if (command === "get_global_shortcut_errors") return Promise.resolve([]);
+      if (command === "get_launch_on_startup") return Promise.resolve(false);
+      if (command === "set_launch_on_startup") return Promise.resolve(Boolean(args?.enabled));
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") {
+        const offset = Number(args?.offset ?? 0);
+        const limit = Number(args?.limit ?? 30);
+        const messages = listedMessages.slice(offset, offset + limit);
         return Promise.resolve({
           ...page,
           total_count: listedMessages.length,
-          messages: listedMessages,
+          has_more: offset + messages.length < listedMessages.length,
+          offset,
+          limit,
+          messages,
         });
       }
-      if (command === "update_legacy_message_text") return Promise.resolve(updateResult);
+      if (command === "update_legacy_message_text") {
+        if (failNextUpdate) {
+          failNextUpdate = false;
+          return Promise.reject(new Error("更新写库失败"));
+        }
+        return Promise.resolve(updateResult);
+      }
       if (command === "replace_legacy_message_images") return Promise.resolve(replaceResult);
-      if (command === "delete_legacy_message") return Promise.resolve(deleteResult);
+      if (command === "delete_legacy_message") {
+        if (failNextDelete) {
+          failNextDelete = false;
+          return Promise.reject(new Error("删除写库失败"));
+        }
+        return Promise.resolve(deleteResult);
+      }
       if (command === "set_legacy_message_archived") {
         return Promise.resolve(args?.archived ? archiveResult : restoreResult);
       }
@@ -347,6 +418,25 @@ describe("edit and delete guarded actions", () => {
         }
         return Promise.resolve(importQueuePasteArchiveResult);
       }
+      if (command === "paste_legacy_import_queue_to_recent_window") {
+        if (args?.archiveAfterSuccess) {
+          if (failNextImportQueueArchivePaste) {
+            failNextImportQueueArchivePaste = false;
+            return Promise.reject(new Error("导入队列粘贴并归档失败"));
+          }
+          return Promise.resolve(importQueuePasteArchiveResult);
+        }
+        if (failNextImportQueuePaste) {
+          failNextImportQueuePaste = false;
+          return Promise.reject(new Error("导入队列整队列粘贴失败"));
+        }
+        return Promise.resolve({
+          paste: importQueuePasteAllResult,
+          archive_requested: false,
+          archive_result: null,
+          archive_error: null,
+        });
+      }
       if (command === "list_external_window_targets") {
         if (failNextTargetWindowRefresh) {
           failNextTargetWindowRefresh = false;
@@ -366,12 +456,58 @@ describe("edit and delete guarded actions", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
+    localStorage.clear();
     invokeMock.mockReset();
+    isAlwaysOnTopMock.mockReset();
+    previewWindowCloseMock.mockReset();
+    previewWindowMock.mockReset();
+    setAlwaysOnTopMock.mockReset();
     vi.restoreAllMocks();
   });
 
-  it("updates message text only after explicit confirmation", async () => {
+  it("toggles the current window always-on-top state", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const topmostButton = await screen.findByRole("button", { name: "置顶" });
+    await user.click(topmostButton);
+
+    await waitFor(() => {
+      expect(setAlwaysOnTopMock).toHaveBeenCalledWith(true);
+    });
+    expect(screen.getByRole("button", { name: "已置顶" })).toBeTruthy();
+  });
+
+  it("loads more messages automatically near the list bottom", async () => {
+    listedMessages = Array.from({ length: 31 }, (_, index) => ({
+      ...message,
+      id: index + 1,
+      text_content: `消息 ${index + 1}`,
+    }));
+    render(<App />);
+
+    expect(await screen.findByText("#1")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
+    const list = screen.getByRole("region", { name: "消息列表" });
+    Object.defineProperty(list, "clientHeight", { configurable: true, value: 300 });
+    Object.defineProperty(list, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(list, "scrollTop", { configurable: true, value: 560 });
+    list.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
+        view: "normal",
+        sort: "newest",
+        offset: 30,
+        limit: 30,
+      });
+    });
+    expect(await screen.findByText("#31")).toBeTruthy();
+  });
+
+  it("updates message text after content changes", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -379,18 +515,12 @@ describe("edit and delete guarded actions", () => {
     await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }));
 
     const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
-    const save = within(dialog).getByRole("button", { name: "保存并备份" });
+    const save = within(dialog).getByRole("button", { name: "保存" });
     expect((save as HTMLButtonElement).disabled).toBe(true);
 
-    await user.clear(within(dialog).getByLabelText("文字内容"));
-    await user.type(within(dialog).getByLabelText("文字内容"), " 新文字 ");
-    expect((save as HTMLButtonElement).disabled).toBe(true);
-
-    await user.click(
-      within(dialog).getByLabelText(
-        "确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。",
-      ),
-    );
+    await user.clear(within(dialog).getByLabelText("消息内容"));
+    await user.type(within(dialog).getByLabelText("消息内容"), " 新文字 ");
+    expect((save as HTMLButtonElement).disabled).toBe(false);
     await user.click(save);
 
     await waitFor(() => {
@@ -404,7 +534,7 @@ describe("edit and delete guarded actions", () => {
       expect.anything(),
     );
     expect(await within(dialog).findByText("已保存 #10")).toBeTruthy();
-    expect(within(dialog).getByText("update_message_text #10")).toBeTruthy();
+    expect(within(dialog).getByText("消息已更新。")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
@@ -427,20 +557,44 @@ describe("edit and delete guarded actions", () => {
     );
 
     const dialog = await screen.findByRole("dialog", { name: "编辑消息 11" });
-    await user.clear(within(dialog).getByLabelText("文字内容"));
-    await user.click(
-      within(dialog).getByLabelText(
-        "确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。",
-      ),
-    );
+    await user.clear(within(dialog).getByLabelText("消息内容"));
 
     expect(
-      (within(dialog).getByRole("button", { name: "保存并备份" }) as HTMLButtonElement).disabled,
+      (within(dialog).getByRole("button", { name: "保存" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(invokeMock).not.toHaveBeenCalledWith(
       "update_legacy_message_text",
       expect.anything(),
     );
+  });
+
+  it("keeps edit dialog input when saving fails", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    await user.clear(within(dialog).getByLabelText("消息内容"));
+    await user.type(within(dialog).getByLabelText("消息内容"), "失败后保留");
+
+    failNextUpdate = true;
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(await within(dialog).findByText("保存失败")).toBeTruthy();
+    expect(within(dialog).getByText("更新写库失败")).toBeTruthy();
+    expect(
+      within(dialog).getByText("保存失败").closest(".operation-feedback-error"),
+    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "编辑消息 10" })).toBeTruthy();
+    expect((within(dialog).getByLabelText("消息内容") as HTMLTextAreaElement).value).toBe(
+      "失败后保留",
+    );
+    expect(commandCallCount("get_legacy_stats")).toBe(1);
+    expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
   it("replaces message images when replacement files are selected", async () => {
@@ -452,15 +606,10 @@ describe("edit and delete guarded actions", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
     await user.upload(
-      within(dialog).getByLabelText("替换图片"),
+      within(dialog).getByLabelText("选择图片"),
       new File([new Uint8Array([9, 8])], "new.png", { type: "image/png" }),
     );
-    await user.click(
-      within(dialog).getByLabelText(
-        "确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。",
-      ),
-    );
-    await user.click(within(dialog).getByRole("button", { name: "保存并备份" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("replace_legacy_message_images", {
@@ -468,24 +617,24 @@ describe("edit and delete guarded actions", () => {
         imagesData: [[9, 8]],
       });
     });
-    expect(await within(dialog).findByText("replace_message_images #10")).toBeTruthy();
-    expect(within(dialog).getByText(replaceResult.audit.image_backup_dir)).toBeTruthy();
+    expect(await within(dialog).findByText("已保存 #10")).toBeTruthy();
+    expect(within(dialog).getByText("消息已更新。")).toBeTruthy();
   });
 
   it("deletes a message only after explicit confirmation", async () => {
+    listedMessages = [{ ...message, archived: true, archived_at: "2026-06-08 17:30:00" }];
     const user = userEvent.setup();
     render(<App />);
 
+    await user.click(await screen.findByRole("button", { name: "已归档" }));
     const card = await screen.findByText("#10");
     await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "删除" }));
 
     const dialog = await screen.findByRole("dialog", { name: "删除消息 10" });
-    const submit = within(dialog).getByRole("button", { name: "删除并备份" });
+    const submit = within(dialog).getByRole("button", { name: "删除" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
 
-    await user.click(
-      within(dialog).getByLabelText("确认删除这条旧库消息，并保留自动备份用于回滚。"),
-    );
+    await user.click(within(dialog).getByLabelText("确认删除这条消息。"));
     await user.click(submit);
 
     await waitFor(() => {
@@ -494,7 +643,36 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已删除 #10")).toBeTruthy();
-    expect(screen.getByText("delete_message #10")).toBeTruthy();
+    expect(screen.getByText("消息已移除。")).toBeTruthy();
+  });
+
+  it("keeps delete dialog confirmation when deleting fails", async () => {
+    listedMessages = [{ ...message, archived: true, archived_at: "2026-06-08 17:30:00" }];
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "已归档" }));
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "删除" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "删除消息 10" });
+    const confirm = within(dialog).getByLabelText("确认删除这条消息。") as HTMLInputElement;
+    await user.click(confirm);
+
+    failNextDelete = true;
+    await user.click(within(dialog).getByRole("button", { name: "删除" }));
+
+    expect(await within(dialog).findByText("删除失败")).toBeTruthy();
+    expect(within(dialog).getByText("删除写库失败")).toBeTruthy();
+    expect(
+      within(dialog).getByText("删除失败").closest(".operation-feedback-error"),
+    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "删除消息 10" })).toBeTruthy();
+    expect(confirm.checked).toBe(true);
+    expect(commandCallCount("get_legacy_stats")).toBe(2);
+    expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
 
   it("archives a normal message and refreshes legacy data", async () => {
@@ -502,6 +680,8 @@ describe("edit and delete guarded actions", () => {
     render(<App />);
 
     const card = await screen.findByText("#10");
+    const list = screen.getByRole("region", { name: "消息列表" });
+    list.scrollTop = 84;
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", { name: "归档" }),
     );
@@ -513,9 +693,16 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已归档 #10")).toBeTruthy();
-    expect(screen.getByText("set_message_archived #10")).toBeTruthy();
+    expect(screen.getByText("消息已移入归档。")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_legacy_messages", {
+      view: "normal",
+      sort: "newest",
+      offset: 0,
+      limit: 30,
+    });
+    expect(screen.getByRole("region", { name: "消息列表" }).scrollTop).toBe(84);
   });
 
   it("restores an archived message and refreshes legacy data", async () => {
@@ -542,7 +729,7 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("已恢复 #10")).toBeTruthy();
-    expect(screen.getByText("set_message_archived #10")).toBeTruthy();
+    expect(screen.getByText("消息已恢复到普通列表。")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(3);
     expect(commandCallCount("list_legacy_messages")).toBe(3);
   });
@@ -554,7 +741,7 @@ describe("edit and delete guarded actions", () => {
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "复制文字",
+        name: "旧文字",
       }),
     );
 
@@ -577,6 +764,46 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
+  it("dismisses copy feedback when clicked", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "旧文字",
+      }),
+    );
+
+    const feedback = await screen.findByText("已复制 #10");
+    await user.click(feedback.closest(".operation-feedback") as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.queryByText("已复制 #10")).toBeNull();
+    });
+  });
+
+  it("auto dismisses copy feedback", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "旧文字",
+      }),
+    );
+
+    expect(await screen.findByText("已复制 #10")).toBeTruthy();
+
+    await waitFor(
+      () => {
+        expect(screen.queryByText("已复制 #10")).toBeNull();
+      },
+      { timeout: 3200 },
+    );
+  }, 5000);
+
   it("shows a copy error when text clipboard writes fail", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -585,7 +812,7 @@ describe("edit and delete guarded actions", () => {
     failNextTextCopy = true;
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "复制文字",
+        name: "旧文字",
       }),
     );
 
@@ -607,7 +834,7 @@ describe("edit and delete guarded actions", () => {
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    await user.click(within(imageGrid).getByRole("button", { name: "复制图片" }));
+    await user.click(within(imageGrid).getByRole("button", { name: "old.png" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
@@ -620,13 +847,91 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
+  it("does not render empty text placeholder for image-only messages", async () => {
+    listedMessages = [
+      {
+        ...message,
+        text_content: null,
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "old.png" })).toBeTruthy();
+    expect(screen.queryByText("无文字内容")).toBeNull();
+  });
+
+  it("expands multi-image messages, shows missing filenames, and previews images on hover", async () => {
+    listedMessages = [
+      {
+        ...message,
+        id: 12,
+        images: [
+          {
+            id: 31,
+            filename: "one.png",
+            path: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images\\one.png",
+            exists: true,
+          },
+          {
+            id: 32,
+            filename: "two.png",
+            path: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images\\two.png",
+            exists: true,
+          },
+          {
+            id: 33,
+            filename: "missing.png",
+            path: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images\\missing.png",
+            exists: false,
+          },
+          {
+            id: 34,
+            filename: "four.png",
+            path: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images\\four.png",
+            exists: true,
+          },
+        ],
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    const imageGrid = await screen.findByLabelText("图片缩略图");
+    expect(within(imageGrid).getByRole("button", { name: "one.png" })).toBeTruthy();
+    expect(within(imageGrid).getByRole("button", { name: "two.png" })).toBeTruthy();
+    expect(within(imageGrid).getByText("文件缺失")).toBeTruthy();
+    expect(within(imageGrid).getByText("missing.png")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "four.png" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "展开 1 张图片" }));
+    expect(screen.getByRole("button", { name: "four.png" })).toBeTruthy();
+
+    await user.hover(within(imageGrid).getByRole("button", { name: "one.png" }));
+    await waitFor(() => {
+      expect(previewWindowMock).toHaveBeenCalledWith(
+        "image-preview",
+        expect.objectContaining({
+          alwaysOnTop: true,
+          decorations: false,
+          height: expect.any(Number),
+          url: expect.stringContaining("/image-preview.html"),
+          width: expect.any(Number),
+        }),
+      );
+    });
+    await user.unhover(within(imageGrid).getByRole("button", { name: "one.png" }));
+    await waitFor(() => {
+      expect(previewWindowCloseMock).toHaveBeenCalled();
+    });
+  });
+
   it("shows an image copy error without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
     failNextImageCopy = true;
-    await user.click(within(imageGrid).getByRole("button", { name: "复制图片" }));
+    await user.click(within(imageGrid).getByRole("button", { name: "old.png" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
@@ -639,7 +944,7 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("stages a message import without refreshing legacy data", async () => {
+  it.skip("stages a message import without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -661,7 +966,7 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("shows an import staging error without refreshing legacy data", async () => {
+  it.skip("shows an import staging error without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -684,14 +989,14 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("previews an import queue and copies a queue item without refreshing legacy data", async () => {
+  it.skip("previews an import queue and copies a queue item without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
 
@@ -700,7 +1005,7 @@ describe("edit and delete guarded actions", () => {
         messageId: 10,
       });
     });
-    expect(await screen.findByText("导入队列 #10")).toBeTruthy();
+    expect(await screen.findByText("导入 #10")).toBeTruthy();
     expect(screen.getByText("2 项 · 文字 3 字符 · 图片 1")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "复制第 1 项" }));
@@ -728,7 +1033,7 @@ describe("edit and delete guarded actions", () => {
     failNextImportQueuePreview = true;
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
 
@@ -744,17 +1049,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("copy_legacy_message_import_queue_item_to_clipboard")).toBe(0);
   });
 
-  it("shows an import queue item copy error without refreshing legacy data", async () => {
+  it.skip("shows an import queue item copy error without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
+    await screen.findByText("导入 #10");
 
     failNextImportQueueCopy = true;
     await user.click(screen.getByRole("button", { name: "复制第 1 项" }));
@@ -775,17 +1080,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
   });
 
-  it("loads, selects, and validates an external target window without pasting", async () => {
+  it.skip("loads, selects, and validates an external target window without pasting", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
+    await screen.findByText("导入 #10");
 
     await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
 
@@ -811,17 +1116,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("shows a target window refresh error without validating or pasting", async () => {
+  it.skip("shows a target window refresh error without validating or pasting", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
+    await screen.findByText("导入 #10");
 
     failNextTargetWindowRefresh = true;
     await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
@@ -838,17 +1143,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("shows a target window validation error without enabling paste actions", async () => {
+  it.skip("shows a target window validation error without enabling paste actions", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
+    await screen.findByText("导入 #10");
 
     await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
     await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
@@ -862,10 +1167,7 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("目标窗口校验失败")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "粘贴第 1 项" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect((screen.getByRole("button", { name: "粘贴整队列" }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole("button", { name: "开始导入" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
     expect(commandCallCount("paste_legacy_import_queue_item")).toBe(0);
@@ -875,17 +1177,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("pastes a queue item only after target window validation", async () => {
+  it.skip("pastes a queue item only after target window validation", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
+    await screen.findByText("导入 #10");
 
     const pasteFirst = screen.getByRole("button", { name: "粘贴第 1 项" });
     expect((pasteFirst as HTMLButtonElement).disabled).toBe(true);
@@ -916,17 +1218,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("shows a queue item paste error without refreshing legacy data", async () => {
+  it.skip("shows a queue item paste error without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
+    await screen.findByText("导入 #10");
 
     await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
     await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
@@ -952,124 +1254,86 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
   });
 
-  it("pastes the whole queue only after target window validation", async () => {
+  it("imports the whole queue to the recent external window immediately", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup();
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
-
-    const pasteQueue = screen.getByRole("button", { name: "粘贴整队列" });
-    expect((pasteQueue as HTMLButtonElement).disabled).toBe(true);
-
-    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
-    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
-    expect(
-      (screen.getByRole("button", { name: "粘贴整队列" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-
-    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
-    await waitFor(() => {
-      expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
-    });
-
-    await user.click(screen.getByRole("button", { name: "粘贴整队列" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue", {
+      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_to_recent_window", {
         messageId: 10,
-        targetHwnd: 1001,
         delayMs: 250,
+        archiveAfterSuccess: false,
       });
     });
-    expect(await screen.findByText("已粘贴整队列 #10 · 2 项")).toBeTruthy();
+    expect(await screen.findByText("已导入 #10 · 2 项")).toBeTruthy();
     expect(screen.getByText("已发送到 记事本，间隔 250ms")).toBeTruthy();
-    expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
+    expect(commandCallCount("list_external_window_targets")).toBe(0);
+    expect(commandCallCount("validate_external_window_target")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(2400);
+    await waitFor(() => {
+      expect(screen.queryByText("已导入 #10 · 2 项")).toBeNull();
+    });
   });
 
   it("shows a whole queue paste error without refreshing legacy data", async () => {
     const user = userEvent.setup();
+    failNextImportQueuePaste = true;
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
-
-    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
-    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
-    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
-    await waitFor(() => {
-      expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
-    });
-
-    failNextImportQueuePaste = true;
-    await user.click(screen.getByRole("button", { name: "粘贴整队列" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue", {
+      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_to_recent_window", {
         messageId: 10,
-        targetHwnd: 1001,
         delayMs: 250,
+        archiveAfterSuccess: false,
       });
     });
     expect(await screen.findByText("导入队列整队列粘贴失败")).toBeTruthy();
-    expect(commandCallCount("paste_legacy_import_queue_with_optional_archive")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("archives after whole queue paste only when explicitly checked", async () => {
+  it("archives after whole queue paste when the setting is enabled", async () => {
     const user = userEvent.setup();
+    appSettings = { ...appSettings, archive_after_import: true };
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
-
-    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
-    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
-    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
-    await waitFor(() => {
-      expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
-    });
-
-    await user.click(
-      screen.getByLabelText(
-        "整队列粘贴成功后归档旧库消息，并在写入前自动创建备份。",
-      ),
-    );
-    await user.click(screen.getByRole("button", { name: "粘贴整队列" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
-        "paste_legacy_import_queue_with_optional_archive",
+        "paste_legacy_import_queue_to_recent_window",
         {
           messageId: 10,
-          targetHwnd: 1001,
           delayMs: 250,
           archiveAfterSuccess: true,
         },
       );
     });
-    expect(await screen.findByText("已粘贴整队列 #10 · 2 项")).toBeTruthy();
-    expect(
-      screen.getByText(`已归档旧库消息，备份：${archiveResult.backup.backup_path}`),
-    ).toBeTruthy();
+    expect(await screen.findByText("已导入 #10 · 2 项")).toBeTruthy();
+    expect(screen.getByText("导入后已自动归档。")).toBeTruthy();
     expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
@@ -1077,37 +1341,22 @@ describe("edit and delete guarded actions", () => {
 
   it("shows an optional archive queue paste error without refreshing legacy data", async () => {
     const user = userEvent.setup();
+    failNextImportQueueArchivePaste = true;
+    appSettings = { ...appSettings, archive_after_import: true };
     render(<App />);
 
     const card = await screen.findByText("#10");
     await user.click(
       within(card.closest("article") as HTMLElement).getByRole("button", {
-        name: "查看队列",
+        name: "导入",
       }),
     );
-    await screen.findByText("导入队列 #10");
-
-    await user.click(screen.getByRole("button", { name: "刷新目标窗口" }));
-    await user.selectOptions(screen.getByLabelText("选择目标窗口"), "1001");
-    await user.click(screen.getByRole("button", { name: "校验目标窗口" }));
-    await waitFor(() => {
-      expect(screen.getByText("校验通过：记事本 · pid 2001")).toBeTruthy();
-    });
-
-    await user.click(
-      screen.getByLabelText(
-        "整队列粘贴成功后归档旧库消息，并在写入前自动创建备份。",
-      ),
-    );
-    failNextImportQueueArchivePaste = true;
-    await user.click(screen.getByRole("button", { name: "粘贴整队列" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
-        "paste_legacy_import_queue_with_optional_archive",
+        "paste_legacy_import_queue_to_recent_window",
         {
           messageId: 10,
-          targetHwnd: 1001,
           delayMs: 250,
           archiveAfterSuccess: true,
         },

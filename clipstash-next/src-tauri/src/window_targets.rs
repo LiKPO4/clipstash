@@ -1,4 +1,7 @@
 use serde::Serialize;
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ExternalWindowTarget {
@@ -18,6 +21,38 @@ pub struct ExternalWindowFocus {
     pub focused: bool,
     pub target: ExternalWindowTarget,
 }
+
+static LAST_EXTERNAL_WINDOW: OnceLock<Mutex<Option<ExternalWindowTarget>>> = OnceLock::new();
+static TRACKER_STARTED: OnceLock<()> = OnceLock::new();
+
+fn last_external_window_store() -> &'static Mutex<Option<ExternalWindowTarget>> {
+    LAST_EXTERNAL_WINDOW.get_or_init(|| Mutex::new(None))
+}
+
+fn remember_external_window(target: ExternalWindowTarget) {
+    if let Ok(mut stored) = last_external_window_store().lock() {
+        *stored = Some(target);
+    }
+}
+
+pub fn last_external_window_target() -> Option<ExternalWindowTarget> {
+    last_external_window_store().lock().ok()?.clone()
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_foreground_tracker() {
+    TRACKER_STARTED.get_or_init(|| {
+        thread::spawn(|| loop {
+            if let Some(target) = windows_impl::current_foreground_external_target() {
+                remember_external_window(target);
+            }
+            thread::sleep(Duration::from_millis(500));
+        });
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn start_foreground_tracker() {}
 
 #[cfg(target_os = "windows")]
 pub fn list_external_window_targets() -> Result<Vec<ExternalWindowTarget>, String> {
@@ -53,6 +88,7 @@ pub fn focus_external_window_target(_hwnd: isize) -> Result<ExternalWindowFocus,
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use super::remember_external_window;
     use super::{ExternalWindowFocus, ExternalWindowTarget, ExternalWindowValidation};
     use std::thread;
     use std::time::Duration;
@@ -107,6 +143,7 @@ mod windows_impl {
         if target.title.trim().is_empty() {
             return Err(format!("目标窗口标题为空：hwnd={hwnd_value}"));
         }
+        remember_external_window(target.clone());
 
         Ok(ExternalWindowValidation {
             valid: true,
@@ -137,6 +174,21 @@ mod windows_impl {
             focused: true,
             target,
         })
+    }
+
+    pub fn current_foreground_external_target() -> Option<ExternalWindowTarget> {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            let current_process_id = GetCurrentProcessId();
+            if hwnd.is_null() || !is_candidate_window(hwnd, current_process_id) {
+                return None;
+            }
+            let target = target_from_hwnd(hwnd).ok()?;
+            if target.title.trim().is_empty() {
+                return None;
+            }
+            Some(target)
+        }
     }
 
     unsafe fn restore_and_raise_window(hwnd: HWND) {

@@ -8,11 +8,16 @@ use crate::{
     legacy_paths::legacy_data_dir,
     legacy_query::{list_legacy_messages_from_dir, query_count, read_legacy_stats_from_dir},
     legacy_test_support::{
-        assert_message_order_matches_db, collect_all_messages, query_image_rows, tiny_png_bytes,
+        assert_message_order_matches_db_from_dir, collect_all_messages, query_image_rows,
+        tiny_png_bytes,
     },
 };
 use rusqlite::{Connection, OpenFlags};
-use std::{env, fs, process};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process,
+};
 
 #[test]
 fn reads_counts_from_legacy_messages_table() {
@@ -244,6 +249,119 @@ fn lists_local_legacy_messages_when_available() {
 #[ignore = "requires local ClipStash app data"]
 fn verifies_local_legacy_readonly_consistency() {
     let data_dir = legacy_data_dir().expect("resolve local legacy data dir");
+    verify_legacy_data_dir_readonly_consistency(data_dir);
+}
+
+#[test]
+#[ignore = "writes regression fixture under clipstash-next/test-data"]
+fn generates_regression_fixture() {
+    let data_dir = regression_fixture_dir();
+    let _ = fs::remove_dir_all(&data_dir);
+    fs::create_dir_all(data_dir.join("images")).expect("create regression images dir");
+
+    let db_path = data_dir.join("clipstash.db");
+    let conn = Connection::open(&db_path).expect("create regression sqlite fixture");
+    conn.execute_batch(
+        "
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            archived INTEGER DEFAULT 0,
+            archived_at TIMESTAMP
+        );
+        CREATE TABLE message_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL,
+            image_filename TEXT NOT NULL
+        );
+        INSERT INTO messages (id, text_content, created_at, archived, archived_at) VALUES
+            (1, 'pure text regression message', '2024-01-01 08:00:00', 0, NULL),
+            (2, 'single image with text', '2024-01-02 08:00:00', 0, NULL),
+            (3, 'four images ordered by image id', '2024-01-03 08:00:00', 0, NULL),
+            (4, 'eighteen image stress message', '2024-01-04 08:00:00', 0, NULL),
+            (5, 'archived regression message', '2024-01-05 08:00:00', 1, '2024-01-06 09:30:00'),
+            (6, NULL, '2024-01-07 08:00:00', 0, NULL),
+            (7, 'long text regression message: Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vestibulum clipboard workflow keeps this message intentionally verbose for layout checks.', '2024-01-08 08:00:00', 0, NULL),
+            (8, 'missing image reference', '2024-01-09 08:00:00', 0, NULL);
+        ",
+    )
+    .expect("seed regression messages");
+
+    let mut image_id = 100;
+    insert_image_row(&conn, &data_dir, &mut image_id, 2, "single.png", true);
+    for index in 0..4 {
+        insert_image_row(
+            &conn,
+            &data_dir,
+            &mut image_id,
+            3,
+            &format!("multi-{}.png", index + 1),
+            true,
+        );
+    }
+    for index in 0..18 {
+        insert_image_row(
+            &conn,
+            &data_dir,
+            &mut image_id,
+            4,
+            &format!("stress-{:02}.png", index + 1),
+            true,
+        );
+    }
+    insert_image_row(&conn, &data_dir, &mut image_id, 5, "archived.png", true);
+    insert_image_row(&conn, &data_dir, &mut image_id, 6, "pure-image.png", true);
+    insert_image_row(
+        &conn,
+        &data_dir,
+        &mut image_id,
+        8,
+        "missing-reference.png",
+        false,
+    );
+    drop(conn);
+
+    verify_legacy_data_dir_readonly_consistency(data_dir.clone());
+    eprintln!("regression-fixture-ok data_dir={}", data_dir.display());
+}
+
+#[test]
+#[ignore = "reads regression fixture under clipstash-next/test-data"]
+fn verifies_regression_fixture_readonly_consistency() {
+    verify_legacy_data_dir_readonly_consistency(regression_fixture_dir());
+}
+
+fn regression_fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri has parent")
+        .join("test-data")
+        .join("regression")
+        .join("legacy")
+}
+
+fn insert_image_row(
+    conn: &Connection,
+    data_dir: &Path,
+    image_id: &mut i64,
+    message_id: i64,
+    filename: &str,
+    write_file: bool,
+) {
+    conn.execute(
+        "INSERT INTO message_images (id, message_id, image_filename) VALUES (?1, ?2, ?3)",
+        (&*image_id, &message_id, filename),
+    )
+    .expect("insert regression image row");
+    if write_file {
+        fs::write(data_dir.join("images").join(filename), tiny_png_bytes())
+            .expect("write regression image");
+    }
+    *image_id += 1;
+}
+
+fn verify_legacy_data_dir_readonly_consistency(data_dir: PathBuf) {
     let db_path = data_dir.join("clipstash.db");
     let images_dir = data_dir.join("images");
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -279,10 +397,30 @@ fn verifies_local_legacy_readonly_consistency() {
         );
     }
 
-    assert_message_order_matches_db(&conn, MessageView::Normal, SortOrder::Newest);
-    assert_message_order_matches_db(&conn, MessageView::Normal, SortOrder::Oldest);
-    assert_message_order_matches_db(&conn, MessageView::Archived, SortOrder::Newest);
-    assert_message_order_matches_db(&conn, MessageView::Archived, SortOrder::Oldest);
+    assert_message_order_matches_db_from_dir(
+        &conn,
+        data_dir.clone(),
+        MessageView::Normal,
+        SortOrder::Newest,
+    );
+    assert_message_order_matches_db_from_dir(
+        &conn,
+        data_dir.clone(),
+        MessageView::Normal,
+        SortOrder::Oldest,
+    );
+    assert_message_order_matches_db_from_dir(
+        &conn,
+        data_dir.clone(),
+        MessageView::Archived,
+        SortOrder::Newest,
+    );
+    assert_message_order_matches_db_from_dir(
+        &conn,
+        data_dir.clone(),
+        MessageView::Archived,
+        SortOrder::Oldest,
+    );
 
     let api_image_count: i64 = all_messages
         .iter()

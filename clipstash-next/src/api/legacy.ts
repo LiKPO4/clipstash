@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppMigrationResult,
+  AppSettings,
+  AppSettingsPatch,
+  ClipboardContent,
   ExternalWindowTarget,
   ExternalWindowValidation,
   LegacyCreateImageMessageResult,
@@ -17,7 +21,6 @@ import type {
   LegacyImportStageResult,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
-  LegacySafetyReport,
   LegacyStats,
   LegacyUpdateMessageResult,
   MessageView,
@@ -28,8 +31,32 @@ export function getLegacyStats() {
   return invoke<LegacyStats>("get_legacy_stats");
 }
 
-export function getLegacySafetyReport() {
-  return invoke<LegacySafetyReport>("get_legacy_safety_report");
+export function migrateLegacyData() {
+  return invoke<AppMigrationResult>("migrate_legacy_data");
+}
+
+export function getAppSettings() {
+  return invoke<AppSettings>("get_app_settings");
+}
+
+export function updateAppSettings(patch: AppSettingsPatch) {
+  return invoke<AppSettings>("update_app_settings", { patch });
+}
+
+export function getGlobalShortcutErrors() {
+  return invoke<string[]>("get_global_shortcut_errors");
+}
+
+export function getLaunchOnStartup() {
+  return invoke<boolean>("get_launch_on_startup");
+}
+
+export function setLaunchOnStartup(enabled: boolean) {
+  return invoke<boolean>("set_launch_on_startup", { enabled });
+}
+
+export function readCurrentClipboard() {
+  return invoke<ClipboardContent>("read_current_clipboard");
 }
 
 export function listExternalWindowTargets() {
@@ -184,6 +211,25 @@ export function pasteLegacyImportQueueWithOptionalArchive({
     {
       messageId,
       targetHwnd,
+      delayMs,
+      archiveAfterSuccess,
+    },
+  );
+}
+
+export function pasteLegacyImportQueueToRecentWindow({
+  messageId,
+  delayMs,
+  archiveAfterSuccess,
+}: {
+  messageId: number;
+  delayMs?: number;
+  archiveAfterSuccess: boolean;
+}) {
+  return invoke<LegacyImportQueuePasteArchiveResult>(
+    "paste_legacy_import_queue_to_recent_window",
+    {
+      messageId,
       delayMs,
       archiveAfterSuccess,
     },

@@ -1,15 +1,23 @@
 @echo off
 setlocal
-set "APP_DIR=%~dp0dist\ClipStash"
-set "APP_EXE=%APP_DIR%\ClipStash.exe"
+set "NEXT_DIR=%~dp0clipstash-next"
 
-if not exist "%APP_EXE%" (
-    echo ClipStash.exe not found:
-    echo "%APP_EXE%"
+if not exist "%NEXT_DIR%\package.json" (
+    echo ClipStash Next project not found:
+    echo "%NEXT_DIR%"
     echo.
-    echo Please build the app first.
     pause
     exit /b 1
 )
 
-start "" "%APP_EXE%"
+where npm >nul 2>nul
+if errorlevel 1 (
+    echo npm not found. Please install Node.js or build ClipStash Next first:
+    echo "%NEXT_DIR%"
+    echo.
+    pause
+    exit /b 1
+)
+
+cd /d "%NEXT_DIR%"
+npm run tauri dev

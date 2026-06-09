@@ -1,62 +1,94 @@
-import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
+import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+  type WheelEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
-  copyLegacyMessageImportQueueItemToClipboard,
   copyLegacyMessageTextToClipboard,
   copyLegacyImageToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
   createLegacyTextMessage,
   deleteLegacyMessage,
+  getAppSettings,
+  getGlobalShortcutErrors,
   getLegacyStats,
-  getLegacySafetyReport,
-  listExternalWindowTargets,
+  getLaunchOnStartup,
   listLegacyMessages,
-  pasteLegacyImportQueue,
-  pasteLegacyImportQueueWithOptionalArchive,
-  pasteLegacyImportQueueItem,
+  migrateLegacyData,
+  pasteLegacyImportQueueToRecentWindow,
+  readCurrentClipboard,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  setLaunchOnStartup,
   previewLegacyMessageImportQueue,
-  stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
-  validateExternalWindowTarget,
+  updateAppSettings,
 } from "./api/legacy";
 import type {
+  AppSettings,
+  AppSettingsPatch,
   LegacyMessageImage,
   LegacyMessage,
   LegacyMessagePage,
   LegacyStats,
   LegacyArchiveMessageResult,
+  AppMigrationResult,
   LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
-  ExternalWindowValidation,
-  ExternalWindowTarget,
-  LegacyImportQueueCopyResult,
-  LegacyImportPasteResult,
   LegacyImportQueuePasteArchiveResult,
   LegacyImportQueuePasteResult,
   LegacyImportQueuePreview,
-  LegacyImportStageResult,
   LegacyReplaceImagesResult,
-  LegacySafetyReport,
-  LegacyWriteAudit,
   MessageView,
   SortOrder,
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const LEGACY_BASELINE = {
-  normalCount: 11,
-  archivedCount: 103,
-  totalCount: 114,
-  joinedImageCount: 107,
-  orphanImageCount: 0,
+const CURRENT_VERSION = "2.0.0";
+const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
+const GITHUB_LATEST_RELEASE_API =
+  "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
+const GITHUB_RELEASES_URL = "https://github.com/LiKPO4/clipstash/releases/latest";
+type PreviewImage = {
+  filename: string;
+  images: PreviewImageItem[];
+  index: number;
+  path: string;
+  position?: PreviewPosition;
+  src: string;
+  total: number;
 };
 
-type PreviewImage = {
+type PreviewPosition = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
+
+type ScreenRect = {
+  bottom: number;
+  height: number;
+  left: number;
+  right: number;
+  top: number;
+  width: number;
+};
+
+type PreviewImageItem = {
   filename: string;
   path: string;
   src: string;
@@ -71,35 +103,38 @@ type CopyResult = {
 
 type ImageCopyResult = LegacyCopyImageResult;
 
-type ImportStageResult = LegacyImportStageResult;
-
-type ImportQueueCopyResult = LegacyImportQueueCopyResult;
-
-type ImportQueuePasteResult = LegacyImportPasteResult;
-
 type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
 
 type ImportQueuePasteArchiveResult = LegacyImportQueuePasteArchiveResult;
+
+type ReleaseCheckResult = {
+  currentVersion: string;
+  latestVersion: string;
+  releaseUrl: string;
+  body: string;
+  hasUpdate: boolean;
+};
+
+let hoverPreviewWindow: WebviewWindow | null = null;
+let hoverPreviewStorageKey: string | null = null;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
   const [page, setPage] = useState<LegacyMessagePage | null>(null);
   const [view, setView] = useState<MessageView>("normal");
-  const [sort, setSort] = useState<SortOrder>("newest");
+  const [sort, setSort] = useState<SortOrder>(() => getStoredSort());
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
-  const [textDraft, setTextDraft] = useState("");
-  const [writeConfirmed, setWriteConfirmed] = useState(false);
-  const [creatingTextMessage, setCreatingTextMessage] = useState(false);
-  const [createTextError, setCreateTextError] = useState<string | null>(null);
-  const [createTextResult, setCreateTextResult] =
-    useState<LegacyCreateTextMessageResult | null>(null);
+  const [hoverDelay, setHoverDelay] = useState(0.8);
+  const [scrollLines, setScrollLines] = useState(1);
+  const [fontScale, setFontScale] = useState(0);
+  const [pasteIntervalMs, setPasteIntervalMs] = useState(250);
+  const [expandedImageMessageIds, setExpandedImageMessageIds] = useState<number[]>([]);
   const [mediaTextDraft, setMediaTextDraft] = useState("");
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
+  const [mediaPreviewImages, setMediaPreviewImages] = useState<PreviewImageItem[]>([]);
   const [mediaInputKey, setMediaInputKey] = useState(0);
-  const [mediaWriteConfirmed, setMediaWriteConfirmed] = useState(false);
   const [creatingMediaMessage, setCreatingMediaMessage] = useState(false);
   const [createMediaError, setCreateMediaError] = useState<string | null>(null);
   const [createMediaResult, setCreateMediaResult] =
@@ -107,8 +142,8 @@ function App() {
   const [editingMessage, setEditingMessage] = useState<LegacyMessage | null>(null);
   const [editTextDraft, setEditTextDraft] = useState("");
   const [editFiles, setEditFiles] = useState<File[]>([]);
+  const [editPreviewImages, setEditPreviewImages] = useState<PreviewImageItem[]>([]);
   const [editInputKey, setEditInputKey] = useState(0);
-  const [editConfirmed, setEditConfirmed] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editResult, setEditResult] = useState<EditResult | null>(null);
@@ -124,28 +159,11 @@ function App() {
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
   const [copyImageError, setCopyImageError] = useState<string | null>(null);
   const [copyImageResult, setCopyImageResult] = useState<ImageCopyResult | null>(null);
-  const [importingMessageId, setImportingMessageId] = useState<number | null>(null);
-  const [importStageError, setImportStageError] = useState<string | null>(null);
-  const [importStageResult, setImportStageResult] = useState<ImportStageResult | null>(null);
   const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
     useState<number | null>(null);
   const [importQueueError, setImportQueueError] = useState<string | null>(null);
   const [importQueuePreview, setImportQueuePreview] =
     useState<LegacyImportQueuePreview | null>(null);
-  const [copyingImportQueueItem, setCopyingImportQueueItem] = useState<{
-    messageId: number;
-    itemIndex: number;
-  } | null>(null);
-  const [importQueueCopyError, setImportQueueCopyError] = useState<string | null>(null);
-  const [importQueueCopyResult, setImportQueueCopyResult] =
-    useState<ImportQueueCopyResult | null>(null);
-  const [pastingImportQueueItem, setPastingImportQueueItem] = useState<{
-    messageId: number;
-    itemIndex: number;
-  } | null>(null);
-  const [importQueuePasteError, setImportQueuePasteError] = useState<string | null>(null);
-  const [importQueuePasteResult, setImportQueuePasteResult] =
-    useState<ImportQueuePasteResult | null>(null);
   const [pastingImportQueue, setPastingImportQueue] = useState(false);
   const [importQueuePasteAllError, setImportQueuePasteAllError] = useState<string | null>(null);
   const [importQueuePasteAllResult, setImportQueuePasteAllResult] =
@@ -153,27 +171,37 @@ function App() {
   const [archiveAfterImport, setArchiveAfterImport] = useState(false);
   const [importQueuePasteArchiveResult, setImportQueuePasteArchiveResult] =
     useState<ImportQueuePasteArchiveResult | null>(null);
-  const [targetWindows, setTargetWindows] = useState<ExternalWindowTarget[]>([]);
-  const [selectedTargetWindow, setSelectedTargetWindow] =
-    useState<ExternalWindowTarget | null>(null);
-  const [targetWindowError, setTargetWindowError] = useState<string | null>(null);
-  const [loadingTargetWindows, setLoadingTargetWindows] = useState(false);
-  const [validatingTargetWindow, setValidatingTargetWindow] = useState(false);
-  const [targetWindowValidation, setTargetWindowValidation] =
-    useState<ExternalWindowValidation | null>(null);
   const [showComposer, setShowComposer] = useState(false);
-  const [safetyReport, setSafetyReport] = useState<LegacySafetyReport | null>(null);
-  const [loadingSafetyReport, setLoadingSafetyReport] = useState(false);
-  const [safetyReportError, setSafetyReportError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [closeToTray, setCloseToTray] = useState(true);
+  const [topmostError, setTopmostError] = useState<string | null>(null);
   const [openPathError, setOpenPathError] = useState<string | null>(null);
+  const [startup, setStartup] = useState(false);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [releaseCheckResult, setReleaseCheckResult] =
+    useState<ReleaseCheckResult | null>(null);
+  const [releaseCheckError, setReleaseCheckError] = useState<string | null>(null);
+  const [globalShortcutErrors, setGlobalShortcutErrors] = useState<string[]>([]);
+  const [migratingLegacyData, setMigratingLegacyData] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<AppMigrationResult | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const messageListRef = useRef<HTMLElement | null>(null);
+  const pendingMessageListScrollTopRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    document.title = APP_TITLE;
+  }, []);
 
   useEffect(() => {
     let alive = true;
 
-    setLoading(true);
     setError(null);
 
-    loadLegacyData(view, sort)
+    loadAppData(view, sort)
       .then(([nextStats, nextPage]) => {
         if (!alive) return;
         setStats(nextStats);
@@ -185,14 +213,20 @@ function App() {
         setError(err instanceof Error ? err.message : String(err));
         setPage(null);
       })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-
     return () => {
       alive = false;
     };
   }, [view, sort]);
+
+  useLayoutEffect(() => {
+    const pendingScrollTop = pendingMessageListScrollTopRef.current;
+    if (pendingScrollTop === null || !page) return;
+
+    pendingMessageListScrollTopRef.current = null;
+    if (messageListRef.current) {
+      messageListRef.current.scrollTop = pendingScrollTop;
+    }
+  }, [page]);
 
   useEffect(() => {
     if (!previewImage) return;
@@ -200,17 +234,309 @@ function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setPreviewImage(null);
+      } else if (event.key === "ArrowLeft") {
+        setPreviewImage((current) => shiftPreviewImage(current, -1));
+      } else if (event.key === "ArrowRight") {
+        setPreviewImage((current) => shiftPreviewImage(current, 1));
       }
     };
 
-    document.body.classList.add("preview-open");
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.body.classList.remove("preview-open");
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [previewImage]);
+
+  useEffect(() => {
+    let alive = true;
+
+    Promise.all(
+      mediaFiles.map(async (file, index) => ({
+        filename: file.name,
+        path: `composer:${index}:${file.name}:${file.size}`,
+        src: await fileToDataUrl(file),
+      })),
+    ).then((previewImages) => {
+      if (alive) setMediaPreviewImages(previewImages);
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [mediaFiles]);
+
+  useEffect(() => {
+    let alive = true;
+
+    Promise.all(
+      editFiles.map(async (file, index) => ({
+        filename: file.name,
+        path: `edit:${index}:${file.name}:${file.size}`,
+        src: await fileToDataUrl(file),
+      })),
+    ).then((previewImages) => {
+      if (alive) setEditPreviewImages(previewImages);
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [editFiles]);
+
+  useEffect(() => {
+    if (!copyError && !copyResult && !copyImageError && !copyImageResult) return;
+
+    const timer = window.setTimeout(() => {
+      clearCopyFeedback();
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [copyError, copyResult, copyImageError, copyImageResult]);
+
+  useEffect(() => {
+    if (
+      !importQueueError &&
+      !importQueuePreview &&
+      !importQueuePasteAllError &&
+      !importQueuePasteAllResult
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      clearImportFeedback();
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [importQueueError, importQueuePreview, importQueuePasteAllError, importQueuePasteAllResult]);
+
+  useEffect(() => {
+    if (!createMediaResult && !deleteResult && !archiveError && !archiveResult) return;
+
+    const timer = window.setTimeout(() => {
+      clearWriteFeedback();
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [archiveError, archiveResult, createMediaResult, deleteResult]);
+
+  useEffect(() => {
+    let alive = true;
+
+    getAppSettings()
+      .then(async (settings) => {
+        const migratedPatch = readLegacyLocalSettingsPatch();
+        const actualSettings =
+          Object.keys(migratedPatch).length > 0
+            ? await updateAppSettings(migratedPatch)
+            : settings;
+        if (!alive) return;
+        applyAppSettings(actualSettings);
+        clearLegacyLocalSettings();
+        setSettingsError(null);
+      })
+      .catch((err: unknown) => {
+        if (alive) setSettingsError(err instanceof Error ? err.message : String(err));
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    getCurrentWindow()
+      .isAlwaysOnTop()
+      .then((isTopmost) => {
+        if (alive) setAlwaysOnTop(isTopmost);
+      })
+      .catch((err: unknown) => {
+        if (alive) setTopmostError(err instanceof Error ? err.message : String(err));
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    getLaunchOnStartup()
+      .then((enabled) => {
+        if (alive) {
+          setStartup(enabled);
+          setStartupError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (alive) setStartupError(err instanceof Error ? err.message : String(err));
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+
+    let alive = true;
+    getGlobalShortcutErrors()
+      .then((errors) => {
+        if (alive) setGlobalShortcutErrors(errors);
+      })
+      .catch((err: unknown) => {
+        if (alive) {
+          setGlobalShortcutErrors([err instanceof Error ? err.message : String(err)]);
+        }
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [showSettings]);
+
+  useEffect(() => {
+    const handleKeyDown = async (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        showComposer ||
+        showSettings ||
+        editingMessage ||
+        deletingMessage ||
+        previewImage
+      ) {
+        return;
+      }
+      if (!isMainPasteShortcut(event) || isEditableElement(event.target)) return;
+
+      event.preventDefault();
+      setCreateMediaError(null);
+      try {
+        const content = await readCurrentClipboard();
+        if (content.kind === "text" && content.text) {
+          setMediaTextDraft(content.text);
+          setMediaFiles([]);
+          setMediaPreviewImages([]);
+          setMediaInputKey((key) => key + 1);
+          setShowComposer(true);
+        } else if (content.kind === "image" && content.image_data) {
+          const file = new File(
+            [new Uint8Array(content.image_data)],
+            `clipboard-${Date.now()}.png`,
+            { type: "image/png" },
+          );
+          setMediaTextDraft("");
+          setMediaFiles([file]);
+          setMediaInputKey((key) => key + 1);
+          setShowComposer(true);
+        }
+      } catch (err: unknown) {
+        setCreateMediaError(err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [deletingMessage, editingMessage, previewImage, showComposer, showSettings]);
+
+  function clearCopyFeedback() {
+    setCopyError(null);
+    setCopyResult(null);
+    setCopyImageError(null);
+    setCopyImageResult(null);
+  }
+
+  function clearImportFeedback() {
+    setImportQueueError(null);
+    setImportQueuePreview(null);
+    setImportQueuePasteAllError(null);
+    setImportQueuePasteAllResult(null);
+    setImportQueuePasteArchiveResult(null);
+  }
+
+  function clearWriteFeedback() {
+    setCreateMediaResult(null);
+    setDeleteResult(null);
+    setArchiveError(null);
+    setArchiveResult(null);
+  }
+
+  function applyAppSettings(settings: AppSettings) {
+    setAlwaysOnTop(settings.always_on_top);
+    setCloseToTray(settings.close_to_tray);
+    setArchiveAfterImport(settings.archive_after_import);
+    setPasteIntervalMs(settings.paste_interval_ms);
+    setHoverDelay(settings.hover_delay);
+    setScrollLines(settings.scroll_lines);
+    setFontScale(settings.font_scale);
+    setSort(settings.sort);
+    getCurrentWindow()
+      .setAlwaysOnTop(settings.always_on_top)
+      .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
+  }
+
+  async function persistAppSettings(patch: AppSettingsPatch, notice = "设置已自动保存到本机") {
+    setSettingsError(null);
+    try {
+      const settings = await updateAppSettings(patch);
+      applyAppSettings(settings);
+      setSettingsNotice(notice);
+      window.setTimeout(() => setSettingsNotice(null), 1800);
+      return settings;
+    } catch (err: unknown) {
+      setSettingsError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
+  async function updateLaunchOnStartup(checked: boolean) {
+    const previous = startup;
+    setStartup(checked);
+    setStartupError(null);
+    setSettingsNotice(null);
+
+    try {
+      const actual = await setLaunchOnStartup(checked);
+      setStartup(actual);
+      setSettingsNotice(actual ? "开机自启动已启用" : "开机自启动已关闭");
+      window.setTimeout(() => setSettingsNotice(null), 1800);
+    } catch (err: unknown) {
+      setStartup(previous);
+      setStartupError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function toggleImageExpansion(messageId: number) {
+    setExpandedImageMessageIds((ids) =>
+      ids.includes(messageId)
+        ? ids.filter((id) => id !== messageId)
+        : [...ids, messageId],
+    );
+  }
+
+  async function toggleAlwaysOnTop() {
+    const nextAlwaysOnTop = !alwaysOnTop;
+    setTopmostError(null);
+
+    try {
+      const settings = await persistAppSettings(
+        { always_on_top: nextAlwaysOnTop },
+        nextAlwaysOnTop ? "窗口置顶已启用" : "窗口置顶已关闭",
+      );
+      await getCurrentWindow().setAlwaysOnTop(settings.always_on_top);
+    } catch (err: unknown) {
+      setTopmostError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function updateSort(nextSort: SortOrder) {
+    setSort(nextSort);
+    persistAppSettings({ sort: nextSort }, "消息排序已应用").catch(() => setSort(sort));
+  }
 
   async function loadMore() {
     if (!page || loadingMore) return;
@@ -237,25 +563,13 @@ function App() {
     }
   }
 
-  async function refreshLegacyData() {
-    const [nextStats, nextPage] = await loadLegacyData(view, sort);
+  async function refreshAppData({ preserveListScroll = true } = {}) {
+    if (preserveListScroll) {
+      pendingMessageListScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
+    }
+    const [nextStats, nextPage] = await loadAppData(view, sort);
     setStats(nextStats);
     setPage(nextPage);
-  }
-
-  async function loadSafetyReport() {
-    setLoadingSafetyReport(true);
-    setSafetyReportError(null);
-
-    try {
-      const report = await getLegacySafetyReport();
-      setSafetyReport(report);
-      setStats(report.stats);
-    } catch (err) {
-      setSafetyReportError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoadingSafetyReport(false);
-    }
   }
 
   async function openLocalPath(path: string) {
@@ -267,32 +581,95 @@ function App() {
     }
   }
 
-  async function createTextMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function openExternalUrl(url: string) {
+    setOpenPathError(null);
+    try {
+      await openUrl(url);
+    } catch (err) {
+      setOpenPathError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
-    const text = textDraft.trim();
-    if (!text || !writeConfirmed || creatingTextMessage) return;
-
-    setCreatingTextMessage(true);
-    setCreateTextError(null);
-    setCreateTextResult(null);
+  async function checkForUpdates() {
+    setCheckingUpdate(true);
+    setReleaseCheckError(null);
+    setReleaseCheckResult(null);
 
     try {
-      const result = await createLegacyTextMessage(text);
-      await refreshLegacyData();
-      setTextDraft("");
-      setWriteConfirmed(false);
-      setCreateTextResult(result);
-    } catch (err) {
-      setCreateTextError(err instanceof Error ? err.message : String(err));
+      const response = await fetch(GITHUB_LATEST_RELEASE_API, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!response.ok) {
+        throw new Error(`GitHub Release 检查失败：HTTP ${response.status}`);
+      }
+      const payload = (await response.json()) as {
+        body?: string;
+        html_url?: string;
+        tag_name?: string;
+      };
+      const latestVersion = normalizeReleaseVersion(payload.tag_name ?? "");
+      if (!latestVersion) throw new Error("GitHub Release 响应缺少版本号");
+
+      setReleaseCheckResult({
+        currentVersion: CURRENT_VERSION,
+        latestVersion,
+        releaseUrl: payload.html_url || GITHUB_RELEASES_URL,
+        body: payload.body ?? "",
+        hasUpdate: compareVersions(latestVersion, CURRENT_VERSION) > 0,
+      });
+    } catch (err: unknown) {
+      setReleaseCheckError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCreatingTextMessage(false);
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function runLegacyMigration() {
+    if (migratingLegacyData) return;
+
+    setMigratingLegacyData(true);
+    setMigrationError(null);
+    setMigrationResult(null);
+
+    try {
+      const result = await migrateLegacyData();
+      setMigrationResult(result);
+      setStats(result.stats);
+      const nextPage = await listLegacyMessages({
+        view,
+        sort,
+        offset: 0,
+        limit: PAGE_LIMIT,
+      });
+      setPage(nextPage);
+      setSettingsNotice(
+        result.inserted_messages > 0
+          ? `已迁移 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
+          : `没有新增数据，已跳过 ${result.skipped_messages} 条重复`,
+      );
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      setMigrationError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMigratingLegacyData(false);
     }
   }
 
   function selectMediaFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
-    setMediaFiles(files);
+    setMediaFiles((currentFiles) => [...currentFiles, ...files]);
+    setCreateMediaError(null);
+    setCreateMediaResult(null);
+  }
+
+  function pasteMediaContent(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const pastedFiles = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (pastedFiles.length === 0) return;
+
+    event.preventDefault();
+    setMediaFiles((currentFiles) => [...currentFiles, ...pastedFiles]);
     setCreateMediaError(null);
     setCreateMediaResult(null);
   }
@@ -300,7 +677,8 @@ function App() {
   async function createMediaMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (mediaFiles.length === 0 || !mediaWriteConfirmed || creatingMediaMessage) return;
+    const text = mediaTextDraft.trim();
+    if ((!text && mediaFiles.length === 0) || creatingMediaMessage) return;
 
     setCreatingMediaMessage(true);
     setCreateMediaError(null);
@@ -308,16 +686,18 @@ function App() {
 
     try {
       const imagesData = await filesToNumberArrays(mediaFiles);
-      const text = mediaTextDraft.trim();
-      const result = text
-        ? await createLegacyMixedMessage(text, imagesData)
-        : await createLegacyImageMessage(imagesData);
-      await refreshLegacyData();
+      const result =
+        text && imagesData.length > 0
+          ? await createLegacyMixedMessage(text, imagesData)
+          : text
+            ? await createLegacyTextMessage(text)
+            : await createLegacyImageMessage(imagesData);
+      await refreshAppData();
       setMediaTextDraft("");
       setMediaFiles([]);
       setMediaInputKey((key) => key + 1);
-      setMediaWriteConfirmed(false);
       setCreateMediaResult(result);
+      setShowComposer(false);
     } catch (err) {
       setCreateMediaError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -330,7 +710,6 @@ function App() {
     setEditTextDraft(message.text_content ?? "");
     setEditFiles([]);
     setEditInputKey((key) => key + 1);
-    setEditConfirmed(false);
     setEditError(null);
     setEditResult(null);
   }
@@ -343,7 +722,19 @@ function App() {
   }
 
   function selectEditFiles(event: ChangeEvent<HTMLInputElement>) {
-    setEditFiles(Array.from(event.target.files ?? []));
+    setEditFiles((currentFiles) => [...currentFiles, ...Array.from(event.target.files ?? [])]);
+    setEditError(null);
+    setEditResult(null);
+  }
+
+  function pasteEditMediaContent(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const pastedFiles = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (pastedFiles.length === 0) return;
+
+    event.preventDefault();
+    setEditFiles((currentFiles) => [...currentFiles, ...pastedFiles]);
     setEditError(null);
     setEditResult(null);
   }
@@ -370,10 +761,9 @@ function App() {
       if (!result) {
         throw new Error("没有需要保存的变更");
       }
-      await refreshLegacyData();
+      await refreshAppData();
       setEditFiles([]);
       setEditInputKey((key) => key + 1);
-      setEditConfirmed(false);
       setEditResult(result);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err));
@@ -405,7 +795,7 @@ function App() {
 
     try {
       const result = await deleteLegacyMessage(deletingMessage.id);
-      await refreshLegacyData();
+      await refreshAppData();
       setDeleteResult(result);
       setDeletingMessage(null);
       setDeleteConfirmed(false);
@@ -425,7 +815,7 @@ function App() {
 
     try {
       const result = await setLegacyMessageArchived(message.id, !message.archived);
-      await refreshLegacyData();
+      await refreshAppData();
       setArchiveResult(result);
     } catch (err) {
       setArchiveError(err instanceof Error ? err.message : String(err));
@@ -466,35 +856,20 @@ function App() {
     }
   }
 
-  async function stageMessageImport(message: LegacyMessage) {
-    if (importingMessageId !== null) return;
-
-    setImportingMessageId(message.id);
-    setImportStageError(null);
-    setImportStageResult(null);
-
-    try {
-      const result = await stageLegacyMessageImportToClipboard(message.id);
-      setImportStageResult(result);
-    } catch (err) {
-      setImportStageError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setImportingMessageId(null);
-    }
-  }
-
   async function openImportQueue(message: LegacyMessage) {
-    if (loadingImportQueueMessageId !== null) return;
+    if (loadingImportQueueMessageId !== null || pastingImportQueue) return;
 
     setLoadingImportQueueMessageId(message.id);
     setImportQueueError(null);
     setImportQueuePreview(null);
-    setImportQueueCopyError(null);
-    setImportQueueCopyResult(null);
+    setImportQueuePasteAllError(null);
+    setImportQueuePasteAllResult(null);
+    setImportQueuePasteArchiveResult(null);
 
     try {
       const preview = await previewLegacyMessageImportQueue(message.id);
       setImportQueuePreview(preview);
+      await pasteImportQueue(preview);
     } catch (err) {
       setImportQueueError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -502,118 +877,8 @@ function App() {
     }
   }
 
-  async function refreshTargetWindows() {
-    if (loadingTargetWindows) return;
-
-    setLoadingTargetWindows(true);
-    setTargetWindowError(null);
-    setTargetWindowValidation(null);
-
-    try {
-      const windows = await listExternalWindowTargets();
-      setTargetWindows(windows);
-      if (
-        selectedTargetWindow &&
-        !windows.some((window) => window.hwnd === selectedTargetWindow.hwnd)
-      ) {
-        setSelectedTargetWindow(null);
-      }
-    } catch (err) {
-      setTargetWindowError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoadingTargetWindows(false);
-    }
-  }
-
-  function selectTargetWindow(hwnd: string) {
-    const parsedHwnd = Number(hwnd);
-    const target = targetWindows.find((window) => window.hwnd === parsedHwnd) ?? null;
-    setSelectedTargetWindow(target);
-    setTargetWindowError(null);
-    setTargetWindowValidation(null);
-  }
-
-  async function validateTargetWindow() {
-    if (!selectedTargetWindow || validatingTargetWindow) return;
-
-    setValidatingTargetWindow(true);
-    setTargetWindowError(null);
-    setTargetWindowValidation(null);
-
-    try {
-      const validation = await validateExternalWindowTarget(selectedTargetWindow.hwnd);
-      setTargetWindowValidation(validation);
-      if (validation.target) {
-        setSelectedTargetWindow(validation.target);
-      }
-    } catch (err) {
-      setTargetWindowError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setValidatingTargetWindow(false);
-    }
-  }
-
-  async function copyImportQueueItem(itemIndex: number) {
-    if (!importQueuePreview || copyingImportQueueItem !== null) return;
-
-    setCopyingImportQueueItem({ messageId: importQueuePreview.message_id, itemIndex });
-    setImportQueueCopyError(null);
-    setImportQueueCopyResult(null);
-
-    try {
-      const result = await copyLegacyMessageImportQueueItemToClipboard(
-        importQueuePreview.message_id,
-        itemIndex,
-      );
-      setImportQueueCopyResult(result);
-    } catch (err) {
-      setImportQueueCopyError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCopyingImportQueueItem(null);
-    }
-  }
-
-  async function pasteImportQueueItem(itemIndex: number) {
-    const target = targetWindowValidation?.target;
-    if (
-      !importQueuePreview ||
-      !selectedTargetWindow ||
-      !target ||
-      target.hwnd !== selectedTargetWindow.hwnd ||
-      pastingImportQueueItem !== null
-    ) {
-      return;
-    }
-
-    setPastingImportQueueItem({ messageId: importQueuePreview.message_id, itemIndex });
-    setImportQueuePasteError(null);
-    setImportQueuePasteResult(null);
-
-    try {
-      const result = await pasteLegacyImportQueueItem(
-        importQueuePreview.message_id,
-        itemIndex,
-        target.hwnd,
-      );
-      setImportQueuePasteResult(result);
-    } catch (err) {
-      setImportQueuePasteError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPastingImportQueueItem(null);
-    }
-  }
-
-  async function pasteImportQueue() {
-    const target = targetWindowValidation?.target;
-    if (
-      !importQueuePreview ||
-      !selectedTargetWindow ||
-      !target ||
-      target.hwnd !== selectedTargetWindow.hwnd ||
-      pastingImportQueue
-    ) {
-      return;
-    }
+  async function pasteImportQueue(preview: LegacyImportQueuePreview) {
+    if (pastingImportQueue) return;
 
     setPastingImportQueue(true);
     setImportQueuePasteAllError(null);
@@ -621,25 +886,15 @@ function App() {
     setImportQueuePasteArchiveResult(null);
 
     try {
-      if (archiveAfterImport) {
-        const result = await pasteLegacyImportQueueWithOptionalArchive({
-          messageId: importQueuePreview.message_id,
-          targetHwnd: target.hwnd,
-          delayMs: 250,
-          archiveAfterSuccess: true,
-        });
-        setImportQueuePasteAllResult(result.paste);
-        setImportQueuePasteArchiveResult(result);
-        if (result.archive_result) {
-          await refreshLegacyData();
-        }
-      } else {
-        const result = await pasteLegacyImportQueue(
-          importQueuePreview.message_id,
-          target.hwnd,
-          250,
-        );
-        setImportQueuePasteAllResult(result);
+      const result = await pasteLegacyImportQueueToRecentWindow({
+        messageId: preview.message_id,
+        delayMs: pasteIntervalMs,
+        archiveAfterSuccess: archiveAfterImport,
+      });
+      setImportQueuePasteAllResult(result.paste);
+      setImportQueuePasteArchiveResult(result);
+      if (result.archive_result) {
+        await refreshAppData();
       }
     } catch (err) {
       setImportQueuePasteAllError(err instanceof Error ? err.message : String(err));
@@ -648,37 +903,21 @@ function App() {
     }
   }
 
-  const visibleCount = page?.messages.length ?? 0;
-  const canCreateText = textDraft.trim().length > 0 && writeConfirmed && !creatingTextMessage;
   const canCreateMedia =
-    mediaFiles.length > 0 && mediaWriteConfirmed && !creatingMediaMessage;
+    (mediaTextDraft.trim().length > 0 || mediaFiles.length > 0) &&
+    !creatingMediaMessage;
   const editText = editTextDraft.trim();
   const editWillHaveImages = (editingMessage?.images.length ?? 0) > 0 || editFiles.length > 0;
   const editHasContent = editText.length > 0 || editWillHaveImages;
   const canSaveEdit =
     !!editingMessage &&
-    editConfirmed &&
     !savingEdit &&
     editHasContent &&
     (((editingMessage.text_content ?? null) !==
       (editText.length > 0 ? editText : null)) ||
       editFiles.length > 0);
-  const validatedTargetWindow = targetWindowValidation?.target ?? null;
-  const canPasteImportQueueItem =
-    !!selectedTargetWindow &&
-    !!validatedTargetWindow &&
-    selectedTargetWindow.hwnd === validatedTargetWindow.hwnd &&
-    pastingImportQueueItem === null &&
-    !pastingImportQueue;
-  const canPasteImportQueue =
-    !!selectedTargetWindow &&
-    !!validatedTargetWindow &&
-    selectedTargetWindow.hwnd === validatedTargetWindow.hwnd &&
-    !pastingImportQueue &&
-    pastingImportQueueItem === null;
-
   return (
-    <main className="shell">
+    <main className="shell" style={{ fontSize: `${14 + fontScale}px` }}>
       <header className="app-topbar">
         <div className="brand-block">
           <span className="app-icon" aria-hidden="true">
@@ -686,25 +925,29 @@ function App() {
           </span>
           <div>
             <h1>需求暂存站</h1>
-            <p>@linjianglu</p>
+            <p>v{CURRENT_VERSION} @linjianglu</p>
           </div>
         </div>
 
         <nav className="top-actions" aria-label="应用操作">
-          <span>{stats ? `总计 ${stats.total_count} 条消息` : "正在读取"}</span>
-          <button type="button">置顶</button>
-          <button type="button">设置</button>
+          <button
+            type="button"
+            className={alwaysOnTop ? "active" : ""}
+            onClick={toggleAlwaysOnTop}
+            title={topmostError ? `置顶失败：${topmostError}` : undefined}
+          >
+            {alwaysOnTop ? "已置顶" : "置顶"}
+          </button>
+          <button type="button" onClick={() => setShowSettings(true)}>设置</button>
           <button
             type="button"
             className="primary-new"
-            onClick={() => setShowComposer((visible) => !visible)}
+            onClick={() => setShowComposer(true)}
           >
             + 新建
           </button>
         </nav>
       </header>
-
-      {loading && <p className="status">正在读取旧数据库...</p>}
 
       {error && (
         <section className="notice" role="alert">
@@ -718,205 +961,117 @@ function App() {
 
       {stats && (
         <>
-          <section className="metrics compact-metrics" aria-label="消息计数">
-            <article className="metric total">
-              <span>总消息</span>
-              <strong>{stats.total_count}</strong>
-            </article>
-            <article className="metric normal">
-              <span>普通消息</span>
-              <strong>{stats.normal_count}</strong>
-            </article>
-            <article className="metric archived">
-              <span>已归档</span>
-              <strong>{stats.archived_count}</strong>
-            </article>
-          </section>
-
-          <details className="dev-details safety-details" onToggle={(event) => {
-            if (event.currentTarget.open && !safetyReport && !loadingSafetyReport) {
-              void loadSafetyReport();
-            }
-          }}>
-            <summary>数据安全</summary>
-            <section className="paths" aria-label="旧数据安全面板">
-              <PathRow label="数据目录" value={stats.data_dir} ok={stats.db_exists} />
-              <PathRow label="数据库" value={stats.db_path} ok={stats.db_exists} />
-              <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
-
-              <div className="safety-actions">
-                <button type="button" onClick={() => void loadSafetyReport()}>
-                  {loadingSafetyReport ? "审计中..." : "刷新审计"}
-                </button>
-                <button type="button" onClick={() => void openLocalPath(stats.data_dir)}>
-                  打开数据目录
-                </button>
-                <button type="button" onClick={() => void openLocalPath(stats.images_dir)}>
-                  打开图片目录
-                </button>
-              </div>
-
-              {safetyReportError && (
-                <p className="inline-error">安全审计失败：{safetyReportError}</p>
-              )}
-              {openPathError && <p className="inline-error">打开目录失败：{openPathError}</p>}
-
-              {safetyReport && (
-                <SafetyReportPanel
-                  report={safetyReport}
-                  onOpenPath={(path) => void openLocalPath(path)}
-                />
-              )}
-            </section>
-          </details>
-
           {showComposer && (
-            <section className="composer-stack" aria-label="新增消息面板">
-              <section className="write-panel" aria-label="新增纯文字消息">
-                <div className="write-panel-head">
+            <div className="preview-backdrop edit-backdrop" role="presentation" onClick={() => setShowComposer(false)}>
+              <section
+                className="edit-dialog composer-dialog"
+                role="dialog"
+                aria-label="编辑新消息"
+                aria-modal="true"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <header className="edit-header">
                   <div>
-                    <p className="eyebrow">Phase 2 / Write Guard</p>
-                    <h2>新增纯文字消息</h2>
+                    <p className="eyebrow">新消息</p>
+                    <h2>编辑消息</h2>
                   </div>
-                  <span className="write-badge">备份后写入</span>
-                </div>
-
-                <form className="text-create-form" onSubmit={createTextMessage}>
-                  <label className="field-label" htmlFor="new-text-message">
-                    文字内容
-                  </label>
-                  <textarea
-                    id="new-text-message"
-                    value={textDraft}
-                    onChange={(event) => setTextDraft(event.target.value)}
-                    placeholder="输入要写入旧 clipstash.db 的纯文字消息"
-                    rows={4}
-                  />
-
-                  <label className="write-confirm">
-                    <input
-                      type="checkbox"
-                      checked={writeConfirmed}
-                      onChange={(event) => setWriteConfirmed(event.target.checked)}
-                    />
-                    <span>确认本次会写入旧数据库，并在写入前自动创建备份。</span>
-                  </label>
-
-                  <button type="submit" className="write-submit" disabled={!canCreateText}>
-                    {creatingTextMessage ? "正在写入..." : "新增并备份"}
+                  <button type="button" className="preview-close" onClick={() => setShowComposer(false)} aria-label="关闭新消息">
+                    ×
                   </button>
-                </form>
-
-                {createTextError && (
-                  <div className="write-result write-result-error" role="alert">
-                    <strong>写入失败</strong>
-                    <p>{createTextError}</p>
-                  </div>
-                )}
-
-                {createTextResult && (
-                  <div className="write-result write-result-ok" role="status">
-                    <strong>已写入 #{createTextResult.message.id}</strong>
-                    <p>{createTextResult.message.created_at}</p>
-                    <LegacyWriteAuditRows audit={createTextResult.audit} />
-                  </div>
-                )}
-              </section>
-
-              <section className="write-panel" aria-label="新增图片或图文消息">
-                <div className="write-panel-head">
-                  <div>
-                    <p className="eyebrow">Phase 2 / Media Guard</p>
-                    <h2>新增图片 / 图文消息</h2>
-                  </div>
-                  <span className="write-badge media-badge">备份后写入</span>
-                </div>
-
+                </header>
                 <form className="text-create-form" onSubmit={createMediaMessage}>
-                  <label className="field-label" htmlFor="new-media-message-text">
-                    配套文字
-                  </label>
-                  <textarea
-                    id="new-media-message-text"
-                    value={mediaTextDraft}
-                    onChange={(event) => setMediaTextDraft(event.target.value)}
-                    placeholder="留空则创建纯图片消息"
-                    rows={3}
-                  />
-
-                  <label className="field-label" htmlFor="new-media-message-files">
-                    图片
-                  </label>
-                  <input
-                    key={mediaInputKey}
-                    id="new-media-message-files"
-                    className="file-input"
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={selectMediaFiles}
-                  />
-
-                  {mediaFiles.length > 0 && (
-                    <div className="selected-files" aria-label="已选图片">
-                      {mediaFiles.map((file, index) => (
-                        <span key={`${file.name}-${file.size}-${index}`}>
-                          {file.name} · {formatBytes(file.size)}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  <label className="write-confirm">
-                    <input
-                      type="checkbox"
-                      checked={mediaWriteConfirmed}
-                      onChange={(event) => setMediaWriteConfirmed(event.target.checked)}
+                  <section className="message-composer-box">
+                    <textarea
+                      id="new-media-message-text"
+                      aria-label="消息内容"
+                      value={mediaTextDraft}
+                      onChange={(event) => setMediaTextDraft(event.target.value)}
+                      onPaste={pasteMediaContent}
+                      placeholder="输入文字，或直接粘贴图片"
+                      rows={6}
                     />
-                    <span>确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。</span>
-                  </label>
+                    {mediaFiles.length > 0 && (
+                      <div className="composer-image-grid" aria-label="已选图片">
+                        {mediaFiles.map((file, index) => (
+                          <ComposerImageTile
+                            file={file}
+                            index={index}
+                            key={`${file.name}-${file.size}-${index}`}
+                            onPreview={setPreviewImage}
+                            previewDelaySeconds={hoverDelay}
+                            previewImages={mediaPreviewImages}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    <div className="composer-file-row">
+                      <label className="composer-file-action" htmlFor="new-media-message-files">
+                        选择图片
+                      </label>
+                      <span>
+                        {mediaFiles.length > 0
+                          ? `已选择 ${mediaFiles.length} 张图片`
+                          : "可粘贴图片或选择文件"}
+                      </span>
+                      <input
+                        key={mediaInputKey}
+                        id="new-media-message-files"
+                        className="composer-file-input"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={selectMediaFiles}
+                      />
+                    </div>
+                  </section>
 
-                  <button type="submit" className="write-submit" disabled={!canCreateMedia}>
-                    {creatingMediaMessage ? "正在写入..." : "新增并备份"}
-                  </button>
+                  <div className="dialog-actions">
+                    <button type="submit" className="write-submit" disabled={!canCreateMedia}>
+                      {creatingMediaMessage ? "正在保存..." : "保存"}
+                    </button>
+                    <button type="button" className="secondary-action" onClick={() => setShowComposer(false)}>
+                      取消
+                    </button>
+                  </div>
                 </form>
 
                 {createMediaError && (
-                  <div className="write-result write-result-error" role="alert">
-                    <strong>写入失败</strong>
+                  <OperationFeedback variant="error" title="写入失败">
                     <p>{createMediaError}</p>
-                  </div>
+                  </OperationFeedback>
                 )}
 
                 {createMediaResult && (
-                  <div className="write-result write-result-ok" role="status">
-                    <strong>已写入 #{createMediaResult.message.id}</strong>
+                  <OperationFeedback variant="success" title={`已保存 #${createMediaResult.message.id}`}>
                     <p>
                       {createMediaResult.message.created_at} · 图片{" "}
                       {createMediaResult.message.images.length}
                     </p>
-                    <LegacyWriteAuditRows audit={createMediaResult.audit} />
-                  </div>
+                  </OperationFeedback>
                 )}
               </section>
-            </section>
+            </div>
           )}
 
           <section className="toolbar" aria-label="消息列表控制">
             <div className="segmented" role="tablist" aria-label="消息视图">
               <button
                 type="button"
+                aria-label="普通"
                 className={view === "normal" ? "active" : ""}
                 onClick={() => setView("normal")}
               >
-                普通
+                <span>普通</span>
+                <small>{stats.normal_count} 条消息</small>
               </button>
               <button
                 type="button"
+                aria-label="已归档"
                 className={view === "archived" ? "active" : ""}
                 onClick={() => setView("archived")}
               >
-                已归档
+                <span>已归档</span>
+                <small>{stats.archived_count} 条消息</small>
               </button>
             </div>
 
@@ -924,79 +1079,76 @@ function App() {
               <button
                 type="button"
                 className={sort === "newest" ? "active" : ""}
-                onClick={() => setSort("newest")}
+                onClick={() => updateSort("newest")}
               >
                 最新
               </button>
               <button
                 type="button"
                 className={sort === "oldest" ? "active" : ""}
-                onClick={() => setSort("oldest")}
+                onClick={() => updateSort("oldest")}
               >
                 最早
               </button>
             </div>
           </section>
 
-          <section className="list-head" aria-label="当前列表状态">
-            <strong>{view === "normal" ? "普通消息" : "已归档消息"}</strong>
-            <span>
-              已显示 {visibleCount} / {page?.total_count ?? 0}
-            </span>
-          </section>
-
           {page && (
             <MessageList
+              listRef={messageListRef}
               messages={page.messages}
               archivingMessageId={archivingMessageId}
-              importingMessageId={importingMessageId}
-              loadingImportQueueMessageId={loadingImportQueueMessageId}
+              expandedImageMessageIds={expandedImageMessageIds}
+              importingMessageId={loadingImportQueueMessageId}
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
               onArchive={toggleArchiveMessage}
               onCopyImage={copyMessageImage}
               onCopyText={copyMessageText}
+              onToggleImages={toggleImageExpansion}
               onOpenImportQueue={openImportQueue}
-              onStageImport={stageMessageImport}
               onPreview={setPreviewImage}
+              previewDelaySeconds={hoverDelay}
+              scrollLines={scrollLines}
+              hasMore={page.has_more}
+              loadingMore={loadingMore}
+              onLoadMore={loadMore}
+              onBlankDoubleClick={() => setShowComposer(true)}
             />
           )}
 
           {page && page.messages.length === 0 && (
-            <p className="empty">当前视图没有消息。</p>
-          )}
-
-          {page?.has_more && (
             <button
               type="button"
-              className="load-more"
-              onClick={loadMore}
-              disabled={loadingMore}
+              className="empty empty-create-target"
+              onDoubleClick={() => setShowComposer(true)}
             >
-              {loadingMore ? "正在加载..." : "加载更多"}
+              当前视图没有消息。双击空白处创建。
             </button>
           )}
         </>
       )}
 
       {previewImage && (
-        <ImagePreviewDialog image={previewImage} onClose={() => setPreviewImage(null)} />
+        <HoverImagePreview image={previewImage} />
       )}
 
       {editingMessage && (
         <EditMessageDialog
-          confirmed={editConfirmed}
           error={editError}
           files={editFiles}
           inputKey={editInputKey}
           message={editingMessage}
+          previewDelaySeconds={hoverDelay}
+          previewImages={editPreviewImages}
           result={editResult}
           saving={savingEdit}
           textDraft={editTextDraft}
           canSave={canSaveEdit}
           onClose={closeEditMessage}
-          onConfirmChange={setEditConfirmed}
           onFileChange={selectEditFiles}
+          onPaste={pasteEditMediaContent}
+          onPreview={setPreviewImage}
           onSubmit={saveEditedMessage}
           onTextChange={setEditTextDraft}
         />
@@ -1014,306 +1166,212 @@ function App() {
         />
       )}
 
+      {showSettings && stats && (
+        <SettingsDialog
+          archiveAfterImport={archiveAfterImport}
+          checkingUpdate={checkingUpdate}
+          closeToTray={closeToTray}
+          fontScale={fontScale}
+          globalShortcutErrors={globalShortcutErrors}
+          hoverDelay={hoverDelay}
+          openPathError={openPathError}
+          pasteIntervalMs={pasteIntervalMs}
+          releaseCheckError={releaseCheckError}
+          releaseCheckResult={releaseCheckResult}
+          scrollLines={scrollLines}
+          settingsError={settingsError}
+          settingsNotice={settingsNotice}
+          sort={sort}
+          stats={stats}
+          startup={startup}
+          startupError={startupError}
+          migrationError={migrationError}
+          migrationResult={migrationResult}
+          migratingLegacyData={migratingLegacyData}
+          onArchiveAfterImportChange={(checked) => {
+            setArchiveAfterImport(checked);
+            persistAppSettings({ archive_after_import: checked }).catch(() => undefined);
+          }}
+          onCloseToTrayChange={(checked) => {
+            setCloseToTray(checked);
+            persistAppSettings(
+              { close_to_tray: checked },
+              checked ? "关闭窗口时将隐藏到托盘" : "关闭窗口时将退出应用",
+            ).catch(() => undefined);
+          }}
+          onClose={() => setShowSettings(false)}
+          onCheckUpdates={checkForUpdates}
+          onFontScaleChange={(value) => {
+            setFontScale(value);
+            persistAppSettings({ font_scale: value }).catch(() => undefined);
+          }}
+          onHoverDelayChange={(value) => {
+            setHoverDelay(value);
+            persistAppSettings({ hover_delay: value }).catch(() => undefined);
+          }}
+          onOpenReleasePage={openExternalUrl}
+          onOpenPath={openLocalPath}
+          onMigrateLegacyData={runLegacyMigration}
+          onPasteIntervalChange={(value) => {
+            setPasteIntervalMs(value);
+            persistAppSettings({ paste_interval_ms: value }).catch(() => undefined);
+          }}
+          onScrollLinesChange={(value) => {
+            setScrollLines(value);
+            persistAppSettings({ scroll_lines: value }).catch(() => undefined);
+          }}
+          onSettingsNotice={setSettingsNotice}
+          onSortChange={updateSort}
+          onStartupChange={setStartup}
+          onStartupPersistChange={updateLaunchOnStartup}
+        />
+      )}
+
       {deleteResult && (
-        <section className="floating-result" role="status">
-          <strong>已删除 #{deleteResult.message.id}</strong>
-          <LegacyWriteAuditRows audit={deleteResult.audit} />
-        </section>
+        <OperationFeedback
+          dismissLabel="关闭删除提示"
+          onDismiss={clearWriteFeedback}
+          surface="floating"
+          variant="success"
+          title={`已删除 #${deleteResult.message.id}`}
+        >
+          <p>消息已移除。</p>
+        </OperationFeedback>
+      )}
+
+      {createMediaResult && (
+        <OperationFeedback
+          dismissLabel="关闭写入提示"
+          onDismiss={clearWriteFeedback}
+          surface="floating"
+          variant="success"
+          title={`已保存 #${createMediaResult.message.id}`}
+        >
+          <p>
+            {createMediaResult.message.created_at} · 图片{" "}
+            {createMediaResult.message.images.length}
+          </p>
+        </OperationFeedback>
       )}
 
       {(archiveError || archiveResult) && (
-        <section
-          className={`floating-result ${archiveError ? "floating-result-error" : ""}`}
-          role={archiveError ? "alert" : "status"}
+        <OperationFeedback
+          dismissLabel="关闭归档提示"
+          onDismiss={clearWriteFeedback}
+          surface="floating"
+          variant={archiveError ? "error" : "success"}
+          title={
+            archiveError
+              ? "归档操作失败"
+              : archiveResult
+                ? `${archiveResult.message.archived ? "已归档" : "已恢复"} #${archiveResult.message.id}`
+                : ""
+          }
         >
           {archiveError ? (
-            <>
-              <strong>归档操作失败</strong>
-              <p>{archiveError}</p>
-            </>
+            <p>{archiveError}</p>
           ) : (
             archiveResult && (
               <>
-                <strong>
-                  {archiveResult.message.archived ? "已归档" : "已恢复"} #
-                  {archiveResult.message.id}
-                </strong>
-                <LegacyWriteAuditRows audit={archiveResult.audit} />
+                <p>{archiveResult.message.archived ? "消息已移入归档。" : "消息已恢复到普通列表。"}</p>
               </>
             )
           )}
-        </section>
+        </OperationFeedback>
       )}
 
       {(copyError || copyResult) && (
-        <section
-          className={`floating-result ${copyError ? "floating-result-error" : ""}`}
-          role={copyError ? "alert" : "status"}
+        <OperationFeedback
+          dismissLabel="关闭复制提示"
+          onDismiss={clearCopyFeedback}
+          surface="floating"
+          variant={copyError ? "error" : "success"}
+          title={copyError ? "复制失败" : copyResult ? `已复制 #${copyResult.messageId}` : ""}
         >
           {copyError ? (
-            <>
-              <strong>复制失败</strong>
-              <p>{copyError}</p>
-            </>
+            <p>{copyError}</p>
           ) : (
             copyResult && (
-              <>
-                <strong>已复制 #{copyResult.messageId}</strong>
-                <p>{copyResult.textLength} 个字符</p>
-              </>
+              <p>{copyResult.textLength} 个字符</p>
             )
           )}
-        </section>
+        </OperationFeedback>
       )}
 
       {(copyImageError || copyImageResult) && (
-        <section
-          className={`floating-result ${copyImageError ? "floating-result-error" : ""}`}
-          role={copyImageError ? "alert" : "status"}
+        <OperationFeedback
+          dismissLabel="关闭图片复制提示"
+          onDismiss={clearCopyFeedback}
+          surface="floating"
+          variant={copyImageError ? "error" : "success"}
+          title={copyImageError ? "复制图片失败" : "已复制图片"}
         >
           {copyImageError ? (
-            <>
-              <strong>复制图片失败</strong>
-              <p>{copyImageError}</p>
-            </>
+            <p>{copyImageError}</p>
           ) : (
             copyImageResult && (
-              <>
-                <strong>已复制图片</strong>
-                <p>
-                  {copyImageResult.filename} · {copyImageResult.width} ×{" "}
-                  {copyImageResult.height}
-                </p>
-              </>
+              <p>
+                {copyImageResult.filename} · {copyImageResult.width} ×{" "}
+                {copyImageResult.height}
+              </p>
             )
           )}
-        </section>
-      )}
-
-      {(importStageError || importStageResult) && (
-        <section
-          className={`floating-result ${importStageError ? "floating-result-error" : ""}`}
-          role={importStageError ? "alert" : "status"}
-        >
-          {importStageError ? (
-            <>
-              <strong>准备导入失败</strong>
-              <p>{importStageError}</p>
-            </>
-          ) : (
-            importStageResult && (
-              <>
-                <strong>已准备导入 #{importStageResult.message_id}</strong>
-                <p>
-                  {importStageResult.staged_kind === "text"
-                    ? `${importStageResult.text_length} 个字符已进入剪贴板`
-                    : `${importStageResult.first_image_filename ?? "图片"} 已进入剪贴板`}
-                </p>
-              </>
-            )
-          )}
-        </section>
+        </OperationFeedback>
       )}
 
       {(importQueueError || importQueuePreview) && (
-        <section
-          className={`floating-result import-queue-result ${
-            importQueueError ? "floating-result-error" : ""
-          }`}
-          role={importQueueError ? "alert" : "status"}
+        <OperationFeedback
+          className="import-queue-result"
+          dismissLabel="关闭导入提示"
+          onDismiss={clearImportFeedback}
+          surface="floating"
+          variant={importQueueError ? "error" : "success"}
+          title={
+            importQueueError
+              ? "导入读取失败"
+              : importQueuePreview
+                ? `导入 #${importQueuePreview.message_id}`
+                : ""
+          }
         >
           {importQueueError ? (
-            <>
-              <strong>导入队列读取失败</strong>
-              <p>{importQueueError}</p>
-            </>
+            <p>{importQueueError}</p>
           ) : (
             importQueuePreview && (
               <>
-                <strong>导入队列 #{importQueuePreview.message_id}</strong>
                 <p>
-                  {importQueuePreview.item_count} 项 · 文字{" "}
-                  {importQueuePreview.text_length} 字符 · 图片{" "}
-                  {importQueuePreview.image_count}
+                  {pastingImportQueue
+                    ? "正在自动导入到上一个外部窗口。"
+                    : "将按旧版顺序导入：文字先行，随后依次导入图片。"}
                 </p>
-                <div className="target-window-panel">
-                  <div className="target-window-head">
-                    <span>目标窗口</span>
-                    <button
-                      type="button"
-                      disabled={loadingTargetWindows}
-                      onClick={refreshTargetWindows}
-                    >
-                      {loadingTargetWindows ? "刷新中..." : "刷新目标窗口"}
-                    </button>
-                  </div>
-                  {targetWindowError && <p role="alert">{targetWindowError}</p>}
-                  <select
-                    aria-label="选择目标窗口"
-                    value={selectedTargetWindow?.hwnd ?? ""}
-                    onChange={(event) => selectTargetWindow(event.target.value)}
-                  >
-                    <option value="">未选择目标窗口</option>
-                    {targetWindows.map((window) => (
-                      <option value={window.hwnd} key={window.hwnd}>
-                        {window.title} · pid {window.process_id}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedTargetWindow && (
-                    <p>
-                      已选择：{selectedTargetWindow.title} · hwnd{" "}
-                      {selectedTargetWindow.hwnd}
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    disabled={!selectedTargetWindow || validatingTargetWindow}
-                    onClick={validateTargetWindow}
-                  >
-                    {validatingTargetWindow ? "校验中..." : "校验目标窗口"}
-                  </button>
-                  {targetWindowValidation?.target && (
-                    <p>
-                      校验通过：{targetWindowValidation.target.title} · pid{" "}
-                      {targetWindowValidation.target.process_id}
-                    </p>
-                  )}
-                  <label className="write-confirm import-archive-confirm">
-                    <input
-                      type="checkbox"
-                      checked={archiveAfterImport}
-                      onChange={(event) => setArchiveAfterImport(event.target.checked)}
-                    />
-                    <span>整队列粘贴成功后归档旧库消息，并在写入前自动创建备份。</span>
-                  </label>
-                  <button
-                    type="button"
-                    disabled={!canPasteImportQueue}
-                    onClick={pasteImportQueue}
-                  >
-                    {pastingImportQueue ? "整队列粘贴中..." : "粘贴整队列"}
-                  </button>
-                </div>
-                <div className="import-queue-items">
-                  {importQueuePreview.items.map((item, index) => (
-                    <div className="import-queue-item" key={`${item.kind}-${index}`}>
-                      <span>
-                        第 {index + 1} 项 ·{" "}
-                        {item.kind === "text"
-                          ? `文字 · ${item.text_length} 字符`
-                          : `图片 · ${item.image?.filename ?? "未知图片"}`}
-                      </span>
-                      <div className="import-queue-actions">
-                        <button
-                          type="button"
-                          disabled={copyingImportQueueItem !== null}
-                          onClick={() => copyImportQueueItem(index)}
-                        >
-                          {copyingImportQueueItem?.messageId ===
-                            importQueuePreview.message_id &&
-                          copyingImportQueueItem.itemIndex === index
-                            ? "复制中..."
-                            : `复制第 ${index + 1} 项`}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!canPasteImportQueueItem}
-                          onClick={() => pasteImportQueueItem(index)}
-                        >
-                          {pastingImportQueueItem?.messageId ===
-                            importQueuePreview.message_id &&
-                          pastingImportQueueItem.itemIndex === index
-                            ? "粘贴中..."
-                            : `粘贴第 ${index + 1} 项`}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )
-          )}
-        </section>
-      )}
-
-      {(importQueueCopyError || importQueueCopyResult) && (
-        <section
-          className={`floating-result ${importQueueCopyError ? "floating-result-error" : ""}`}
-          role={importQueueCopyError ? "alert" : "status"}
-        >
-          {importQueueCopyError ? (
-            <>
-              <strong>复制导入项失败</strong>
-              <p>{importQueueCopyError}</p>
-            </>
-          ) : (
-            importQueueCopyResult && (
-              <>
-                <strong>
-                  已复制导入项 #{importQueueCopyResult.message_id} /{" "}
-                  {importQueueCopyResult.item_index + 1}
-                </strong>
                 <p>
-                  {importQueueCopyResult.staged_kind === "text"
-                    ? `${importQueueCopyResult.text_length} 个字符已进入剪贴板`
-                    : `${importQueueCopyResult.image_filename ?? "图片"} 已进入剪贴板`}
+                  已准备 {importQueuePreview.item_count} 项，目标窗口使用最近一次激活的外部窗口。
                 </p>
               </>
             )
           )}
-        </section>
-      )}
-
-      {(importQueuePasteError || importQueuePasteResult) && (
-        <section
-          className={`floating-result ${importQueuePasteError ? "floating-result-error" : ""}`}
-          role={importQueuePasteError ? "alert" : "status"}
-        >
-          {importQueuePasteError ? (
-            <>
-              <strong>粘贴导入项失败</strong>
-              <p>{importQueuePasteError}</p>
-            </>
-          ) : (
-            importQueuePasteResult && (
-              <>
-                <strong>
-                  已粘贴导入项 #{importQueuePasteResult.message_id} /{" "}
-                  {importQueuePasteResult.item_index + 1}
-                </strong>
-                <p>
-                  {importQueuePasteResult.staged_kind === "text"
-                    ? `${importQueuePasteResult.text_length} 个字符已发送到 ${importQueuePasteResult.target.title}`
-                    : `${
-                        importQueuePasteResult.image_filename ?? "图片"
-                      } 已发送到 ${importQueuePasteResult.target.title}`}
-                </p>
-              </>
-            )
-          )}
-        </section>
+        </OperationFeedback>
       )}
 
       {(importQueuePasteAllError || importQueuePasteAllResult) && (
-        <section
-          className={`floating-result ${
-            importQueuePasteAllError ? "floating-result-error" : ""
-          }`}
-          role={importQueuePasteAllError ? "alert" : "status"}
+        <OperationFeedback
+          dismissLabel="关闭导入结果"
+          onDismiss={clearImportFeedback}
+          surface="floating"
+          variant={importQueuePasteAllError ? "error" : "success"}
+          title={
+            importQueuePasteAllError
+              ? "导入失败"
+              : importQueuePasteAllResult
+                ? `已导入 #${importQueuePasteAllResult.message_id} · ${importQueuePasteAllResult.completed_count} 项`
+                : ""
+          }
         >
           {importQueuePasteAllError ? (
-            <>
-              <strong>粘贴整队列失败</strong>
-              <p>{importQueuePasteAllError}</p>
-            </>
+            <p>{importQueuePasteAllError}</p>
           ) : (
             importQueuePasteAllResult && (
               <>
-                <strong>
-                  已粘贴整队列 #{importQueuePasteAllResult.message_id} ·{" "}
-                  {importQueuePasteAllResult.completed_count} 项
-                </strong>
                 <p>
                   {importQueuePasteAllResult.failure
                     ? `停在第 ${
@@ -1323,8 +1381,7 @@ function App() {
                 </p>
                 {importQueuePasteArchiveResult?.archive_result && (
                   <p>
-                    已归档旧库消息，备份：
-                    {importQueuePasteArchiveResult.archive_result.backup.backup_path}
+                    导入后已自动归档。
                   </p>
                 )}
                 {importQueuePasteArchiveResult?.archive_error && (
@@ -1333,7 +1390,7 @@ function App() {
               </>
             )
           )}
-        </section>
+        </OperationFeedback>
       )}
     </main>
   );
@@ -1357,248 +1414,642 @@ function PathRow({
   );
 }
 
-function LegacyWriteAuditRows({ audit }: { audit: LegacyWriteAudit }) {
-  return (
-    <>
-      <PathRow label="操作" value={`${audit.operation} #${audit.message_id}`} ok />
-      <PathRow label="DB备份" value={audit.db_backup_path} ok={audit.db_backup_path.length > 0} />
-      {audit.image_backup_dir && (
-        <PathRow label="图备份" value={audit.image_backup_dir} ok={audit.image_backup_dir.length > 0} />
-      )}
-    </>
-  );
-}
-
-function SafetyReportPanel({
-  report,
-  onOpenPath,
+function OperationFeedback({
+  children,
+  className = "",
+  dismissLabel,
+  onDismiss,
+  surface = "inline",
+  title,
+  variant,
 }: {
-  report: LegacySafetyReport;
-  onOpenPath: (path: string) => void;
+  children?: ReactNode;
+  className?: string;
+  dismissLabel?: string;
+  onDismiss?: () => void;
+  surface?: "inline" | "floating";
+  title: string;
+  variant: "error" | "success";
 }) {
-  const latestBackupPath =
-    report.recent_db_backups[0]?.path ?? report.recent_image_backups[0]?.path ?? null;
-  const baselineChanges = legacyBaselineChanges(report);
+  const classes = [
+    "operation-feedback",
+    `operation-feedback-${variant}`,
+    `operation-feedback-${surface}`,
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <section className="safety-panel" aria-label="数据安全审计结果">
-      {baselineChanges.length > 0 && (
-        <div className="baseline-warning" role="status">
-          <strong>旧库可能被其他版本改动过</strong>
-          <p>{baselineChanges.join("，")}</p>
-        </div>
-      )}
-
-      <div className="safety-grid">
-        <SafetyMetric label="图片关联" value={report.joined_image_count} />
-        <SafetyMetric label="孤立图片" value={report.orphan_image_count} danger={report.orphan_image_count > 0} />
-        <SafetyMetric label="DB备份" value={report.db_backup_count} />
-        <SafetyMetric label="图备份" value={report.image_backup_count} />
-      </div>
-
-      {latestBackupPath && (
-        <button type="button" className="open-backup-action" onClick={() => onOpenPath(latestBackupPath)}>
-          打开最近备份
+    <section
+      className={classes}
+      role={variant === "error" ? "alert" : "status"}
+      onClick={onDismiss}
+    >
+      <strong>{title}</strong>
+      {children}
+      {onDismiss && (
+        <button
+          type="button"
+          className="feedback-dismiss"
+          aria-label={dismissLabel ?? "关闭提示"}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDismiss();
+          }}
+        >
+          ×
         </button>
       )}
-
-      <BackupList title="最近 DB 备份" backups={report.recent_db_backups} onOpenPath={onOpenPath} />
-      <BackupList title="最近图片备份" backups={report.recent_image_backups} onOpenPath={onOpenPath} />
     </section>
   );
 }
 
-function legacyBaselineChanges(report: LegacySafetyReport) {
-  const changes = [];
-  if (report.stats.normal_count !== LEGACY_BASELINE.normalCount) {
-    changes.push(`普通 ${LEGACY_BASELINE.normalCount} -> ${report.stats.normal_count}`);
+function SettingsDialog({
+  archiveAfterImport,
+  checkingUpdate,
+  closeToTray,
+  fontScale,
+  globalShortcutErrors,
+  hoverDelay,
+  migrationError,
+  migrationResult,
+  migratingLegacyData,
+  openPathError,
+  pasteIntervalMs,
+  releaseCheckError,
+  releaseCheckResult,
+  scrollLines,
+  settingsError,
+  settingsNotice,
+  sort,
+  stats,
+  startup,
+  startupError,
+  onArchiveAfterImportChange,
+  onCheckUpdates,
+  onClose,
+  onCloseToTrayChange,
+  onFontScaleChange,
+  onHoverDelayChange,
+  onMigrateLegacyData,
+  onOpenReleasePage,
+  onOpenPath,
+  onPasteIntervalChange,
+  onScrollLinesChange,
+  onSettingsNotice,
+  onSortChange,
+  onStartupChange,
+  onStartupPersistChange,
+}: {
+  archiveAfterImport: boolean;
+  checkingUpdate: boolean;
+  closeToTray: boolean;
+  fontScale: number;
+  globalShortcutErrors: string[];
+  hoverDelay: number;
+  migrationError: string | null;
+  migrationResult: AppMigrationResult | null;
+  migratingLegacyData: boolean;
+  openPathError: string | null;
+  pasteIntervalMs: number;
+  releaseCheckError: string | null;
+  releaseCheckResult: ReleaseCheckResult | null;
+  scrollLines: number;
+  settingsError: string | null;
+  settingsNotice: string | null;
+  sort: SortOrder;
+  stats: LegacyStats;
+  startup: boolean;
+  startupError: string | null;
+  onArchiveAfterImportChange: (checked: boolean) => void;
+  onCheckUpdates: () => void;
+  onClose: () => void;
+  onCloseToTrayChange: (checked: boolean) => void;
+  onFontScaleChange: (value: number) => void;
+  onHoverDelayChange: (value: number) => void;
+  onMigrateLegacyData: () => void;
+  onOpenReleasePage: (url: string) => void;
+  onOpenPath: (path: string) => void;
+  onPasteIntervalChange: (value: number) => void;
+  onScrollLinesChange: (value: number) => void;
+  onSettingsNotice: (message: string | null) => void;
+  onSortChange: (sort: SortOrder) => void;
+  onStartupChange: (checked: boolean) => void;
+  onStartupPersistChange: (checked: boolean) => void;
+}) {
+  function showAutoSavedNotice(message = "设置已自动保存到本机") {
+    onSettingsNotice(message);
+    window.setTimeout(() => onSettingsNotice(null), 1800);
   }
-  if (report.stats.archived_count !== LEGACY_BASELINE.archivedCount) {
-    changes.push(`归档 ${LEGACY_BASELINE.archivedCount} -> ${report.stats.archived_count}`);
+
+  function changeHoverDelay(value: number) {
+    onHoverDelayChange(value);
+    onSettingsNotice(null);
+    showAutoSavedNotice();
   }
-  if (report.stats.total_count !== LEGACY_BASELINE.totalCount) {
-    changes.push(`总数 ${LEGACY_BASELINE.totalCount} -> ${report.stats.total_count}`);
+
+  function changeScrollLines(value: number) {
+    onScrollLinesChange(value);
+    onSettingsNotice(null);
+    showAutoSavedNotice();
   }
-  if (report.joined_image_count !== LEGACY_BASELINE.joinedImageCount) {
-    changes.push(`图片关联 ${LEGACY_BASELINE.joinedImageCount} -> ${report.joined_image_count}`);
+
+  function changeFontScale(value: number) {
+    onFontScaleChange(value);
+    onSettingsNotice(null);
+    showAutoSavedNotice();
   }
-  if (report.orphan_image_count !== LEGACY_BASELINE.orphanImageCount) {
-    changes.push(`孤立图片 ${LEGACY_BASELINE.orphanImageCount} -> ${report.orphan_image_count}`);
+
+  function changeSort(nextSort: SortOrder) {
+    onSortChange(nextSort);
+    showAutoSavedNotice("消息排序已应用");
   }
-  return changes;
+
+  function changeArchiveAfterImport(checked: boolean) {
+    onArchiveAfterImportChange(checked);
+    showAutoSavedNotice();
+  }
+
+  function changeCloseToTray(checked: boolean) {
+    onCloseToTrayChange(checked);
+    showAutoSavedNotice(checked ? "关闭窗口时将隐藏到托盘" : "关闭窗口时将退出应用");
+  }
+
+  function changePasteInterval(value: number) {
+    onPasteIntervalChange(value);
+    showAutoSavedNotice();
+  }
+
+  function changeStartup(checked: boolean) {
+    onStartupChange(checked);
+    onStartupPersistChange(checked);
+  }
+
+  return (
+    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
+      <section
+        aria-label="设置"
+        aria-modal="true"
+        className="edit-dialog settings-dialog"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="edit-header">
+          <div>
+            <p className="eyebrow">设置</p>
+            <h2>设置</h2>
+          </div>
+          <button type="button" className="preview-close" onClick={onClose} aria-label="关闭设置">
+            ×
+          </button>
+        </header>
+
+        <div className="settings-body">
+          <section className="settings-form" aria-label="应用设置">
+            <SettingSlider
+              label="悬浮预览延迟"
+              max={2}
+              min={0}
+              step={0.1}
+              suffix="秒"
+              value={hoverDelay}
+              onChange={changeHoverDelay}
+            />
+            <p>鼠标放在图片上多久后显示预览</p>
+
+            <SettingSlider
+              label="滚动速度"
+              max={8}
+              min={1}
+              step={1}
+              suffix="行"
+              value={scrollLines}
+              onChange={changeScrollLines}
+            />
+            <p>鼠标滚轮每次滚动的行数</p>
+
+            <SettingSlider
+              label="粘贴间隔"
+              max={3000}
+              min={50}
+              step={50}
+              suffix="毫秒"
+              value={pasteIntervalMs}
+              onChange={changePasteInterval}
+            />
+            <p>导入图文消息时每一项之间的等待时间</p>
+
+            <SettingSlider
+              label="应用内文字大小"
+              max={4}
+              min={-4}
+              step={1}
+              prefix={fontScale > 0 ? "+" : ""}
+              value={fontScale}
+              onChange={changeFontScale}
+            />
+            <p>调整消息列表、按钮和状态栏文字</p>
+
+            <label className="setting-row">
+              <span>消息排序</span>
+              <select value={sort} onChange={(event) => changeSort(event.target.value as SortOrder)}>
+                <option value="newest">最新优先</option>
+                <option value="oldest">最早优先</option>
+              </select>
+            </label>
+
+            <SettingToggle
+              checked={archiveAfterImport}
+              label="快速导入后自动归档"
+              description="导入完成后自动将消息移入已归档"
+              onChange={changeArchiveAfterImport}
+            />
+
+            <SettingToggle
+              checked={closeToTray}
+              label="关闭窗口时隐藏到托盘"
+              description="关闭主窗口后应用继续驻留，托盘菜单可彻底退出"
+              onChange={changeCloseToTray}
+            />
+
+            <SettingToggle
+              checked={startup}
+              label="开机自启动"
+              description="登录 Windows 后自动启动需求暂存站"
+              onChange={changeStartup}
+            />
+            {startupError && <p className="inline-error">{startupError}</p>}
+
+            <label className="setting-field">
+              <span>呼出界面快捷键</span>
+              <input value="<ctrl>+<shift>+v" readOnly />
+            </label>
+
+            <label className="setting-field">
+              <span>导入当前剪切板快捷键</span>
+              <input value="<ctrl>+<alt>+v" readOnly />
+            </label>
+
+            {globalShortcutErrors.map((error) => (
+              <p className="inline-error" key={error}>
+                {error}
+              </p>
+            ))}
+            {settingsError && <p className="inline-error">{settingsError}</p>}
+
+            <button
+              type="button"
+              className="check-update-action"
+              onClick={onCheckUpdates}
+              disabled={checkingUpdate}
+            >
+              {checkingUpdate ? "检查中..." : "检查更新"}
+            </button>
+
+            {releaseCheckResult && (
+              <div className="settings-notice">
+                <p>
+                  {releaseCheckResult.hasUpdate
+                    ? `发现新版本 ${releaseCheckResult.latestVersion}`
+                    : `当前已是最新版本 ${releaseCheckResult.currentVersion}`}
+                </p>
+                {releaseCheckResult.body && <p>{releaseCheckResult.body}</p>}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => onOpenReleasePage(releaseCheckResult.releaseUrl)}
+                >
+                  打开 Release 页面
+                </button>
+              </div>
+            )}
+            {releaseCheckError && (
+              <div className="settings-notice">
+                <p className="inline-error">{releaseCheckError}</p>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => onOpenReleasePage(GITHUB_RELEASES_URL)}
+                >
+                  打开 Release 页面
+                </button>
+              </div>
+            )}
+
+            {settingsNotice && <p className="settings-notice">{settingsNotice}</p>}
+          </section>
+
+          <section className="paths settings-safety" aria-label="本地存储">
+            <h3>本地存储</h3>
+            <PathRow label="数据目录" value={stats.data_dir} ok={stats.db_exists} />
+            <PathRow label="数据库" value={stats.db_path} ok={stats.db_exists} />
+            <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
+
+            <div className="safety-actions">
+              <button type="button" onClick={onMigrateLegacyData} disabled={migratingLegacyData}>
+                {migratingLegacyData ? "迁移中..." : "迁移旧数据"}
+              </button>
+              <button type="button" onClick={() => onOpenPath(stats.data_dir)}>
+                打开数据目录
+              </button>
+              <button type="button" onClick={() => onOpenPath(stats.images_dir)}>
+                打开图片目录
+              </button>
+            </div>
+
+            {migrationResult && (
+              <p className="settings-notice">
+                新增 {migrationResult.inserted_messages} 条，跳过{" "}
+                {migrationResult.skipped_messages} 条重复，复制图片{" "}
+                {migrationResult.copied_images} 张。
+              </p>
+            )}
+            {migrationError && <p className="inline-error">迁移失败：{migrationError}</p>}
+            {openPathError && <p className="inline-error">打开目录失败：{openPathError}</p>}
+          </section>
+        </div>
+
+      </section>
+    </div>
+  );
 }
 
-function SafetyMetric({
+function SettingSlider({
   label,
+  max,
+  min,
+  onChange,
+  prefix = "",
+  step,
+  suffix = "",
   value,
-  danger = false,
 }: {
   label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  prefix?: string;
+  step: number;
+  suffix?: string;
   value: number;
-  danger?: boolean;
 }) {
   return (
-    <article className={danger ? "safety-metric danger" : "safety-metric"}>
+    <label className="setting-slider">
       <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
+      <strong>
+        {prefix}
+        {value}
+        {suffix && ` ${suffix}`}
+      </strong>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
   );
 }
 
-function BackupList({
-  title,
-  backups,
-  onOpenPath,
+function SettingToggle({
+  checked,
+  description,
+  label,
+  onChange,
 }: {
-  title: string;
-  backups: { name: string; path: string; bytes: number; modified_at: string | null }[];
-  onOpenPath: (path: string) => void;
+  checked: boolean;
+  description: string;
+  label: string;
+  onChange: (checked: boolean) => void;
 }) {
   return (
-    <section className="backup-list">
-      <h3>{title}</h3>
-      {backups.length === 0 ? (
-        <p>暂无备份</p>
-      ) : (
-        backups.map((backup) => (
-          <button type="button" key={backup.path} onClick={() => onOpenPath(backup.path)}>
-            <span>{backup.name}</span>
-            <small>{formatBytes(backup.bytes)}</small>
-          </button>
-        ))
-      )}
-    </section>
+    <label className="setting-toggle">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span>
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+    </label>
   );
 }
 
 function MessageList({
   archivingMessageId,
+  expandedImageMessageIds,
+  hasMore,
   importingMessageId,
-  loadingImportQueueMessageId,
+  listRef,
+  loadingMore,
   messages,
   onArchive,
   onCopyImage,
   onCopyText,
   onDelete,
   onEdit,
+  onLoadMore,
   onOpenImportQueue,
-  onStageImport,
+  onBlankDoubleClick,
+  onToggleImages,
   onPreview,
+  previewDelaySeconds,
+  scrollLines,
 }: {
   archivingMessageId: number | null;
+  expandedImageMessageIds: number[];
+  hasMore: boolean;
   importingMessageId: number | null;
-  loadingImportQueueMessageId: number | null;
+  listRef: RefObject<HTMLElement | null>;
+  loadingMore: boolean;
   messages: LegacyMessage[];
   onArchive: (message: LegacyMessage) => void;
   onCopyImage: (image: LegacyMessageImage) => void;
   onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
+  onLoadMore: () => void;
   onOpenImportQueue: (message: LegacyMessage) => void;
-  onStageImport: (message: LegacyMessage) => void;
-  onPreview: (image: PreviewImage) => void;
+  onBlankDoubleClick: () => void;
+  onToggleImages: (messageId: number) => void;
+  onPreview: (image: PreviewImage | null) => void;
+  previewDelaySeconds: number;
+  scrollLines: number;
 }) {
+  function requestMoreIfNearBottom(element: HTMLElement) {
+    if (!hasMore || loadingMore) return;
+
+    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (remaining <= 160) {
+      onLoadMore();
+    }
+  }
+
+  function handleWheel(event: WheelEvent<HTMLElement>) {
+    if (!listRef.current) return;
+    if (scrollLines === 1) {
+      window.setTimeout(() => {
+        if (listRef.current) requestMoreIfNearBottom(listRef.current);
+      }, 0);
+      return;
+    }
+
+    event.preventDefault();
+    listRef.current.scrollTop += event.deltaY * scrollLines;
+    requestMoreIfNearBottom(listRef.current);
+  }
+
   return (
-    <section className="message-list" aria-label="旧消息列表">
-      {messages.map((message) => (
-        <article className="message-card" key={message.id}>
-          <header className="message-meta">
-            <div className="message-meta-text">
-              <strong>#{message.id}</strong>
-              <span>{message.created_at}</span>
-              {message.archived && <span>归档于 {message.archived_at ?? "未知时间"}</span>}
-            </div>
-            <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
-              <button
-                type="button"
-                className="archive-action"
-                disabled={archivingMessageId !== null}
-                onClick={() => onArchive(message)}
-              >
-                {archivingMessageId === message.id
-                  ? "处理中..."
-                  : message.archived
-                    ? "恢复"
-                    : "归档"}
-              </button>
-              {message.text_content && (
-                <button type="button" onClick={() => onCopyText(message)}>
-                  复制文字
+    <section
+      className="message-list"
+      aria-label="消息列表"
+      ref={listRef}
+      onScroll={(event) => requestMoreIfNearBottom(event.currentTarget)}
+      onWheel={handleWheel}
+      onDoubleClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onBlankDoubleClick();
+        }
+      }}
+    >
+      {messages.map((message) => {
+        const isExpanded = expandedImageMessageIds.includes(message.id);
+        const visibleImages = isExpanded ? message.images : message.images.slice(0, 3);
+        const hiddenImageCount = message.images.length - visibleImages.length;
+        const previewImages = buildPreviewImages(message.images);
+
+        return (
+          <article className="message-card" key={message.id}>
+            <header className="message-meta">
+              <div className="message-meta-text">
+                <div className="message-time-line">
+                  <strong>#{message.id}</strong>
+                  <span>{message.created_at}</span>
+                </div>
+                {message.archived && (
+                  <span className="archived-at">
+                    归档于 {message.archived_at ?? "未知时间"}
+                  </span>
+                )}
+              </div>
+              <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
+                <button
+                  type="button"
+                  className="archive-action"
+                  disabled={archivingMessageId !== null}
+                  onClick={() => onArchive(message)}
+                >
+                  {archivingMessageId === message.id
+                    ? "处理中..."
+                    : message.archived
+                      ? "恢复"
+                      : "归档"}
                 </button>
-              )}
+                {!message.archived && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={importingMessageId !== null}
+                      onClick={() => onOpenImportQueue(message)}
+                    >
+                      {importingMessageId === message.id ? "准备中..." : "导入"}
+                    </button>
+                    <button type="button" onClick={() => onEdit(message)}>
+                      编辑
+                    </button>
+                  </>
+                )}
+                {message.archived && (
+                  <button type="button" className="danger-action" onClick={() => onDelete(message)}>
+                    删除
+                  </button>
+                )}
+              </div>
+            </header>
+
+            {message.text_content ? (
               <button
                 type="button"
-                disabled={importingMessageId !== null}
-                onClick={() => onStageImport(message)}
+                className="message-text message-text-button"
+                onClick={() => onCopyText(message)}
               >
-                {importingMessageId === message.id ? "准备中..." : "准备导入"}
+                <span className="message-text-content">{message.text_content}</span>
               </button>
-              <button
-                type="button"
-                disabled={loadingImportQueueMessageId !== null}
-                onClick={() => onOpenImportQueue(message)}
-              >
-                {loadingImportQueueMessageId === message.id ? "读取中..." : "查看队列"}
-              </button>
-              <button type="button" onClick={() => onEdit(message)}>
-                编辑
-              </button>
-              <button type="button" className="danger-action" onClick={() => onDelete(message)}>
-                删除
-              </button>
-            </div>
-          </header>
+            ) : message.images.length === 0 ? (
+              <p className="message-text empty-text">无文字内容</p>
+            ) : (
+              null
+            )}
 
-          <p className={message.text_content ? "message-text" : "message-text empty-text"}>
-            {message.text_content || "无文字内容"}
-          </p>
-
-          {message.images.length > 0 && (
-            <div className="image-grid" aria-label="图片缩略图">
-              {message.images.map((image) => (
-                <MessageImageTile
-                  image={image}
-                  key={image.id}
-                  onCopy={onCopyImage}
-                  onPreview={onPreview}
-                />
-              ))}
-            </div>
-          )}
-        </article>
-      ))}
+            {message.images.length > 0 && (
+              <section className="message-images" aria-label={`消息 ${message.id} 图片`}>
+                <div className="image-grid" aria-label="图片缩略图">
+                  {visibleImages.map((image) => (
+                    <MessageImageTile
+                      image={image}
+                      key={image.id}
+                      onCopy={onCopyImage}
+                      onPreview={onPreview}
+                      previewDelaySeconds={previewDelaySeconds}
+                      previewImages={previewImages}
+                    />
+                  ))}
+                </div>
+                {message.images.length > 3 && (
+                  <button
+                    type="button"
+                    className="image-expand-action"
+                    onClick={() => onToggleImages(message.id)}
+                  >
+                    {isExpanded ? "收起图片" : `展开 ${hiddenImageCount} 张图片`}
+                  </button>
+                )}
+              </section>
+            )}
+          </article>
+        );
+      })}
     </section>
   );
 }
 
 function EditMessageDialog({
   canSave,
-  confirmed,
   error,
   files,
   inputKey,
   message,
+  previewDelaySeconds,
+  previewImages,
   result,
   saving,
   textDraft,
   onClose,
-  onConfirmChange,
   onFileChange,
+  onPaste,
+  onPreview,
   onSubmit,
   onTextChange,
 }: {
   canSave: boolean;
-  confirmed: boolean;
   error: string | null;
   files: File[];
   inputKey: number;
   message: LegacyMessage;
+  previewDelaySeconds: number;
+  previewImages: PreviewImageItem[];
   result: EditResult | null;
   saving: boolean;
   textDraft: string;
   onClose: () => void;
-  onConfirmChange: (confirmed: boolean) => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onPreview: (image: PreviewImage | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onTextChange: (text: string) => void;
 }) {
@@ -1607,14 +2058,14 @@ function EditMessageDialog({
       <section
         aria-label={`编辑消息 ${message.id}`}
         aria-modal="true"
-        className="edit-dialog"
+        className="edit-dialog composer-dialog edit-message-dialog"
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="edit-header">
           <div>
-            <p className="eyebrow">Phase 2 / Edit Guard</p>
-            <h2>编辑 #{message.id}</h2>
+            <p className="eyebrow">消息 #{message.id}</p>
+            <h2>编辑消息</h2>
           </div>
           <button type="button" className="preview-close" onClick={onClose} aria-label="关闭编辑">
             ×
@@ -1622,51 +2073,57 @@ function EditMessageDialog({
         </header>
 
         <form className="text-create-form" onSubmit={onSubmit}>
-          <label className="field-label" htmlFor="edit-message-text">
-            文字内容
-          </label>
-          <textarea
-            id="edit-message-text"
-            value={textDraft}
-            onChange={(event) => onTextChange(event.target.value)}
-            rows={5}
-          />
-
-          <label className="field-label" htmlFor="edit-message-files">
-            替换图片
-          </label>
-          <input
-            key={inputKey}
-            id="edit-message-files"
-            className="file-input"
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={onFileChange}
-          />
-
-          {files.length > 0 && (
-            <div className="selected-files" aria-label="待替换图片">
-              {files.map((file, index) => (
-                <span key={`${file.name}-${file.size}-${index}`}>
-                  {file.name} · {formatBytes(file.size)}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <label className="write-confirm">
-            <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={(event) => onConfirmChange(event.target.checked)}
+          <section className="message-composer-box">
+            <textarea
+              id="edit-message-text"
+              aria-label="消息内容"
+              value={textDraft}
+              onChange={(event) => onTextChange(event.target.value)}
+              onPaste={onPaste}
+              placeholder="编辑文字，或选择图片替换原图片"
+              rows={9}
             />
-            <span>确认本次会写入旧数据库和旧图片目录，并在写入前自动创建备份。</span>
-          </label>
 
+            {files.length > 0 && (
+              <div className="composer-image-grid" aria-label="待替换图片">
+                {files.map((file, index) => (
+                  <ComposerImageTile
+                    file={file}
+                    index={index}
+                    key={`${file.name}-${file.size}-${index}`}
+                    onPreview={onPreview}
+                    previewDelaySeconds={previewDelaySeconds}
+                    previewImages={previewImages}
+                  />
+                ))}
+              </div>
+            )}
+
+            <div className="composer-file-row">
+              <label className="composer-file-action" htmlFor="edit-message-files">
+                选择图片
+              </label>
+              <span>
+                {files.length > 0
+                  ? `将替换为 ${files.length} 张图片`
+                  : message.images.length > 0
+                    ? `保留原有 ${message.images.length} 张图片`
+                    : "可选择图片替换原图片"}
+              </span>
+              <input
+                key={inputKey}
+                id="edit-message-files"
+                className="composer-file-input"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={onFileChange}
+              />
+            </div>
+          </section>
           <div className="dialog-actions">
             <button type="submit" className="write-submit" disabled={!canSave}>
-              {saving ? "正在保存..." : "保存并备份"}
+              {saving ? "正在保存..." : "保存"}
             </button>
             <button type="button" className="secondary-action" onClick={onClose}>
               关闭
@@ -1675,17 +2132,15 @@ function EditMessageDialog({
         </form>
 
         {error && (
-          <div className="write-result write-result-error" role="alert">
-            <strong>保存失败</strong>
+          <OperationFeedback variant="error" title="保存失败">
             <p>{error}</p>
-          </div>
+          </OperationFeedback>
         )}
 
         {result && (
-          <div className="write-result write-result-ok" role="status">
-            <strong>已保存 #{result.message.id}</strong>
-            <LegacyWriteAuditRows audit={result.audit} />
-          </div>
+          <OperationFeedback variant="success" title={`已保存 #${result.message.id}`}>
+            <p>消息已更新。</p>
+          </OperationFeedback>
         )}
       </section>
     </div>
@@ -1729,7 +2184,7 @@ function DeleteMessageDialog({
         </header>
 
         <p className="delete-copy">
-          这会删除旧数据库中的消息记录和关联图片文件，执行前会自动备份数据库和现有图片。
+          这会删除这条消息和关联图片。
         </p>
 
         <form className="text-create-form" onSubmit={onSubmit}>
@@ -1739,7 +2194,7 @@ function DeleteMessageDialog({
               checked={confirmed}
               onChange={(event) => onConfirmChange(event.target.checked)}
             />
-            <span>确认删除这条旧库消息，并保留自动备份用于回滚。</span>
+            <span>确认删除这条消息。</span>
           </label>
 
           <div className="dialog-actions">
@@ -1748,7 +2203,7 @@ function DeleteMessageDialog({
               className="write-submit delete-submit"
               disabled={!confirmed || deleting}
             >
-              {deleting ? "正在删除..." : "删除并备份"}
+              {deleting ? "正在删除..." : "删除"}
             </button>
             <button type="button" className="secondary-action" onClick={onClose}>
               取消
@@ -1757,13 +2212,86 @@ function DeleteMessageDialog({
         </form>
 
         {error && (
-          <div className="write-result write-result-error" role="alert">
-            <strong>删除失败</strong>
+          <OperationFeedback variant="error" title="删除失败">
             <p>{error}</p>
-          </div>
+          </OperationFeedback>
         )}
       </section>
     </div>
+  );
+}
+
+function ComposerImageTile({
+  file,
+  index,
+  onPreview,
+  previewDelaySeconds,
+  previewImages,
+}: {
+  file: File;
+  index: number;
+  onPreview: (image: PreviewImage | null) => void;
+  previewDelaySeconds: number;
+  previewImages: PreviewImageItem[];
+}) {
+  const previewTimerRef = useRef<number | null>(null);
+  const previewImage = previewImages[index] ?? null;
+
+  function clearPreviewTimer() {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }
+
+  function showPreview(target: HTMLButtonElement) {
+    if (!previewImage) return;
+
+    clearPreviewTimer();
+    const img = target.querySelector("img");
+    const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
+    const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
+    const anchor = target.getBoundingClientRect();
+
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      showHoverPreviewWindow({
+        ...previewImage,
+        images: previewImages,
+        index,
+        position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
+        total: previewImages.length,
+      }, anchor).catch(() => {
+        onPreview({
+          ...previewImage,
+          images: previewImages,
+          index,
+          position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
+          total: previewImages.length,
+        });
+      });
+    }, Math.max(0, previewDelaySeconds * 1000));
+  }
+
+  function hidePreview() {
+    clearPreviewTimer();
+    closeHoverPreviewWindow();
+    onPreview(null);
+  }
+
+  return (
+    <button
+      type="button"
+      className="composer-image-tile"
+      onMouseEnter={(event) => showPreview(event.currentTarget)}
+      onMouseLeave={hidePreview}
+      onFocus={(event) => showPreview(event.currentTarget)}
+      onBlur={hidePreview}
+      title={`${file.name} · ${formatBytes(file.size)}`}
+    >
+      {previewImage && <img alt={file.name} src={previewImage.src} />}
+      <span>{file.name}</span>
+    </button>
   );
 }
 
@@ -1771,14 +2299,59 @@ function MessageImageTile({
   image,
   onCopy,
   onPreview,
+  previewDelaySeconds,
+  previewImages,
 }: {
   image: LegacyMessageImage;
   onCopy: (image: LegacyMessageImage) => void;
-  onPreview: (image: PreviewImage) => void;
+  onPreview: (image: PreviewImage | null) => void;
+  previewDelaySeconds: number;
+  previewImages: PreviewImageItem[];
 }) {
   const [broken, setBroken] = useState(false);
+  const previewTimerRef = useRef<number | null>(null);
   const canRenderImage = image.exists && !broken;
   const src = canRenderImage ? getAssetSrc(image.path) : "";
+  const previewIndex = previewImages.findIndex((item) => item.path === image.path);
+
+  function clearPreviewTimer() {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }
+
+  function showPreview(target: HTMLButtonElement) {
+    clearPreviewTimer();
+    const img = target.querySelector("img");
+    const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
+    const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
+    const anchor = target.getBoundingClientRect();
+
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      const nextPreview = {
+        filename: image.filename,
+        images: previewImages,
+        index: previewIndex >= 0 ? previewIndex : 0,
+        path: image.path,
+        position: calculatePreviewPosition(
+          anchor,
+          naturalWidth,
+          naturalHeight,
+        ),
+        src,
+        total: previewImages.length,
+      };
+      showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
+    }, Math.max(0, previewDelaySeconds * 1000));
+  }
+
+  function hidePreview() {
+    clearPreviewTimer();
+    closeHoverPreviewWindow();
+    onPreview(null);
+  }
 
   if (canRenderImage && src) {
     return (
@@ -1786,7 +2359,11 @@ function MessageImageTile({
         <button
           type="button"
           className="image-preview-action"
-          onClick={() => onPreview({ filename: image.filename, path: image.path, src })}
+          onClick={() => onCopy(image)}
+          onMouseEnter={(event) => showPreview(event.currentTarget)}
+          onMouseLeave={hidePreview}
+          onFocus={(event) => showPreview(event.currentTarget)}
+          onBlur={hidePreview}
         >
           <img
             alt={image.filename}
@@ -1795,11 +2372,6 @@ function MessageImageTile({
             onError={() => setBroken(true)}
           />
         </button>
-        <div className="image-tile-actions">
-          <button type="button" className="image-copy-action" onClick={() => onCopy(image)}>
-            复制图片
-          </button>
-        </div>
         <span className="image-caption">{image.filename}</span>
       </div>
     );
@@ -1813,34 +2385,271 @@ function MessageImageTile({
   );
 }
 
-function ImagePreviewDialog({
-  image,
-  onClose,
-}: {
+function HoverImagePreview({ image }: {
   image: PreviewImage;
-  onClose: () => void;
 }) {
   return (
-    <div className="preview-backdrop" role="presentation" onClick={onClose}>
-      <section
-        aria-label={image.filename}
-        aria-modal="true"
-        className="preview-dialog"
-        role="dialog"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="preview-header">
-          <strong title={image.path}>{image.filename}</strong>
-          <button type="button" className="preview-close" onClick={onClose} aria-label="关闭预览">
-            ×
-          </button>
-        </header>
-        <div className="preview-stage">
-          <img alt={image.filename} src={image.src} />
-        </div>
-      </section>
-    </div>
+    <aside
+      className="hover-preview"
+      role="tooltip"
+      aria-label={image.filename}
+      style={
+        image.position
+          ? {
+              height: image.position.height,
+              left: image.position.left,
+              top: image.position.top,
+              width: image.position.width,
+            }
+          : undefined
+      }
+    >
+      <img alt={image.filename} src={image.src} />
+    </aside>
   );
+}
+
+async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
+  const dimensions = await loadImageDimensions(image.src);
+  const position = calculateScreenPreviewPosition(anchor, dimensions.width, dimensions.height);
+  const key = `clipstash.preview.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(
+    key,
+    JSON.stringify({
+      filename: image.filename,
+      src: image.src,
+    }),
+  );
+
+  await closeHoverPreviewWindow();
+  hoverPreviewStorageKey = key;
+
+  const previewWindow = new WebviewWindow("image-preview", {
+    alwaysOnTop: true,
+    decorations: false,
+    focus: false,
+    height: position.height,
+    resizable: false,
+    skipTaskbar: true,
+    title: image.filename,
+    url: `/image-preview.html?key=${encodeURIComponent(key)}`,
+    visible: true,
+    width: position.width,
+    x: position.left,
+    y: position.top,
+  });
+
+  hoverPreviewWindow = previewWindow;
+  previewWindow.once("tauri://destroyed", () => {
+    localStorage.removeItem(key);
+    if (hoverPreviewStorageKey === key) {
+      hoverPreviewStorageKey = null;
+    }
+    if (hoverPreviewWindow === previewWindow) {
+      hoverPreviewWindow = null;
+    }
+  });
+}
+
+async function closeHoverPreviewWindow() {
+  const existingWindow = hoverPreviewWindow ?? (await WebviewWindow.getByLabel("image-preview"));
+  const existingKey = hoverPreviewStorageKey;
+  hoverPreviewWindow = null;
+  hoverPreviewStorageKey = null;
+  if (existingKey) {
+    localStorage.removeItem(existingKey);
+  }
+  if (existingWindow) {
+    await existingWindow.close().catch(() => undefined);
+  }
+}
+
+function loadImageDimensions(src: string) {
+  return new Promise<{ height: number; width: number }>((resolve, reject) => {
+    const image = new Image();
+    const fallbackTimer = window.setTimeout(() => {
+      resolve({ height: 240, width: 320 });
+    }, 120);
+    image.onload = () => {
+      window.clearTimeout(fallbackTimer);
+      resolve({
+        height: image.naturalHeight || 240,
+        width: image.naturalWidth || 320,
+      });
+    };
+    image.onerror = () => {
+      window.clearTimeout(fallbackTimer);
+      reject();
+    };
+    image.src = src;
+  });
+}
+
+function calculateScreenPreviewPosition(
+  anchor: DOMRect,
+  naturalWidth: number,
+  naturalHeight: number,
+): PreviewPosition {
+  const gap = 8;
+  const screenPadding = 8;
+  const screenRect = getAvailableScreenRect();
+  const safeNaturalWidth = Math.max(1, naturalWidth);
+  const safeNaturalHeight = Math.max(1, naturalHeight);
+  const longSideRatio = Math.min(1, 1000 / Math.max(safeNaturalWidth, safeNaturalHeight));
+  const screenRatio = Math.min(
+    1,
+    (screenRect.width - screenPadding * 2) / (safeNaturalWidth * longSideRatio),
+    (screenRect.height - screenPadding * 2) / (safeNaturalHeight * longSideRatio),
+  );
+  const ratio = longSideRatio * screenRatio;
+  const width = Math.max(1, Math.round(safeNaturalWidth * ratio));
+  const height = Math.max(1, Math.round(safeNaturalHeight * ratio));
+  const anchorRect = getScreenAnchorRect(anchor);
+  const rightLeft = anchorRect.right + gap;
+  const leftLeft = anchorRect.left - gap - width;
+  const rightFits = rightLeft + width <= screenRect.right - screenPadding;
+  const leftFits = leftLeft >= screenRect.left + screenPadding;
+  const bottomTop = anchorRect.bottom + gap;
+  const topTop = anchorRect.top - gap - height;
+  const bottomFits = bottomTop + height <= screenRect.bottom - screenPadding;
+  const topFits = topTop >= screenRect.top + screenPadding;
+  let left = rightLeft;
+  let top = anchorRect.top;
+
+  if (rightFits || leftFits) {
+    left = rightFits ? rightLeft : leftLeft;
+    top = clamp(anchorRect.top, screenRect.top + screenPadding, screenRect.bottom - height - screenPadding);
+  } else if (bottomFits || topFits) {
+    left = clamp(anchorRect.left, screenRect.left + screenPadding, screenRect.right - width - screenPadding);
+    top = bottomFits ? bottomTop : topTop;
+  } else {
+    const preferRight = screenRect.right - anchorRect.right >= anchorRect.left - screenRect.left;
+    left = preferRight ? rightLeft : leftLeft;
+    top = anchorRect.bottom + gap;
+    if (top + height > screenRect.bottom - screenPadding) {
+      top = anchorRect.top - gap - height;
+    }
+    left = clamp(left, screenRect.left + screenPadding, screenRect.right - width - screenPadding);
+    top = clamp(top, screenRect.top + screenPadding, screenRect.bottom - height - screenPadding);
+  }
+
+  return { height, left, top, width };
+}
+
+function getAvailableScreenRect(): ScreenRect {
+  const screenWithOrigin = window.screen as Screen & {
+    availLeft?: number;
+    availTop?: number;
+  };
+  const left = screenWithOrigin.availLeft ?? 0;
+  const top = screenWithOrigin.availTop ?? 0;
+  const width = screenWithOrigin.availWidth || screenWithOrigin.width || window.innerWidth;
+  const height = screenWithOrigin.availHeight || screenWithOrigin.height || window.innerHeight;
+
+  return {
+    bottom: top + height,
+    height,
+    left,
+    right: left + width,
+    top,
+    width,
+  };
+}
+
+function getScreenAnchorRect(anchor: DOMRect): ScreenRect {
+  const left = window.screenX + anchor.left;
+  const top = window.screenY + anchor.top;
+  const width = anchor.width;
+  const height = anchor.height;
+
+  return {
+    bottom: top + height,
+    height,
+    left,
+    right: left + width,
+    top,
+    width,
+  };
+}
+
+function calculatePreviewPosition(
+  anchor: DOMRect,
+  naturalWidth: number,
+  naturalHeight: number,
+): PreviewPosition {
+  const gap = 8;
+  const screenPadding = 8;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const safeNaturalWidth = Math.max(1, naturalWidth);
+  const safeNaturalHeight = Math.max(1, naturalHeight);
+  const longSideRatio = Math.min(1, 1000 / Math.max(safeNaturalWidth, safeNaturalHeight));
+  const viewportRatio = Math.min(
+    1,
+    (viewportWidth - screenPadding * 2) / (safeNaturalWidth * longSideRatio),
+    (viewportHeight - screenPadding * 2) / (safeNaturalHeight * longSideRatio),
+  );
+  const ratio = longSideRatio * viewportRatio;
+  const width = Math.max(1, Math.round(safeNaturalWidth * ratio));
+  const height = Math.max(1, Math.round(safeNaturalHeight * ratio));
+  const rightLeft = anchor.right + gap;
+  const leftLeft = anchor.left - gap - width;
+  const rightFits = rightLeft + width <= viewportWidth - screenPadding;
+  const leftFits = leftLeft >= screenPadding;
+  const bottomTop = anchor.bottom + gap;
+  const topTop = anchor.top - gap - height;
+  const bottomFits = bottomTop + height <= viewportHeight - screenPadding;
+  const topFits = topTop >= screenPadding;
+  let left = rightLeft;
+  let top = anchor.top;
+
+  if (rightFits || leftFits) {
+    left = rightFits ? rightLeft : leftLeft;
+    top = clamp(anchor.top, screenPadding, viewportHeight - height - screenPadding);
+  } else if (bottomFits || topFits) {
+    left = clamp(anchor.left, screenPadding, viewportWidth - width - screenPadding);
+    top = bottomFits ? bottomTop : topTop;
+  } else {
+    const preferRight = viewportWidth - anchor.right >= anchor.left;
+    left = preferRight ? rightLeft : leftLeft;
+    top = anchor.bottom + gap;
+    if (top + height > viewportHeight - screenPadding) {
+      top = anchor.top - gap - height;
+    }
+    left = clamp(left, screenPadding, viewportWidth - width - screenPadding);
+    top = clamp(top, screenPadding, viewportHeight - height - screenPadding);
+  }
+
+  return { height, left, top, width };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+function buildPreviewImages(images: LegacyMessageImage[]) {
+  return images
+    .filter((image) => image.exists)
+    .map((image) => ({
+      filename: image.filename,
+      path: image.path,
+      src: getAssetSrc(image.path),
+    }))
+    .filter((image) => image.src.length > 0);
+}
+
+function shiftPreviewImage(current: PreviewImage | null, offset: number) {
+  if (!current || current.images.length === 0) return current;
+
+  const nextIndex =
+    (current.index + offset + current.images.length) % current.images.length;
+  const nextImage = current.images[nextIndex];
+  return {
+    ...nextImage,
+    images: current.images,
+    index: nextIndex,
+    total: current.images.length,
+  };
 }
 
 function getAssetSrc(path: string) {
@@ -1851,11 +2660,70 @@ function getAssetSrc(path: string) {
   }
 }
 
-function loadLegacyData(view: MessageView, sort: SortOrder) {
+function loadAppData(view: MessageView, sort: SortOrder) {
   return Promise.all([
     getLegacyStats(),
     listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT }),
   ]);
+}
+
+function getStoredSort(): SortOrder {
+  return localStorage.getItem("clipstash.setting.messageSort") === "oldest"
+    ? "oldest"
+    : "newest";
+}
+
+function readLegacyLocalSettingsPatch(): AppSettingsPatch {
+  const patch: AppSettingsPatch = {};
+  const sort = localStorage.getItem("clipstash.setting.messageSort");
+  const autoArchive = localStorage.getItem("clipstash.setting.autoArchive");
+  const hoverDelay = readStoredNumber("clipstash.setting.hoverDelay");
+  const scrollLines = readStoredNumber("clipstash.setting.scrollLines");
+  const fontScale = readStoredNumber("clipstash.setting.fontScale");
+
+  if (sort === "oldest" || sort === "newest") patch.sort = sort;
+  if (autoArchive === "true" || autoArchive === "false") {
+    patch.archive_after_import = autoArchive === "true";
+  }
+  if (hoverDelay !== null) patch.hover_delay = hoverDelay;
+  if (scrollLines !== null) patch.scroll_lines = scrollLines;
+  if (fontScale !== null) patch.font_scale = fontScale;
+
+  return patch;
+}
+
+function clearLegacyLocalSettings() {
+  [
+    "clipstash.setting.messageSort",
+    "clipstash.setting.autoArchive",
+    "clipstash.setting.hoverDelay",
+    "clipstash.setting.scrollLines",
+    "clipstash.setting.fontScale",
+  ].forEach((key) => localStorage.removeItem(key));
+}
+
+function readStoredNumber(key: string) {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeReleaseVersion(value: string) {
+  return value.trim().replace(/^v/i, "");
+}
+
+function compareVersions(left: string, right: string) {
+  const leftParts = left.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const rightParts = right.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+
+  return 0;
 }
 
 async function filesToNumberArrays(files: File[]) {
@@ -1867,10 +2735,36 @@ async function filesToNumberArrays(files: File[]) {
   );
 }
 
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("读取图片预览失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+function isMainPasteShortcut(event: KeyboardEvent) {
+  const key = event.key.toLowerCase();
+  return (event.ctrlKey && key === "v") || (event.shiftKey && event.key === "Insert");
+}
+
+function isEditableElement(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return (
+    target.isContentEditable ||
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select"
+  );
+}
+
 
 export default App;

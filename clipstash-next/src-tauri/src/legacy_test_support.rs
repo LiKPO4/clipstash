@@ -24,6 +24,15 @@ pub(crate) fn assert_message_order_matches_db(
     sort: SortOrder,
 ) {
     let data_dir = legacy_data_dir().expect("resolve local legacy data dir");
+    assert_message_order_matches_db_from_dir(conn, data_dir, view, sort);
+}
+
+pub(crate) fn assert_message_order_matches_db_from_dir(
+    conn: &Connection,
+    data_dir: PathBuf,
+    view: MessageView,
+    sort: SortOrder,
+) {
     let api_ids: Vec<i64> = collect_all_messages_with_sort(data_dir, view, sort)
         .iter()
         .map(|message| message.id)
