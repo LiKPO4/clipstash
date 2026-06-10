@@ -1314,7 +1314,9 @@ textarea:focus,
 .settings-dialog {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  max-height: calc(100vh - 28px);
+  width: 100%;
+  height: calc(100vh - 100px);
+  min-height: min(560px, calc(100vh - 100px));
   overflow: hidden;
   padding: 0;
 }

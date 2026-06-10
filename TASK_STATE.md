@@ -317,6 +317,7 @@
 - 已修正编辑已有图片消息时看不到原图片的问题，并按用户反馈收敛到与新建窗口一致的图片区：编辑弹窗不再额外显示“已有图片/待替换图片”分区，而是在同一个 `已选图片` 网格中显示当前图片；选择新图片后同一网格切换为新图片，支持 hover 原图预览。已验证 `npm test -- --run App.edit-delete.test.tsx App.media-create.test.tsx` 通过 `33 passed | 9 skipped`，`npm run build` 通过。
 - 已将新建消息和编辑消息抽成同一个底层 `MessageComposerDialog` 组件：统一 textarea、图片网格、选择图片、关闭/保存按钮、错误提示和高度持久化逻辑；新建/编辑只通过参数提供标题、初始/已有图片、保存状态和错误文案。已验证 `npm test -- --run App.edit-delete.test.tsx App.media-create.test.tsx` 通过 `33 passed | 9 skipped`，`npm run build` 通过。
 - 已准备补丁版 `2.0.4` release：包含新建消息和编辑消息底层统一为 `MessageComposerDialog`，以及编辑已有图片消息时在同一个 `已选图片` 网格显示原图片、选择新图后同网格切换为新图。发布前验证已通过：`npm test -- --run` 通过 `57 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.0.4_x64_en-US.msi` 与 `ClipStash Next_2.0.4_x64-setup.exe`。
+- 已准备补丁版 `2.0.5` release：设置弹窗只保留一个标题并改为与编辑消息弹窗一致的窗口高度；更新检查命中新版本后只显示版本号，优先显示“下载更新”，下载 GitHub Release 安装包到临时目录后启动安装包。发布前验证已通过：`npm test -- --run` 通过 `57 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `26 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.0.5_x64_en-US.msi` 与 `ClipStash Next_2.0.5_x64-setup.exe`。
 
 ## 未完成
 

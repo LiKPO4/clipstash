@@ -25,6 +25,7 @@ import {
   createLegacyMixedMessage,
   createLegacyTextMessage,
   deleteLegacyMessage,
+  downloadAndOpenUpdateInstaller,
   getAppSettings,
   getGlobalShortcutErrors,
   getLegacyStats,
@@ -60,7 +61,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.4";
+const CURRENT_VERSION = "2.0.5";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
@@ -115,10 +116,15 @@ type ImportQueuePasteArchiveResult = LegacyImportQueuePasteArchiveResult;
 
 type ReleaseCheckResult = {
   currentVersion: string;
+  downloadAsset: ReleaseDownloadAsset | null;
   latestVersion: string;
   releaseUrl: string;
-  body: string;
   hasUpdate: boolean;
+};
+
+type ReleaseDownloadAsset = {
+  downloadUrl: string;
+  filename: string;
 };
 
 let hoverPreviewWindow: WebviewWindow | null = null;
@@ -189,6 +195,7 @@ function App() {
   const [releaseCheckResult, setReleaseCheckResult] =
     useState<ReleaseCheckResult | null>(null);
   const [releaseCheckError, setReleaseCheckError] = useState<string | null>(null);
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [globalShortcutErrors, setGlobalShortcutErrors] = useState<string[]>([]);
   const [migratingLegacyData, setMigratingLegacyData] = useState(false);
   const [migrationResult, setMigrationResult] = useState<AppMigrationResult | null>(null);
@@ -619,7 +626,10 @@ function App() {
         throw new Error(`GitHub Release 检查失败：HTTP ${response.status}`);
       }
       const payload = (await response.json()) as {
-        body?: string;
+        assets?: Array<{
+          browser_download_url?: string;
+          name?: string;
+        }>;
         html_url?: string;
         tag_name?: string;
       };
@@ -628,15 +638,34 @@ function App() {
 
       setReleaseCheckResult({
         currentVersion: CURRENT_VERSION,
+        downloadAsset: selectWindowsInstallerAsset(payload.assets ?? []),
         latestVersion,
         releaseUrl: payload.html_url || GITHUB_RELEASES_URL,
-        body: payload.body ?? "",
         hasUpdate: compareVersions(latestVersion, CURRENT_VERSION) > 0,
       });
     } catch (err: unknown) {
       setReleaseCheckError(err instanceof Error ? err.message : String(err));
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function downloadUpdate() {
+    if (downloadingUpdate || !releaseCheckResult?.downloadAsset) return;
+
+    setDownloadingUpdate(true);
+    setReleaseCheckError(null);
+    try {
+      await downloadAndOpenUpdateInstaller(
+        releaseCheckResult.downloadAsset.downloadUrl,
+        releaseCheckResult.downloadAsset.filename,
+      );
+      setSettingsNotice("安装包已打开，请按安装向导完成更新");
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err: unknown) {
+      setReleaseCheckError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadingUpdate(false);
     }
   }
 
@@ -1135,6 +1164,7 @@ function App() {
           archiveAfterImport={archiveAfterImport}
           checkingUpdate={checkingUpdate}
           closeToTray={closeToTray}
+          downloadingUpdate={downloadingUpdate}
           fontScale={fontScale}
           globalShortcutErrors={globalShortcutErrors}
           hoverDelay={hoverDelay}
@@ -1165,6 +1195,7 @@ function App() {
           }}
           onClose={() => setShowSettings(false)}
           onCheckUpdates={checkForUpdates}
+          onDownloadUpdate={downloadUpdate}
           onFontScaleChange={(value) => {
             setFontScale(value);
             persistAppSettings({ font_scale: value }).catch(() => undefined);
@@ -1418,6 +1449,7 @@ function SettingsDialog({
   archiveAfterImport,
   checkingUpdate,
   closeToTray,
+  downloadingUpdate,
   fontScale,
   globalShortcutErrors,
   hoverDelay,
@@ -1437,6 +1469,7 @@ function SettingsDialog({
   startupError,
   onArchiveAfterImportChange,
   onCheckUpdates,
+  onDownloadUpdate,
   onClose,
   onCloseToTrayChange,
   onFontScaleChange,
@@ -1454,6 +1487,7 @@ function SettingsDialog({
   archiveAfterImport: boolean;
   checkingUpdate: boolean;
   closeToTray: boolean;
+  downloadingUpdate: boolean;
   fontScale: number;
   globalShortcutErrors: string[];
   hoverDelay: number;
@@ -1473,6 +1507,7 @@ function SettingsDialog({
   startupError: string | null;
   onArchiveAfterImportChange: (checked: boolean) => void;
   onCheckUpdates: () => void;
+  onDownloadUpdate: () => void;
   onClose: () => void;
   onCloseToTrayChange: (checked: boolean) => void;
   onFontScaleChange: (value: number) => void;
@@ -1546,7 +1581,6 @@ function SettingsDialog({
       >
         <header className="edit-header">
           <div>
-            <p className="eyebrow">设置</p>
             <h2>设置</h2>
           </div>
           <button type="button" className="preview-close" onClick={onClose} aria-label="关闭设置">
@@ -1663,14 +1697,26 @@ function SettingsDialog({
                     ? `发现新版本 ${releaseCheckResult.latestVersion}`
                     : `当前已是最新版本 ${releaseCheckResult.currentVersion}`}
                 </p>
-                {releaseCheckResult.body && <p>{releaseCheckResult.body}</p>}
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() => onOpenReleasePage(releaseCheckResult.releaseUrl)}
-                >
-                  打开 Release 页面
-                </button>
+                {releaseCheckResult.hasUpdate && releaseCheckResult.downloadAsset ? (
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={onDownloadUpdate}
+                    disabled={downloadingUpdate}
+                  >
+                    {downloadingUpdate ? "下载中..." : "下载更新"}
+                  </button>
+                ) : (
+                  releaseCheckResult.hasUpdate && (
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => onOpenReleasePage(releaseCheckResult.releaseUrl)}
+                    >
+                      打开 Release 页面
+                    </button>
+                  )
+                )}
               </div>
             )}
             {releaseCheckError && (
@@ -2896,6 +2942,25 @@ function readStoredNumber(key: string) {
 
 function normalizeReleaseVersion(value: string) {
   return value.trim().replace(/^v/i, "");
+}
+
+function selectWindowsInstallerAsset(
+  assets: Array<{ browser_download_url?: string; name?: string }>,
+): ReleaseDownloadAsset | null {
+  const candidates = assets
+    .map((asset) => ({
+      downloadUrl: asset.browser_download_url ?? "",
+      filename: asset.name ?? "",
+    }))
+    .filter((asset) => asset.downloadUrl && asset.filename);
+
+  const setup = candidates.find((asset) => /x64[-_.]?setup\.exe$/i.test(asset.filename));
+  if (setup) return setup;
+
+  const exe = candidates.find((asset) => /\.exe$/i.test(asset.filename));
+  if (exe) return exe;
+
+  return candidates.find((asset) => /\.msi$/i.test(asset.filename)) ?? null;
 }
 
 function compareVersions(left: string, right: string) {

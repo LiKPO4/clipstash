@@ -102,6 +102,11 @@ describe("settings storage panel", () => {
           stats: migratedStats,
         });
       }
+      if (command === "download_and_open_update_installer") {
+        return Promise.resolve({
+          installer_path: "C:\\Temp\\ClipStash Next_2.0.6_x64-setup.exe",
+        });
+      }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
   });
@@ -124,6 +129,7 @@ describe("settings storage panel", () => {
     await user.click(await screen.findByRole("button", { name: "设置" }));
     const dialog = await screen.findByRole("dialog", { name: "设置" });
 
+    expect(within(dialog).getAllByText("设置")).toHaveLength(1);
     const panel = within(dialog).getByRole("region", { name: "本地存储" });
     expect(within(panel).getByText("数据目录")).toBeTruthy();
     expect(within(panel).getByText("数据库")).toBeTruthy();
@@ -187,19 +193,35 @@ describe("settings storage panel", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.5",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.5",
+          tag_name: "v2.0.6",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.6",
           body: "更新说明",
+          assets: [
+            {
+              name: "ClipStash Next_2.0.6_x64_en-US.msi",
+              browser_download_url:
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.6/ClipStash.Next_2.0.6_x64_en-US.msi",
+            },
+            {
+              name: "ClipStash Next_2.0.6_x64-setup.exe",
+              browser_download_url:
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.6/ClipStash.Next_2.0.6_x64-setup.exe",
+            },
+          ],
         }),
       }),
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.5")).toBeTruthy();
-    await user.click(within(dialog).getByRole("button", { name: "打开 Release 页面" }));
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.5",
-    );
+    expect(await within(dialog).findByText("发现新版本 2.0.6")).toBeTruthy();
+    expect(within(dialog).queryByText("更新说明")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
+    expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
+      downloadUrl:
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.6/ClipStash.Next_2.0.6_x64-setup.exe",
+      filename: "ClipStash Next_2.0.6_x64-setup.exe",
+    });
+    expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });
 
   it("shows concrete update check errors for network, http, and malformed release responses", async () => {

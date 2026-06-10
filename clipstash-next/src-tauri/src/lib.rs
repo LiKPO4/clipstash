@@ -24,6 +24,8 @@ mod window_targets;
 
 use arboard::Clipboard;
 use image::{ImageBuffer, ImageFormat, Rgba};
+use std::fs;
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -57,6 +59,11 @@ struct ClipboardContent {
     image_data: Option<Vec<u8>>,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct DownloadUpdateResult {
+    installer_path: String,
+}
+
 #[derive(Default)]
 struct GlobalShortcutStatus {
     errors: Mutex<Vec<String>>,
@@ -80,6 +87,65 @@ fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
 #[tauri::command]
 fn migrate_legacy_data() -> Result<app_data::AppMigrationResult, String> {
     app_data::migrate_legacy_data()
+}
+
+#[tauri::command]
+fn download_and_open_update_installer(
+    download_url: String,
+    filename: String,
+) -> Result<DownloadUpdateResult, String> {
+    if !download_url.starts_with("https://github.com/LiKPO4/clipstash/releases/download/") {
+        return Err("更新下载链接不是 ClipStash 官方 Release 地址".to_string());
+    }
+
+    let safe_filename = sanitize_installer_filename(&filename)?;
+    let update_dir = std::env::temp_dir().join("ClipStash Next Updates");
+    fs::create_dir_all(&update_dir).map_err(|err| format!("创建更新临时目录失败：{err}"))?;
+    let installer_path = update_dir.join(safe_filename);
+
+    let response = reqwest::blocking::Client::new()
+        .get(&download_url)
+        .header(reqwest::header::USER_AGENT, "ClipStash-Next-Updater")
+        .send()
+        .map_err(|err| format!("下载安装包失败：{err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("下载安装包失败：HTTP {}", response.status()));
+    }
+
+    let bytes = response
+        .bytes()
+        .map_err(|err| format!("读取安装包内容失败：{err}"))?;
+    if bytes.is_empty() {
+        return Err("下载安装包失败：文件为空".to_string());
+    }
+
+    fs::write(&installer_path, &bytes)
+        .map_err(|err| format!("写入安装包失败：{}：{err}", installer_path.display()))?;
+    Command::new(&installer_path)
+        .spawn()
+        .map_err(|err| format!("启动安装包失败：{}：{err}", installer_path.display()))?;
+
+    Ok(DownloadUpdateResult {
+        installer_path: installer_path.display().to_string(),
+    })
+}
+
+fn sanitize_installer_filename(filename: &str) -> Result<String, String> {
+    let trimmed = filename.trim();
+    if trimmed.is_empty() {
+        return Err("安装包文件名为空".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower.ends_with(".exe") || lower.ends_with(".msi")) {
+        return Err("更新资产不是 Windows 安装包".to_string());
+    }
+    if trimmed
+        .chars()
+        .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+    {
+        return Err("安装包文件名包含非法字符".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 #[tauri::command]
@@ -538,6 +604,7 @@ pub fn run() {
             create_legacy_image_message,
             create_legacy_mixed_message,
             create_legacy_text_message,
+            download_and_open_update_installer,
             copy_legacy_image_to_clipboard,
             copy_legacy_message_text_to_clipboard,
             copy_legacy_message_import_queue_item_to_clipboard,

@@ -43,6 +43,13 @@ export function updateAppSettings(patch: AppSettingsPatch) {
   return invoke<AppSettings>("update_app_settings", { patch });
 }
 
+export function downloadAndOpenUpdateInstaller(downloadUrl: string, filename: string) {
+  return invoke<{ installer_path: string }>("download_and_open_update_installer", {
+    downloadUrl,
+    filename,
+  });
+}
+
 export function getGlobalShortcutErrors() {
   return invoke<string[]>("get_global_shortcut_errors");
 }
