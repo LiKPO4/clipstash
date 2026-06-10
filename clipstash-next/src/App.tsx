@@ -60,7 +60,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.3";
+const CURRENT_VERSION = "2.0.4";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
@@ -554,10 +554,6 @@ function App() {
       });
   }
 
-  function persistTextAreaElementHeight(element: HTMLTextAreaElement) {
-    persistEditTextareaHeight(readTextAreaHeight(element));
-  }
-
   async function loadMore() {
     if (!page || loadingMore) return;
 
@@ -990,85 +986,33 @@ function App() {
       {stats && (
         <>
           {showComposer && (
-            <div className="preview-backdrop edit-backdrop" role="presentation" onClick={() => setShowComposer(false)}>
-              <section
-                className="edit-dialog composer-dialog edit-message-dialog"
-                role="dialog"
-                aria-label="编辑新消息"
-                aria-modal="true"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <header className="edit-header">
-                  <div>
-                    <p className="eyebrow">新消息</p>
-                    <h2>编辑消息</h2>
-                  </div>
-                  <button type="button" className="preview-close" onClick={() => setShowComposer(false)} aria-label="关闭新消息">
-                    ×
-                  </button>
-                </header>
-                <form className="text-create-form" onSubmit={createMediaMessage}>
-                  <section className="message-composer-box">
-                    <textarea
-                      id="new-media-message-text"
-                      aria-label="消息内容"
-                      value={mediaTextDraft}
-                      onChange={(event) => setMediaTextDraft(event.target.value)}
-                      onBlur={(event) => persistTextAreaElementHeight(event.currentTarget)}
-                      onMouseUp={(event) => persistTextAreaElementHeight(event.currentTarget)}
-                      onPaste={pasteMediaContent}
-                      onTouchEnd={(event) => persistTextAreaElementHeight(event.currentTarget)}
-                      placeholder="输入文字，或直接粘贴图片"
-                      rows={6}
-                      style={{ height: `${editTextareaHeight}px` }}
-                    />
-                    {mediaFiles.length > 0 && (
-                      <div className="composer-image-grid" aria-label="已选图片">
-                        {mediaFiles.map((file, index) => (
-                          <ComposerImageTile
-                            file={file}
-                            index={index}
-                            key={`${file.name}-${file.size}-${index}`}
-                            onPreview={setPreviewImage}
-                            onRemove={removeMediaFile}
-                            previewDelaySeconds={hoverDelay}
-                            previewImages={mediaPreviewImages}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </section>
-
-                  <div className="dialog-actions edit-dialog-actions">
-                    <label className="composer-file-action" htmlFor="new-media-message-files">
-                      选择图片
-                    </label>
-                    <input
-                      key={mediaInputKey}
-                      id="new-media-message-files"
-                      className="composer-file-input"
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={selectMediaFiles}
-                    />
-                    <button type="button" className="secondary-action" onClick={() => setShowComposer(false)}>
-                      关闭
-                    </button>
-                    <button type="submit" className="write-submit" disabled={!canCreateMedia}>
-                      {creatingMediaMessage ? "正在保存..." : "保存"}
-                    </button>
-                  </div>
-                </form>
-
-                {createMediaError && (
-                  <OperationFeedback variant="error" title="写入失败">
-                    <p>{createMediaError}</p>
-                  </OperationFeedback>
-                )}
-
-              </section>
-            </div>
+            <MessageComposerDialog
+              canSave={canCreateMedia}
+              closeAriaLabel="关闭新消息"
+              dialogLabel="编辑新消息"
+              error={createMediaError}
+              errorTitle="写入失败"
+              eyebrow="新消息"
+              fileInputId="new-media-message-files"
+              files={mediaFiles}
+              inputKey={mediaInputKey}
+              onClose={() => setShowComposer(false)}
+              onFileChange={selectMediaFiles}
+              onPaste={pasteMediaContent}
+              onPreview={setPreviewImage}
+              onRemoveFile={removeMediaFile}
+              onSubmit={createMediaMessage}
+              onTextAreaHeightCommit={persistEditTextareaHeight}
+              onTextChange={setMediaTextDraft}
+              placeholder="输入文字，或直接粘贴图片"
+              previewDelaySeconds={hoverDelay}
+              previewImages={mediaPreviewImages}
+              saving={creatingMediaMessage}
+              textAreaHeight={editTextareaHeight}
+              textAreaId="new-media-message-text"
+              textDraft={mediaTextDraft}
+              title="编辑消息"
+            />
           )}
 
           <section className="toolbar" aria-label="消息列表控制">
@@ -2062,6 +2006,98 @@ function EditMessageDialog({
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
 }) {
+  const existingPreviewImages = buildPreviewImages(message.images);
+
+  return (
+    <MessageComposerDialog
+      canSave={canSave}
+      closeAriaLabel="关闭编辑"
+      dialogLabel={`编辑消息 ${message.id}`}
+      error={error}
+      errorTitle="保存失败"
+      eyebrow={`消息 #${message.id}`}
+      existingImages={files.length === 0 ? message.images : []}
+      existingPreviewImages={existingPreviewImages}
+      fileInputId="edit-message-files"
+      files={files}
+      inputKey={inputKey}
+      onClose={onClose}
+      onFileChange={onFileChange}
+      onPaste={onPaste}
+      onPreview={onPreview}
+      onRemoveFile={onRemoveFile}
+      onSubmit={onSubmit}
+      onTextAreaHeightCommit={onTextAreaHeightCommit}
+      onTextChange={onTextChange}
+      placeholder="编辑文字，或选择图片替换原图片"
+      previewDelaySeconds={previewDelaySeconds}
+      previewImages={previewImages}
+      saving={saving}
+      textAreaHeight={textAreaHeight}
+      textAreaId="edit-message-text"
+      textDraft={textDraft}
+      title="编辑消息"
+    />
+  );
+}
+
+function MessageComposerDialog({
+  canSave,
+  closeAriaLabel,
+  dialogLabel,
+  error,
+  errorTitle,
+  existingImages = [],
+  existingPreviewImages = [],
+  eyebrow,
+  fileInputId,
+  files,
+  inputKey,
+  onClose,
+  onFileChange,
+  onPaste,
+  onPreview,
+  onRemoveFile,
+  onSubmit,
+  onTextAreaHeightCommit,
+  onTextChange,
+  placeholder,
+  previewDelaySeconds,
+  previewImages,
+  saving,
+  textAreaHeight,
+  textAreaId,
+  textDraft,
+  title,
+}: {
+  canSave: boolean;
+  closeAriaLabel: string;
+  dialogLabel: string;
+  error: string | null;
+  errorTitle: string;
+  existingImages?: LegacyMessageImage[];
+  existingPreviewImages?: PreviewImageItem[];
+  eyebrow: string;
+  fileInputId: string;
+  files: File[];
+  inputKey: number;
+  onClose: () => void;
+  onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onPreview: (image: PreviewImage | null) => void;
+  onRemoveFile: (index: number) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onTextAreaHeightCommit: (height: number) => void;
+  onTextChange: (text: string) => void;
+  placeholder: string;
+  previewDelaySeconds: number;
+  previewImages: PreviewImageItem[];
+  saving: boolean;
+  textAreaHeight: number;
+  textAreaId: string;
+  textDraft: string;
+  title: string;
+}) {
   function commitTextAreaHeight(
     event:
       | FocusEvent<HTMLTextAreaElement>
@@ -2077,7 +2113,7 @@ function EditMessageDialog({
   return (
     <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
       <section
-        aria-label={`编辑消息 ${message.id}`}
+        aria-label={dialogLabel}
         aria-modal="true"
         className="edit-dialog composer-dialog edit-message-dialog"
         role="dialog"
@@ -2085,10 +2121,10 @@ function EditMessageDialog({
       >
         <header className="edit-header">
           <div>
-            <p className="eyebrow">消息 #{message.id}</p>
-            <h2>编辑消息</h2>
+            <p className="eyebrow">{eyebrow}</p>
+            <h2>{title}</h2>
           </div>
-          <button type="button" className="preview-close" onClick={onClose} aria-label="关闭编辑">
+          <button type="button" className="preview-close" onClick={onClose} aria-label={closeAriaLabel}>
             ×
           </button>
         </header>
@@ -2096,7 +2132,7 @@ function EditMessageDialog({
         <form className="text-create-form" onSubmit={onSubmit}>
           <section className="message-composer-box">
             <textarea
-              id="edit-message-text"
+              id={textAreaId}
               aria-label="消息内容"
               value={textDraft}
               onChange={(event) => onTextChange(event.target.value)}
@@ -2104,13 +2140,13 @@ function EditMessageDialog({
               onMouseUp={commitTextAreaHeight}
               onPaste={onPaste}
               onTouchEnd={commitTextAreaHeight}
-              placeholder="编辑文字，或选择图片替换原图片"
+              placeholder={placeholder}
               rows={9}
               style={{ height: `${textAreaHeight}px` }}
             />
 
             {files.length > 0 && (
-              <div className="composer-image-grid" aria-label="待替换图片">
+              <div className="composer-image-grid" aria-label="已选图片">
                 {files.map((file, index) => (
                   <ComposerImageTile
                     file={file}
@@ -2125,14 +2161,29 @@ function EditMessageDialog({
               </div>
             )}
 
+            {files.length === 0 && existingImages.length > 0 && (
+              <div className="composer-image-grid" aria-label="已选图片">
+                {existingImages.map((image, index) => (
+                  <ExistingMessageImageTile
+                    image={image}
+                    index={index}
+                    key={image.id}
+                    onPreview={onPreview}
+                    previewDelaySeconds={previewDelaySeconds}
+                    previewImages={existingPreviewImages}
+                  />
+                ))}
+              </div>
+            )}
           </section>
+
           <div className="dialog-actions edit-dialog-actions">
-            <label className="composer-file-action" htmlFor="edit-message-files">
+            <label className="composer-file-action" htmlFor={fileInputId}>
               选择图片
             </label>
             <input
               key={inputKey}
-              id="edit-message-files"
+              id={fileInputId}
               className="composer-file-input"
               type="file"
               accept="image/*"
@@ -2149,7 +2200,7 @@ function EditMessageDialog({
         </form>
 
         {error && (
-          <OperationFeedback variant="error" title="保存失败">
+          <OperationFeedback variant="error" title={errorTitle}>
             <p>{error}</p>
           </OperationFeedback>
         )}
@@ -2325,6 +2376,93 @@ function ComposerImageTile({
         </button>
       )}
     </div>
+  );
+}
+
+function ExistingMessageImageTile({
+  image,
+  index,
+  onPreview,
+  previewDelaySeconds,
+  previewImages,
+}: {
+  image: LegacyMessageImage;
+  index: number;
+  onPreview: (image: PreviewImage | null) => void;
+  previewDelaySeconds: number;
+  previewImages: PreviewImageItem[];
+}) {
+  const [broken, setBroken] = useState(false);
+  const previewTimerRef = useRef<number | null>(null);
+  const canRenderImage = image.exists && !broken;
+  const src = canRenderImage ? getAssetSrc(image.path) : "";
+
+  function clearPreviewTimer() {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }
+
+  function showPreview(target: HTMLButtonElement) {
+    if (!canRenderImage || !src) return;
+
+    clearPreviewTimer();
+    const img = target.querySelector("img");
+    const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
+    const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
+    const anchor = target.getBoundingClientRect();
+
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      const nextPreview = {
+        filename: image.filename,
+        images: previewImages,
+        index,
+        path: image.path,
+        position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
+        src,
+        total: previewImages.length,
+      };
+      showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
+    }, Math.max(0, previewDelaySeconds * 1000));
+  }
+
+  function hidePreview() {
+    clearPreviewTimer();
+    closeHoverPreviewWindow();
+    onPreview(null);
+  }
+
+  if (!canRenderImage || !src) {
+    return (
+      <div className="composer-image-tile composer-image-tile-missing" title={image.path}>
+        <span className="composer-image-placeholder">
+          {image.exists ? "无法读取" : "文件缺失"}
+        </span>
+        <span>{image.filename}</span>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="composer-image-tile"
+      onMouseEnter={(event) => showPreview(event.currentTarget)}
+      onMouseLeave={hidePreview}
+      onFocus={(event) => showPreview(event.currentTarget)}
+      onBlur={hidePreview}
+      title={`${image.filename} · ${image.path}`}
+    >
+      <img
+        alt={image.filename}
+        loading="lazy"
+        src={src}
+        onError={() => setBroken(true)}
+      />
+      <span>{image.filename}</span>
+    </button>
   );
 }
 

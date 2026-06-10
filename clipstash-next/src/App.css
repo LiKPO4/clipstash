@@ -682,6 +682,23 @@ textarea:focus,
   white-space: nowrap;
 }
 
+.composer-image-tile-missing {
+  grid-template-rows: 58px auto;
+  cursor: default;
+}
+
+.composer-image-placeholder {
+  display: grid;
+  min-width: 0;
+  height: 58px;
+  place-items: center;
+  padding: 0 6px;
+  color: #8190a4;
+  background: #e5ecf5;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .composer-image-remove {
   position: absolute;
   top: 4px;

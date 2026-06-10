@@ -629,6 +629,22 @@ describe("edit and delete guarded actions", () => {
     });
   });
 
+  it("shows existing message images in the same composer image grid", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    const imageGrid = within(dialog).getByLabelText("已选图片");
+    expect(within(imageGrid).getByRole("img", { name: "old.png" })).toBeTruthy();
+    expect(within(imageGrid).getByText("old.png")).toBeTruthy();
+    expect(within(dialog).queryByText("已有图片")).toBeNull();
+  });
+
   it("replaces message images when replacement files are selected", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -641,6 +657,10 @@ describe("edit and delete guarded actions", () => {
       within(dialog).getByLabelText("选择图片"),
       new File([new Uint8Array([9, 8])], "new.png", { type: "image/png" }),
     );
+    const imageGrid = within(dialog).getByLabelText("已选图片");
+    expect(within(imageGrid).getByText("new.png")).toBeTruthy();
+    expect(within(dialog).queryByText("待替换图片")).toBeNull();
+    expect(within(dialog).queryByText("保存后将被新选择的图片替换")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
