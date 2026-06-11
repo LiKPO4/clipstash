@@ -99,8 +99,8 @@ mod windows_impl {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow,
-        SW_RESTORE,
+        GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
     };
 
     pub fn list_external_window_targets() -> Result<Vec<ExternalWindowTarget>, String> {
@@ -192,7 +192,9 @@ mod windows_impl {
     }
 
     unsafe fn restore_and_raise_window(hwnd: HWND) {
-        ShowWindow(hwnd, SW_RESTORE);
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
         BringWindowToTop(hwnd);
         SetActiveWindow(hwnd);
         SetFocus(hwnd);

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
@@ -52,8 +52,8 @@ const defaultAppSettings = {
   close_to_tray: true,
   archive_after_import: false,
   paste_interval_ms: 250,
-  show_hotkey: "<ctrl>+<shift>+v",
-  capture_hotkey: "<ctrl>+<alt>+v",
+  show_hotkey: "Ctrl+Shift+V",
+  capture_hotkey: "Ctrl+Alt+V",
   hover_delay: 0.8,
   scroll_lines: 1,
   font_scale: 0,
@@ -104,7 +104,7 @@ describe("settings storage panel", () => {
       }
       if (command === "download_and_open_update_installer") {
         return Promise.resolve({
-          installer_path: "C:\\Temp\\ClipStash Next_2.0.6_x64-setup.exe",
+          installer_path: "C:\\Temp\\ClipStash Next_2.0.7_x64-setup.exe",
         });
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
@@ -188,24 +188,44 @@ describe("settings storage panel", () => {
       patch: { close_to_tray: false },
     });
 
+    fireEvent.keyDown(within(dialog).getByLabelText("呼出界面快捷键"), {
+      key: "K",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+      patch: { show_hotkey: "Ctrl+Shift+K" },
+    });
+    expect(await within(dialog).findByText("呼出界面快捷键已应用")).toBeTruthy();
+
+    fireEvent.keyDown(within(dialog).getByLabelText("导入当前剪切板快捷键"), {
+      key: "L",
+      altKey: true,
+      ctrlKey: true,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+      patch: { capture_hotkey: "Ctrl+Alt+L" },
+    });
+    expect(await within(dialog).findByText("导入剪切板快捷键已应用")).toBeTruthy();
+
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.6",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.6",
+          tag_name: "v2.0.7",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.7",
           body: "更新说明",
           assets: [
             {
-              name: "ClipStash Next_2.0.6_x64_en-US.msi",
+              name: "ClipStash Next_2.0.7_x64_en-US.msi",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.6/ClipStash.Next_2.0.6_x64_en-US.msi",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.7/ClipStash.Next_2.0.7_x64_en-US.msi",
             },
             {
-              name: "ClipStash Next_2.0.6_x64-setup.exe",
+              name: "ClipStash Next_2.0.7_x64-setup.exe",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.6/ClipStash.Next_2.0.6_x64-setup.exe",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.7/ClipStash.Next_2.0.7_x64-setup.exe",
             },
           ],
         }),
@@ -213,13 +233,13 @@ describe("settings storage panel", () => {
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.6")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.0.7")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.6/ClipStash.Next_2.0.6_x64-setup.exe",
-      filename: "ClipStash Next_2.0.6_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.7/ClipStash.Next_2.0.7_x64-setup.exe",
+      filename: "ClipStash Next_2.0.7_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

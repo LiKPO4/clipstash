@@ -27,8 +27,8 @@ impl Default for AppSettings {
             close_to_tray: true,
             archive_after_import: false,
             paste_interval_ms: 250,
-            show_hotkey: "<ctrl>+<shift>+v".to_string(),
-            capture_hotkey: "<ctrl>+<alt>+v".to_string(),
+            show_hotkey: "Ctrl+Shift+V".to_string(),
+            capture_hotkey: "Ctrl+Alt+V".to_string(),
             hover_delay: 0.8,
             scroll_lines: 1,
             font_scale: 0,
@@ -179,13 +179,41 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     if settings.sort != "oldest" {
         settings.sort = "newest".to_string();
     }
-    if settings.show_hotkey.trim().is_empty() {
-        settings.show_hotkey = AppSettings::default().show_hotkey;
-    }
-    if settings.capture_hotkey.trim().is_empty() {
-        settings.capture_hotkey = AppSettings::default().capture_hotkey;
-    }
+    settings.show_hotkey =
+        normalize_hotkey(&settings.show_hotkey, &AppSettings::default().show_hotkey);
+    settings.capture_hotkey = normalize_hotkey(
+        &settings.capture_hotkey,
+        &AppSettings::default().capture_hotkey,
+    );
     settings
+}
+
+fn normalize_hotkey(value: &str, fallback: &str) -> String {
+    let parts = value
+        .split('+')
+        .map(|part| part.trim().trim_matches(['<', '>']))
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => "Ctrl".to_string(),
+            "shift" => "Shift".to_string(),
+            "alt" | "option" => "Alt".to_string(),
+            "cmd" | "command" | "meta" | "super" | "win" | "windows" => "Super".to_string(),
+            other if other.len() == 1 => other.to_ascii_uppercase(),
+            other => {
+                let mut chars = other.chars();
+                match chars.next() {
+                    Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        fallback.to_string()
+    } else {
+        parts.join("+")
+    }
 }
 
 #[cfg(test)]
@@ -304,8 +332,8 @@ mod tests {
         assert_eq!(settings.hover_delay, 1.2);
         assert!(settings.archive_after_import);
         assert_eq!(settings.sort, "oldest");
-        assert_eq!(settings.show_hotkey, "<ctrl>+<shift>+z");
-        assert_eq!(settings.capture_hotkey, "<ctrl>+alt+v");
+        assert_eq!(settings.show_hotkey, "Ctrl+Shift+Z");
+        assert_eq!(settings.capture_hotkey, "Ctrl+Alt+V");
         assert_eq!(settings.scroll_lines, 5);
         assert_eq!(settings.font_scale, 2);
         assert!(settings.close_to_tray);

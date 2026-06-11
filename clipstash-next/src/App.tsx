@@ -3,6 +3,7 @@ import {
   type ClipboardEvent,
   type FocusEvent,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type ReactNode,
   type TouchEvent,
@@ -61,7 +62,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.5";
+const CURRENT_VERSION = "2.0.6";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
@@ -143,6 +144,8 @@ function App() {
   const [fontScale, setFontScale] = useState(0);
   const [editTextareaHeight, setEditTextareaHeight] = useState(DEFAULT_EDIT_TEXTAREA_HEIGHT);
   const [pasteIntervalMs, setPasteIntervalMs] = useState(250);
+  const [showHotkey, setShowHotkey] = useState("Ctrl+Shift+V");
+  const [captureHotkey, setCaptureHotkey] = useState("Ctrl+Alt+V");
   const [expandedImageMessageIds, setExpandedImageMessageIds] = useState<number[]>([]);
   const [mediaTextDraft, setMediaTextDraft] = useState("");
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
@@ -484,6 +487,8 @@ function App() {
     setScrollLines(settings.scroll_lines);
     setFontScale(settings.font_scale);
     setEditTextareaHeight(settings.edit_textarea_height);
+    setShowHotkey(settings.show_hotkey);
+    setCaptureHotkey(settings.capture_hotkey);
     setSort(settings.sort);
     getCurrentWindow()
       .setAlwaysOnTop(settings.always_on_top)
@@ -1017,6 +1022,7 @@ function App() {
           {showComposer && (
             <MessageComposerDialog
               canSave={canCreateMedia}
+              autoFocus
               closeAriaLabel="关闭新消息"
               dialogLabel="编辑新消息"
               error={createMediaError}
@@ -1170,6 +1176,7 @@ function App() {
           hoverDelay={hoverDelay}
           openPathError={openPathError}
           pasteIntervalMs={pasteIntervalMs}
+          showHotkey={showHotkey}
           releaseCheckError={releaseCheckError}
           releaseCheckResult={releaseCheckResult}
           scrollLines={scrollLines}
@@ -1179,6 +1186,7 @@ function App() {
           stats={stats}
           startup={startup}
           startupError={startupError}
+          captureHotkey={captureHotkey}
           migrationError={migrationError}
           migrationResult={migrationResult}
           migratingLegacyData={migratingLegacyData}
@@ -1203,6 +1211,14 @@ function App() {
           onHoverDelayChange={(value) => {
             setHoverDelay(value);
             persistAppSettings({ hover_delay: value }).catch(() => undefined);
+          }}
+          onShowHotkeyChange={(value) => {
+            setShowHotkey(value);
+            persistAppSettings({ show_hotkey: value }, "呼出界面快捷键已应用").catch(() => undefined);
+          }}
+          onCaptureHotkeyChange={(value) => {
+            setCaptureHotkey(value);
+            persistAppSettings({ capture_hotkey: value }, "导入剪切板快捷键已应用").catch(() => undefined);
           }}
           onOpenReleasePage={openExternalUrl}
           onOpenPath={openLocalPath}
@@ -1458,6 +1474,7 @@ function SettingsDialog({
   migratingLegacyData,
   openPathError,
   pasteIntervalMs,
+  showHotkey,
   releaseCheckError,
   releaseCheckResult,
   scrollLines,
@@ -1467,6 +1484,7 @@ function SettingsDialog({
   stats,
   startup,
   startupError,
+  captureHotkey,
   onArchiveAfterImportChange,
   onCheckUpdates,
   onDownloadUpdate,
@@ -1474,6 +1492,8 @@ function SettingsDialog({
   onCloseToTrayChange,
   onFontScaleChange,
   onHoverDelayChange,
+  onShowHotkeyChange,
+  onCaptureHotkeyChange,
   onMigrateLegacyData,
   onOpenReleasePage,
   onOpenPath,
@@ -1496,6 +1516,7 @@ function SettingsDialog({
   migratingLegacyData: boolean;
   openPathError: string | null;
   pasteIntervalMs: number;
+  showHotkey: string;
   releaseCheckError: string | null;
   releaseCheckResult: ReleaseCheckResult | null;
   scrollLines: number;
@@ -1505,6 +1526,7 @@ function SettingsDialog({
   stats: LegacyStats;
   startup: boolean;
   startupError: string | null;
+  captureHotkey: string;
   onArchiveAfterImportChange: (checked: boolean) => void;
   onCheckUpdates: () => void;
   onDownloadUpdate: () => void;
@@ -1512,6 +1534,8 @@ function SettingsDialog({
   onCloseToTrayChange: (checked: boolean) => void;
   onFontScaleChange: (value: number) => void;
   onHoverDelayChange: (value: number) => void;
+  onShowHotkeyChange: (value: string) => void;
+  onCaptureHotkeyChange: (value: string) => void;
   onMigrateLegacyData: () => void;
   onOpenReleasePage: (url: string) => void;
   onOpenPath: (path: string) => void;
@@ -1568,6 +1592,16 @@ function SettingsDialog({
   function changeStartup(checked: boolean) {
     onStartupChange(checked);
     onStartupPersistChange(checked);
+  }
+
+  function changeShowHotkey(value: string) {
+    onShowHotkeyChange(value);
+    showAutoSavedNotice("呼出界面快捷键已应用");
+  }
+
+  function changeCaptureHotkey(value: string) {
+    onCaptureHotkeyChange(value);
+    showAutoSavedNotice("导入剪切板快捷键已应用");
   }
 
   return (
@@ -1664,15 +1698,13 @@ function SettingsDialog({
             />
             {startupError && <p className="inline-error">{startupError}</p>}
 
-            <label className="setting-field">
-              <span>呼出界面快捷键</span>
-              <input value="<ctrl>+<shift>+v" readOnly />
-            </label>
+            <HotkeyField label="呼出界面快捷键" value={showHotkey} onChange={changeShowHotkey} />
 
-            <label className="setting-field">
-              <span>导入当前剪切板快捷键</span>
-              <input value="<ctrl>+<alt>+v" readOnly />
-            </label>
+            <HotkeyField
+              label="导入当前剪切板快捷键"
+              value={captureHotkey}
+              onChange={changeCaptureHotkey}
+            />
 
             {globalShortcutErrors.map((error) => (
               <p className="inline-error" key={error}>
@@ -1831,6 +1863,37 @@ function SettingToggle({
         <strong>{label}</strong>
         <small>{description}</small>
       </span>
+    </label>
+  );
+}
+
+function HotkeyField({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const hotkey = formatKeyboardShortcut(event);
+    if (hotkey) onChange(hotkey);
+  }
+
+  return (
+    <label className="setting-field">
+      <span>{label}</span>
+      <input
+        aria-label={label}
+        value={value}
+        readOnly
+        onKeyDown={handleKeyDown}
+        onFocus={(event) => event.currentTarget.select()}
+      />
     </label>
   );
 }
@@ -2088,6 +2151,7 @@ function EditMessageDialog({
 }
 
 function MessageComposerDialog({
+  autoFocus = false,
   canSave,
   closeAriaLabel,
   dialogLabel,
@@ -2116,6 +2180,7 @@ function MessageComposerDialog({
   textDraft,
   title,
 }: {
+  autoFocus?: boolean;
   canSave: boolean;
   closeAriaLabel: string;
   dialogLabel: string;
@@ -2144,6 +2209,13 @@ function MessageComposerDialog({
   textDraft: string;
   title: string;
 }) {
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    window.setTimeout(() => textAreaRef.current?.focus(), 0);
+  }, [autoFocus]);
+
   function commitTextAreaHeight(
     event:
       | FocusEvent<HTMLTextAreaElement>
@@ -2178,6 +2250,7 @@ function MessageComposerDialog({
         <form className="text-create-form" onSubmit={onSubmit}>
           <section className="message-composer-box">
             <textarea
+              ref={textAreaRef}
               id={textAreaId}
               aria-label="消息内容"
               value={textDraft}
@@ -2998,6 +3071,30 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatKeyboardShortcut(event: ReactKeyboardEvent<HTMLInputElement>) {
+  const key = event.key;
+  if (
+    key === "Control" ||
+    key === "Shift" ||
+    key === "Alt" ||
+    key === "Meta" ||
+    key === "Process" ||
+    key === "Unidentified"
+  ) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.altKey) parts.push("Alt");
+  if (event.metaKey) parts.push("Super");
+
+  const normalizedKey = key.length === 1 ? key.toUpperCase() : key;
+  parts.push(normalizedKey);
+  return parts.join("+");
 }
 
 function isMainPasteShortcut(event: KeyboardEvent) {

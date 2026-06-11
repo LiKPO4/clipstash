@@ -60,8 +60,8 @@ const defaultAppSettings = {
   close_to_tray: true,
   archive_after_import: false,
   paste_interval_ms: 250,
-  show_hotkey: "<ctrl>+<shift>+v",
-  capture_hotkey: "<ctrl>+<alt>+v",
+  show_hotkey: "Ctrl+Shift+V",
+  capture_hotkey: "Ctrl+Alt+V",
   hover_delay: 0.8,
   scroll_lines: 1,
   font_scale: 0,
@@ -177,6 +177,9 @@ describe("media create form", () => {
     expect((within(panel).getByLabelText("消息内容") as HTMLTextAreaElement).style.height).toBe(
       "420px",
     );
+    await waitFor(() => {
+      expect(within(panel).getByLabelText("消息内容")).toBe(document.activeElement);
+    });
   });
 
   it("opens the composer when double clicking the empty list area", async () => {

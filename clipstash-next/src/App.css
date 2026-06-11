@@ -161,12 +161,29 @@ h1 {
   color: #405675;
   background: transparent;
   cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .top-actions button.active {
   color: #fff;
   background: var(--blue);
   font-weight: 700;
+}
+
+.top-actions button:hover {
+  color: #184978;
+  background: #e7effa;
+  box-shadow: 0 2px 8px rgba(9, 36, 71, 0.08);
+}
+
+.top-actions button.active:hover {
+  color: #fff;
+  background: var(--blue-deep);
+  box-shadow: 0 5px 13px rgba(63, 125, 241, 0.26);
 }
 
 .top-actions .primary-new {
@@ -182,6 +199,8 @@ h1 {
 .message-actions .import-action:hover,
 .write-submit:hover {
   background: var(--blue-deep);
+  box-shadow: 0 5px 13px rgba(63, 125, 241, 0.26);
+  transform: translateY(-1px);
 }
 
 .status,
@@ -839,6 +858,11 @@ textarea:focus,
   background: transparent;
   cursor: pointer;
   font-weight: 700;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .segmented button {
@@ -869,6 +893,19 @@ textarea:focus,
   color: #fff;
   background: var(--blue);
   box-shadow: 0 6px 14px rgba(63, 125, 241, 0.2);
+}
+
+.segmented button:hover {
+  color: #184978;
+  background: #e7effa;
+  box-shadow: 0 3px 10px rgba(9, 36, 71, 0.08);
+  transform: translateY(-1px);
+}
+
+.segmented button.active:hover {
+  color: #fff;
+  background: var(--blue-deep);
+  box-shadow: 0 7px 16px rgba(63, 125, 241, 0.26);
 }
 
 .toolbar .segmented + .segmented {
@@ -989,6 +1026,11 @@ textarea:focus,
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .message-actions .archive-action,
@@ -1002,9 +1044,31 @@ textarea:focus,
   background: #d34d45;
 }
 
+.message-actions button:hover,
+.secondary-action:hover {
+  color: #184978;
+  background: #dfeaf7;
+  box-shadow: 0 4px 10px rgba(9, 36, 71, 0.1);
+  transform: translateY(-1px);
+}
+
+.message-actions .archive-action:hover,
+.message-actions .import-action:hover {
+  color: #fff;
+  background: var(--blue-deep);
+}
+
+.message-actions .danger-action:hover {
+  color: #fff;
+  background: #b83d36;
+  box-shadow: 0 4px 10px rgba(211, 77, 69, 0.2);
+}
+
 .message-actions button:disabled {
   cursor: wait;
   opacity: 0.58;
+  transform: none;
+  box-shadow: none;
 }
 
 .message-text {
@@ -1188,6 +1252,18 @@ textarea:focus,
   cursor: pointer;
   font-size: 20px;
   line-height: 1;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.preview-close:hover {
+  color: #184978;
+  background: #dfeaf7;
+  box-shadow: 0 4px 10px rgba(9, 36, 71, 0.1);
+  transform: translateY(-1px);
 }
 
 .preview-stage {
@@ -1436,6 +1512,13 @@ textarea:focus,
   background: rgba(51, 126, 199, 0.08);
 }
 
+.link-button:hover {
+  color: #154a80;
+  background: rgba(51, 126, 199, 0.14);
+  box-shadow: 0 3px 9px rgba(51, 126, 199, 0.12);
+  transform: translateY(-1px);
+}
+
 .settings-notice {
   margin: -2px 0 0;
   color: #17815b;
@@ -1470,6 +1553,12 @@ textarea:focus,
 
 .edit-dialog-actions .secondary-action {
   margin-left: auto;
+}
+
+.composer-file-action:hover {
+  background: var(--blue-deep);
+  box-shadow: 0 5px 13px rgba(63, 125, 241, 0.26);
+  transform: translateY(-1px);
 }
 
 .delete-copy {

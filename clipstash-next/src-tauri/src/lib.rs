@@ -41,9 +41,6 @@ static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 const TRAY_SHOW_HIDE_ID: &str = "tray_show_hide";
 const TRAY_OPEN_DATA_DIR_ID: &str = "tray_open_data_dir";
 const TRAY_QUIT_ID: &str = "tray_quit";
-const SHOW_HIDE_SHORTCUT: &str = "Ctrl+Shift+V";
-const CAPTURE_CLIPBOARD_SHORTCUT: &str = "Ctrl+Alt+V";
-
 #[derive(Debug, serde::Serialize)]
 struct CaptureClipboardResult {
     kind: String,
@@ -67,6 +64,8 @@ struct DownloadUpdateResult {
 #[derive(Default)]
 struct GlobalShortcutStatus {
     errors: Mutex<Vec<String>>,
+    show_shortcut: Mutex<Option<Shortcut>>,
+    capture_shortcut: Mutex<Option<Shortcut>>,
 }
 
 #[tauri::command]
@@ -197,9 +196,12 @@ fn get_app_settings() -> Result<app_settings::AppSettings, String> {
 
 #[tauri::command]
 fn update_app_settings(
+    app: AppHandle,
     patch: app_settings::AppSettingsPatch,
 ) -> Result<app_settings::AppSettings, String> {
-    app_settings::update_settings(patch)
+    let settings = app_settings::update_settings(patch)?;
+    reload_global_shortcuts(&app, &settings);
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -470,27 +472,76 @@ fn handle_global_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutE
     }
 
     let shortcut_text = shortcut.into_string();
-    if shortcut_text == SHOW_HIDE_SHORTCUT {
-        toggle_main_window(app);
-    } else if shortcut_text == CAPTURE_CLIPBOARD_SHORTCUT {
-        let _ = capture_current_clipboard_to_app_data();
-        show_main_window(app);
+    if let Some(status) = app.try_state::<GlobalShortcutStatus>() {
+        if status
+            .show_shortcut
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|registered| registered.clone().into_string() == shortcut_text)
+            .unwrap_or(false)
+        {
+            toggle_main_window(app);
+            return;
+        }
+        if status
+            .capture_shortcut
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|registered| registered.clone().into_string() == shortcut_text)
+            .unwrap_or(false)
+        {
+            let _ = capture_current_clipboard_to_app_data();
+            show_main_window(app);
+        }
     }
 }
 
 fn setup_global_shortcuts(app: &tauri::App) {
+    let settings = app_settings::read_settings().unwrap_or_default();
+    reload_global_shortcuts(app.handle(), &settings);
+}
+
+fn reload_global_shortcuts(app: &AppHandle, settings: &app_settings::AppSettings) {
     let shortcuts = app.global_shortcut();
     let mut errors = Vec::new();
 
-    if let Err(err) = shortcuts.on_shortcuts(
-        [SHOW_HIDE_SHORTCUT, CAPTURE_CLIPBOARD_SHORTCUT],
-        handle_global_shortcut,
-    ) {
-        errors.push(format!("快捷键注册失败：{err}"));
+    if let Err(err) = shortcuts.unregister_all() {
+        errors.push(format!("清除旧快捷键失败：{err}"));
+    }
+
+    let show_shortcut = parse_global_shortcut("呼出界面快捷键", &settings.show_hotkey, &mut errors);
+    let capture_shortcut = parse_global_shortcut(
+        "导入当前剪切板快捷键",
+        &settings.capture_hotkey,
+        &mut errors,
+    );
+    let requested = [&show_shortcut, &capture_shortcut]
+        .into_iter()
+        .filter_map(|shortcut| shortcut.clone())
+        .collect::<Vec<_>>();
+
+    if !requested.is_empty() {
+        if let Err(err) = shortcuts.on_shortcuts(requested, handle_global_shortcut) {
+            errors.push(format!("快捷键注册失败：{err}"));
+        }
     }
 
     if let Some(status) = app.try_state::<GlobalShortcutStatus>() {
+        *status.show_shortcut.lock().unwrap() = show_shortcut;
+        *status.capture_shortcut.lock().unwrap() = capture_shortcut;
         *status.errors.lock().unwrap() = errors;
+    }
+}
+
+fn parse_global_shortcut(label: &str, value: &str, errors: &mut Vec<String>) -> Option<Shortcut> {
+    match value.parse::<Shortcut>() {
+        Ok(shortcut) => Some(shortcut),
+        Err(err) => {
+            errors.push(format!("{label}无效：{err}"));
+            None
+        }
     }
 }
 
