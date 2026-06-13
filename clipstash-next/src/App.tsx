@@ -15,10 +15,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
   copyLegacyMessageTextToClipboard,
@@ -34,10 +33,13 @@ import {
   getLaunchOnStartup,
   listLegacyMessages,
   migrateLegacyData,
+  moveAppDataToSelectedDir,
+  openAppPath,
   pasteLegacyImportQueueToRecentWindow,
   readCurrentClipboard,
   readDroppedFileBytes,
   readLegacyImageBytes,
+  repairAppDataDir,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
   setLaunchOnStartup,
@@ -65,7 +67,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.7";
+const CURRENT_VERSION = "2.0.8";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
@@ -216,6 +218,8 @@ function App() {
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [globalShortcutErrors, setGlobalShortcutErrors] = useState<string[]>([]);
   const [migratingLegacyData, setMigratingLegacyData] = useState(false);
+  const [movingAppData, setMovingAppData] = useState(false);
+  const [repairingAppData, setRepairingAppData] = useState(false);
   const [migrationResult, setMigrationResult] = useState<AppMigrationResult | null>(null);
   const [migrationError, setMigrationError] = useState<string | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
@@ -648,7 +652,7 @@ function App() {
   async function openLocalPath(path: string) {
     setOpenPathError(null);
     try {
-      await openPath(path);
+      await openAppPath(path);
     } catch (err) {
       setOpenPathError(err instanceof Error ? err.message : String(err));
     }
@@ -747,6 +751,65 @@ function App() {
       setMigrationError(err instanceof Error ? err.message : String(err));
     } finally {
       setMigratingLegacyData(false);
+    }
+  }
+
+  async function moveAppDataDir() {
+    if (movingAppData) return;
+
+    setMovingAppData(true);
+    setOpenPathError(null);
+    setSettingsNotice(null);
+
+    try {
+      const result = await moveAppDataToSelectedDir();
+      setStats(result.stats);
+      const nextPage = await listLegacyMessages({
+        view,
+        sort,
+        offset: 0,
+        limit: PAGE_LIMIT,
+      });
+      setPage(nextPage);
+      setSettingsNotice("数据目录已迁移，原目录已保留");
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "已取消选择数据目录") {
+        setOpenPathError(message);
+      }
+    } finally {
+      setMovingAppData(false);
+    }
+  }
+
+  async function repairAppData() {
+    if (repairingAppData) return;
+
+    setRepairingAppData(true);
+    setOpenPathError(null);
+    setSettingsNotice(null);
+
+    try {
+      const result = await repairAppDataDir();
+      setStats(result.stats);
+      const nextPage = await listLegacyMessages({
+        view,
+        sort,
+        offset: 0,
+        limit: PAGE_LIMIT,
+      });
+      setPage(nextPage);
+      setSettingsNotice(
+        result.copied_images > 0 || result.copied_db
+          ? `已修复数据目录，补回 ${result.copied_images} 张图片`
+          : "数据目录无需修复",
+      );
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      setOpenPathError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRepairingAppData(false);
     }
   }
 
@@ -1290,6 +1353,8 @@ function App() {
           migrationError={migrationError}
           migrationResult={migrationResult}
           migratingLegacyData={migratingLegacyData}
+          movingAppData={movingAppData}
+          repairingAppData={repairingAppData}
           onArchiveAfterImportChange={(checked) => {
             setArchiveAfterImport(checked);
             persistAppSettings({ archive_after_import: checked }).catch(() => undefined);
@@ -1323,6 +1388,8 @@ function App() {
           onOpenReleasePage={openExternalUrl}
           onOpenPath={openLocalPath}
           onMigrateLegacyData={runLegacyMigration}
+          onMoveAppDataDir={moveAppDataDir}
+          onRepairAppData={repairAppData}
           onPasteIntervalChange={(value) => {
             setPasteIntervalMs(value);
             persistAppSettings({ paste_interval_ms: value }).catch(() => undefined);
@@ -1572,6 +1639,8 @@ function SettingsDialog({
   migrationError,
   migrationResult,
   migratingLegacyData,
+  movingAppData,
+  repairingAppData,
   openPathError,
   pasteIntervalMs,
   showHotkey,
@@ -1595,6 +1664,8 @@ function SettingsDialog({
   onShowHotkeyChange,
   onCaptureHotkeyChange,
   onMigrateLegacyData,
+  onMoveAppDataDir,
+  onRepairAppData,
   onOpenReleasePage,
   onOpenPath,
   onPasteIntervalChange,
@@ -1614,6 +1685,8 @@ function SettingsDialog({
   migrationError: string | null;
   migrationResult: AppMigrationResult | null;
   migratingLegacyData: boolean;
+  movingAppData: boolean;
+  repairingAppData: boolean;
   openPathError: string | null;
   pasteIntervalMs: number;
   showHotkey: string;
@@ -1637,6 +1710,8 @@ function SettingsDialog({
   onShowHotkeyChange: (value: string) => void;
   onCaptureHotkeyChange: (value: string) => void;
   onMigrateLegacyData: () => void;
+  onMoveAppDataDir: () => void;
+  onRepairAppData: () => void;
   onOpenReleasePage: (url: string) => void;
   onOpenPath: (path: string) => void;
   onPasteIntervalChange: (value: number) => void;
@@ -1877,6 +1952,12 @@ function SettingsDialog({
               <button type="button" onClick={onMigrateLegacyData} disabled={migratingLegacyData}>
                 {migratingLegacyData ? "迁移中..." : "迁移旧数据"}
               </button>
+              <button type="button" onClick={onMoveAppDataDir} disabled={movingAppData}>
+                {movingAppData ? "迁移中..." : "迁移数据目录"}
+              </button>
+              <button type="button" onClick={onRepairAppData} disabled={repairingAppData}>
+                {repairingAppData ? "修复中..." : "修复数据目录"}
+              </button>
               <button type="button" onClick={() => onOpenPath(stats.data_dir)}>
                 打开数据目录
               </button>
@@ -2039,6 +2120,32 @@ function MessageList({
   previewDelaySeconds: number;
   scrollLines: number;
 }) {
+  const [imageSources, setImageSources] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let alive = true;
+    const images = messages.flatMap((message) => message.images).filter((image) => image.exists);
+
+    Promise.all(
+      images.map(async (image) => {
+        try {
+          return [image.path, await legacyImageToDataUrl(image)] as const;
+        } catch {
+          return [image.path, ""] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!alive) return;
+      setImageSources(
+        Object.fromEntries(entries.filter(([, src]) => src.length > 0)),
+      );
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [messages]);
+
   function requestMoreIfNearBottom(element: HTMLElement) {
     if (!hasMore || loadingMore) return;
 
@@ -2079,7 +2186,7 @@ function MessageList({
         const isExpanded = expandedImageMessageIds.includes(message.id);
         const visibleImages = isExpanded ? message.images : message.images.slice(0, 3);
         const hiddenImageCount = message.images.length - visibleImages.length;
-        const previewImages = buildPreviewImages(message.images);
+        const previewImages = buildPreviewImages(message.images, imageSources);
 
         return (
           <article className="message-card" key={message.id}>
@@ -2155,6 +2262,7 @@ function MessageList({
                       onPreview={onPreview}
                       previewDelaySeconds={previewDelaySeconds}
                       previewImages={previewImages}
+                      src={imageSources[image.path] ?? ""}
                     />
                   ))}
                 </div>
@@ -2627,17 +2735,19 @@ function MessageImageTile({
   onPreview,
   previewDelaySeconds,
   previewImages,
+  src,
 }: {
   image: LegacyMessageImage;
   onCopy: (image: LegacyMessageImage) => void;
   onPreview: (image: PreviewImage | null) => void;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
+  src: string;
 }) {
   const [broken, setBroken] = useState(false);
   const previewTimerRef = useRef<number | null>(null);
   const canRenderImage = image.exists && !broken;
-  const src = canRenderImage ? getAssetSrc(image.path) : "";
+  const imageSrc = canRenderImage ? src : "";
   const previewIndex = previewImages.findIndex((item) => item.path === image.path);
 
   function clearPreviewTimer() {
@@ -2666,7 +2776,7 @@ function MessageImageTile({
           naturalWidth,
           naturalHeight,
         ),
-        src,
+        src: imageSrc,
         total: previewImages.length,
       };
       showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
@@ -2679,7 +2789,7 @@ function MessageImageTile({
     onPreview(null);
   }
 
-  if (canRenderImage && src) {
+  if (canRenderImage && imageSrc) {
     return (
       <div className="image-tile" title={image.path}>
         <button
@@ -2694,7 +2804,7 @@ function MessageImageTile({
           <img
             alt={image.filename}
             loading="lazy"
-            src={src}
+            src={imageSrc}
             onError={() => setBroken(true)}
           />
         </button>
@@ -2953,13 +3063,13 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
-function buildPreviewImages(images: LegacyMessageImage[]) {
+function buildPreviewImages(images: LegacyMessageImage[], imageSources: Record<string, string>) {
   return images
     .filter((image) => image.exists)
     .map((image) => ({
       filename: image.filename,
       path: image.path,
-      src: getAssetSrc(image.path),
+      src: imageSources[image.path] ?? "",
     }))
     .filter((image) => image.src.length > 0);
 }
@@ -2992,7 +3102,7 @@ async function composerImageItemToPreview(item: ComposerImageItem): Promise<Prev
   return {
     filename: item.image.filename,
     path: item.image.path,
-    src: item.image.exists ? getAssetSrc(item.image.path) : "",
+    src: item.image.exists ? await legacyImageToDataUrl(item.image) : "",
   };
 }
 
@@ -3080,12 +3190,19 @@ function shiftPreviewImage(current: PreviewImage | null, offset: number) {
   };
 }
 
-function getAssetSrc(path: string) {
-  try {
-    return convertFileSrc(path);
-  } catch {
-    return "";
+async function legacyImageToDataUrl(image: LegacyMessageImage) {
+  const bytes = await readLegacyImageBytes(image.filename);
+  return bytesToDataUrl(bytes, mimeTypeFromImagePath(image.filename));
+}
+
+function bytesToDataUrl(bytes: number[], mimeType: string) {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.slice(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
   }
+  return `data:${mimeType};base64,${window.btoa(binary)}`;
 }
 
 function loadAppData(view: MessageView, sort: SortOrder) {

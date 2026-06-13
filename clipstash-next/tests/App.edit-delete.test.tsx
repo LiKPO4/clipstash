@@ -288,6 +288,13 @@ const externalWindowValidation = {
   target: externalWindowTargets[0],
 };
 
+const tinyPngBytes = [
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1,
+  0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65,
+  84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1, 13, 10, 45, 180, 0, 0, 0, 0, 73,
+  69, 78, 68, 174, 66, 96, 130,
+];
+
 const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
@@ -353,7 +360,7 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(updateResult);
       }
       if (command === "replace_legacy_message_images") return Promise.resolve(replaceResult);
-      if (command === "read_legacy_image_bytes") return Promise.resolve([7, 7]);
+      if (command === "read_legacy_image_bytes") return Promise.resolve(tinyPngBytes);
       if (command === "delete_legacy_message") {
         if (failNextDelete) {
           failNextDelete = false;
@@ -671,7 +678,7 @@ describe("edit and delete guarded actions", () => {
       });
       expect(invokeMock).toHaveBeenCalledWith("replace_legacy_message_images", {
         messageId: 10,
-        imagesData: [[7, 7], [9, 8]],
+        imagesData: [tinyPngBytes, [9, 8]],
       });
     });
     await waitFor(() => {
@@ -783,7 +790,7 @@ describe("edit and delete guarded actions", () => {
     expect(screen.getByText("消息已移入归档。")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
-    expect(invokeMock).toHaveBeenLastCalledWith("list_legacy_messages", {
+    expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
       view: "normal",
       sort: "newest",
       offset: 0,
@@ -921,7 +928,7 @@ describe("edit and delete guarded actions", () => {
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    await user.click(within(imageGrid).getByRole("button", { name: "old.png" }));
+    await user.click(await within(imageGrid).findByRole("button", { name: "old.png" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {

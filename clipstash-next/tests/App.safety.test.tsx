@@ -102,9 +102,32 @@ describe("settings storage panel", () => {
           stats: migratedStats,
         });
       }
+      if (command === "move_app_data_to_selected_dir") {
+        migratedStats = {
+          ...stats,
+          data_dir: "D:\\ClipStashData",
+          db_path: "D:\\ClipStashData\\clipstash.db",
+          images_dir: "D:\\ClipStashData\\images",
+        };
+        return Promise.resolve({
+          previous_data_dir: stats.data_dir,
+          data_dir: migratedStats.data_dir,
+          stats: migratedStats,
+        });
+      }
+      if (command === "repair_app_data_dir") {
+        return Promise.resolve({
+          copied_db: false,
+          copied_images: 2,
+          skipped_images: 3,
+          source_data_dir: stats.data_dir,
+          stats: migratedStats,
+        });
+      }
+      if (command === "open_app_path") return Promise.resolve(undefined);
       if (command === "download_and_open_update_installer") {
         return Promise.resolve({
-          installer_path: "C:\\Temp\\ClipStash Next_2.0.8_x64-setup.exe",
+          installer_path: "C:\\Temp\\ClipStash Next_2.0.9_x64-setup.exe",
         });
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
@@ -137,6 +160,8 @@ describe("settings storage panel", () => {
     expect(within(panel).getByRole("button", { name: "打开数据目录" })).toBeTruthy();
     expect(within(panel).getByRole("button", { name: "打开图片目录" })).toBeTruthy();
     expect(within(panel).getByRole("button", { name: "迁移旧数据" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "迁移数据目录" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "修复数据目录" })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: "刷新审计" })).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("get_legacy_safety_report");
   });
@@ -160,6 +185,41 @@ describe("settings storage panel", () => {
       offset: 0,
       limit: 30,
     });
+
+  });
+
+  it("opens storage paths through backend and refreshes paths after moving app data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    const panel = within(dialog).getByRole("region", { name: "本地存储" });
+
+    await user.click(within(panel).getByRole("button", { name: "打开数据目录" }));
+    expect(invokeMock).toHaveBeenCalledWith("open_app_path", { path: stats.data_dir });
+
+    await user.click(within(panel).getByRole("button", { name: "打开图片目录" }));
+    expect(invokeMock).toHaveBeenCalledWith("open_app_path", { path: stats.images_dir });
+
+    await user.click(within(panel).getByRole("button", { name: "迁移数据目录" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("move_app_data_to_selected_dir");
+    });
+    expect(await within(dialog).findByText("数据目录已迁移，原目录已保留")).toBeTruthy();
+    expect(await within(panel).findByText("D:\\ClipStashData")).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
+      view: "normal",
+      sort: "newest",
+      offset: 0,
+      limit: 30,
+    });
+
+    await user.click(within(panel).getByRole("button", { name: "修复数据目录" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("repair_app_data_dir");
+    });
+    expect(await within(dialog).findByText("已修复数据目录，补回 2 张图片")).toBeTruthy();
   });
 
   it("auto-saves settings changes without save or cancel buttons", async () => {
@@ -213,19 +273,19 @@ describe("settings storage panel", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.8",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.8",
+          tag_name: "v2.0.9",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.9",
           body: "更新说明",
           assets: [
             {
-              name: "ClipStash Next_2.0.8_x64_en-US.msi",
+              name: "ClipStash Next_2.0.9_x64_en-US.msi",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.8/ClipStash.Next_2.0.8_x64_en-US.msi",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.9/ClipStash.Next_2.0.9_x64_en-US.msi",
             },
             {
-              name: "ClipStash Next_2.0.8_x64-setup.exe",
+              name: "ClipStash Next_2.0.9_x64-setup.exe",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.8/ClipStash.Next_2.0.8_x64-setup.exe",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.9/ClipStash.Next_2.0.9_x64-setup.exe",
             },
           ],
         }),
@@ -233,13 +293,13 @@ describe("settings storage panel", () => {
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.8")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.0.9")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.8/ClipStash.Next_2.0.8_x64-setup.exe",
-      filename: "ClipStash Next_2.0.8_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.9/ClipStash.Next_2.0.9_x64-setup.exe",
+      filename: "ClipStash Next_2.0.9_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

@@ -27,7 +27,7 @@ use crate::{
 };
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -35,6 +35,7 @@ use std::{
 
 const APP_DATA_DIR_NAME: &str = "ClipStash Next";
 const APP_DB_NAME: &str = "clipstash.db";
+const DATA_LOCATION_FILE_NAME: &str = "data-location.json";
 
 #[derive(Serialize)]
 pub struct AppStats {
@@ -59,6 +60,27 @@ pub struct AppMigrationResult {
     pub stats: AppStats,
 }
 
+#[derive(Serialize)]
+pub struct AppDataMoveResult {
+    pub previous_data_dir: String,
+    pub data_dir: String,
+    pub stats: AppStats,
+}
+
+#[derive(Serialize)]
+pub struct AppDataRepairResult {
+    pub copied_db: bool,
+    pub copied_images: i64,
+    pub skipped_images: i64,
+    pub source_data_dir: String,
+    pub stats: AppStats,
+}
+
+#[derive(Deserialize, Serialize)]
+struct DataLocationConfig {
+    data_dir: String,
+}
+
 struct AppPaths {
     data_dir: PathBuf,
     db_path: PathBuf,
@@ -67,6 +89,10 @@ struct AppPaths {
 
 pub fn app_data_dir_path() -> Result<PathBuf, String> {
     Ok(app_paths()?.data_dir)
+}
+
+pub fn default_app_data_dir_path() -> Result<PathBuf, String> {
+    Ok(appdata_base_dir()?.join(APP_DATA_DIR_NAME))
 }
 
 pub fn ensure_app_data_ready() -> Result<AppStats, String> {
@@ -96,6 +122,103 @@ pub fn migrate_legacy_data() -> Result<AppMigrationResult, String> {
         Connection::open(&paths.db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
     ensure_app_schema(&conn)?;
     merge_legacy_data(&mut conn, &paths)
+}
+
+pub fn move_app_data_to_dir(target_dir: PathBuf) -> Result<AppDataMoveResult, String> {
+    ensure_app_data_ready()?;
+    let current_paths = app_paths()?;
+    let (current_dir, target_dir) = move_app_data_files(
+        &current_paths.data_dir,
+        target_dir,
+        &default_app_data_dir_path()?,
+    )?;
+    let stats = read_app_stats()?;
+
+    Ok(AppDataMoveResult {
+        previous_data_dir: path_to_string(&current_dir),
+        data_dir: path_to_string(&target_dir),
+        stats,
+    })
+}
+
+pub fn repair_app_data_dir() -> Result<AppDataRepairResult, String> {
+    let paths = app_paths()?;
+    let default_dir = default_app_data_dir_path()?;
+    repair_app_data_dir_from_default(&paths, &default_dir)
+}
+
+fn repair_app_data_dir_from_default(
+    paths: &AppPaths,
+    default_dir: &Path,
+) -> Result<AppDataRepairResult, String> {
+    let current_dir = normalize_existing_or_create_dir(&paths.data_dir)?;
+    let source_dir = normalize_existing_or_create_dir(&default_dir)?;
+
+    if current_dir == source_dir {
+        return Ok(AppDataRepairResult {
+            copied_db: false,
+            copied_images: 0,
+            skipped_images: 0,
+            source_data_dir: path_to_string(&source_dir),
+            stats: read_app_stats_from_paths(paths)?,
+        });
+    }
+
+    let mut copied_db = false;
+    let source_db = source_dir.join(APP_DB_NAME);
+    if source_db.is_file() && !paths.db_path.is_file() {
+        fs::copy(&source_db, &paths.db_path).map_err(|err| {
+            format!(
+                "修复数据库失败：{} -> {}：{err}",
+                source_db.display(),
+                paths.db_path.display()
+            )
+        })?;
+        copied_db = true;
+    }
+
+    let mut copied_images = 0_i64;
+    let mut skipped_images = 0_i64;
+    let source_images_dir = source_dir.join("images");
+    fs::create_dir_all(&paths.images_dir).map_err(|err| format!("创建图片目录失败：{err}"))?;
+    if source_images_dir.is_dir() {
+        for entry in fs::read_dir(&source_images_dir).map_err(|err| {
+            format!(
+                "读取修复来源图片目录失败：{}：{err}",
+                source_images_dir.display()
+            )
+        })? {
+            let entry = entry.map_err(|err| format!("读取修复来源图片失败：{err}"))?;
+            let source_path = entry.path();
+            let file_type = entry.file_type().map_err(|err| {
+                format!("读取修复来源文件类型失败：{}：{err}", source_path.display())
+            })?;
+            if !file_type.is_file() {
+                continue;
+            }
+            let target_path = paths.images_dir.join(entry.file_name());
+            if target_path.exists() {
+                skipped_images += 1;
+                continue;
+            }
+            fs::copy(&source_path, &target_path).map_err(|err| {
+                format!(
+                    "修复图片失败：{} -> {}：{err}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+            copied_images += 1;
+        }
+    }
+
+    Ok(AppDataRepairResult {
+        copied_db,
+        copied_images,
+        skipped_images,
+        source_data_dir: path_to_string(&source_dir),
+        stats: read_app_stats_from_paths(paths)?,
+    })
 }
 
 pub fn list_messages(
@@ -232,16 +355,124 @@ fn ready_paths() -> Result<AppPaths, String> {
 }
 
 fn app_paths() -> Result<AppPaths, String> {
-    let base = env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .ok_or_else(|| "无法定位 Windows 应用数据目录".to_string())?;
-    let data_dir = base.join(APP_DATA_DIR_NAME);
+    let data_dir = configured_app_data_dir()?;
     Ok(AppPaths {
         db_path: data_dir.join(APP_DB_NAME),
         images_dir: data_dir.join("images"),
         data_dir,
     })
+}
+
+fn appdata_base_dir() -> Result<PathBuf, String> {
+    env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .ok_or_else(|| "无法定位 Windows 应用数据目录".to_string())
+}
+
+fn configured_app_data_dir() -> Result<PathBuf, String> {
+    let default_dir = default_app_data_dir_path()?;
+    let location_path = default_dir.join(DATA_LOCATION_FILE_NAME);
+    let Ok(text) = fs::read_to_string(&location_path) else {
+        return Ok(default_dir);
+    };
+    let config = serde_json::from_str::<DataLocationConfig>(&text)
+        .map_err(|err| format!("解析数据目录配置失败：{}：{err}", location_path.display()))?;
+    let trimmed = config.data_dir.trim();
+    if trimmed.is_empty() {
+        return Ok(default_dir);
+    }
+    Ok(PathBuf::from(trimmed))
+}
+
+fn write_data_location_at(default_dir: &Path, data_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(&default_dir).map_err(|err| format!("创建默认数据目录失败：{err}"))?;
+    let location_path = default_dir.join(DATA_LOCATION_FILE_NAME);
+    let default_dir = normalize_existing_dir(&default_dir)?;
+    let data_dir = normalize_existing_dir(data_dir)?;
+
+    if data_dir == default_dir {
+        if location_path.exists() {
+            fs::remove_file(&location_path).map_err(|err| {
+                format!("移除数据目录配置失败：{}：{err}", location_path.display())
+            })?;
+        }
+        return Ok(());
+    }
+
+    let text = serde_json::to_string_pretty(&DataLocationConfig {
+        data_dir: path_to_string(&data_dir),
+    })
+    .map_err(|err| format!("序列化数据目录配置失败：{err}"))?;
+    fs::write(&location_path, text)
+        .map_err(|err| format!("写入数据目录配置失败：{}：{err}", location_path.display()))
+}
+
+fn move_app_data_files(
+    current_data_dir: &Path,
+    target_dir: PathBuf,
+    default_data_dir: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let target_dir = normalize_target_data_dir(target_dir)?;
+    let current_dir = normalize_existing_dir(current_data_dir)?;
+
+    if target_dir == current_dir {
+        return Err("新数据目录和当前数据目录相同".to_string());
+    }
+    if target_dir.starts_with(&current_dir) {
+        return Err("新数据目录不能放在当前数据目录里面".to_string());
+    }
+
+    fs::create_dir_all(&target_dir).map_err(|err| format!("创建新数据目录失败：{err}"))?;
+    copy_dir_contents(&current_dir, &target_dir)?;
+    write_data_location_at(default_data_dir, &target_dir)?;
+    Ok((current_dir, target_dir))
+}
+
+fn normalize_target_data_dir(path: PathBuf) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() {
+        return Err("没有选择新的数据目录".to_string());
+    }
+    fs::create_dir_all(&path)
+        .map_err(|err| format!("创建新数据目录失败：{}：{err}", path.display()))?;
+    normalize_existing_dir(&path)
+}
+
+fn normalize_existing_dir(path: &Path) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|err| format!("读取目录路径失败：{}：{err}", path.display()))
+}
+
+fn normalize_existing_or_create_dir(path: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(path).map_err(|err| format!("创建目录失败：{}：{err}", path.display()))?;
+    normalize_existing_dir(path)
+}
+
+fn copy_dir_contents(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target)
+        .map_err(|err| format!("创建目标目录失败：{}：{err}", target.display()))?;
+    for entry in fs::read_dir(source)
+        .map_err(|err| format!("读取当前数据目录失败：{}：{err}", source.display()))?
+    {
+        let entry = entry.map_err(|err| format!("读取当前数据目录失败：{err}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("读取文件类型失败：{}：{err}", source_path.display()))?;
+        if file_type.is_dir() {
+            copy_dir_contents(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &target_path).map_err(|err| {
+                format!(
+                    "复制数据文件失败：{} -> {}：{err}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
@@ -834,6 +1065,100 @@ mod tests {
         assert_eq!(fs::read(&legacy_image).unwrap(), legacy_image_before);
 
         drop(conn);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn moves_app_data_to_selected_dir_without_deleting_previous_files() {
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-app-data-move-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+
+        let default_dir = base.join(APP_DATA_DIR_NAME);
+        let current_dir = base.join("Current ClipStash Data");
+        fs::create_dir_all(current_dir.join("images")).unwrap();
+        fs::write(current_dir.join(APP_DB_NAME), b"db").unwrap();
+        fs::write(current_dir.join("images").join("one.png"), tiny_png_bytes()).unwrap();
+        fs::write(current_dir.join("settings.json"), b"{\"sort\":\"oldest\"}").unwrap();
+        let current_db_bytes = fs::read(current_dir.join(APP_DB_NAME)).unwrap();
+
+        let target_dir = base.join("Moved ClipStash Data");
+        let (previous_data_dir, moved_data_dir) =
+            move_app_data_files(&current_dir, target_dir.clone(), &default_dir).unwrap();
+
+        assert_eq!(
+            path_to_string(&previous_data_dir),
+            path_to_string(&current_dir.canonicalize().unwrap())
+        );
+        assert_eq!(
+            path_to_string(&moved_data_dir),
+            path_to_string(&target_dir.canonicalize().unwrap())
+        );
+        assert!(current_dir.join(APP_DB_NAME).is_file());
+        assert!(current_dir.join("images").join("one.png").is_file());
+        assert_eq!(
+            fs::read(target_dir.join(APP_DB_NAME)).unwrap(),
+            current_db_bytes
+        );
+        assert!(target_dir.join("images").join("one.png").is_file());
+
+        let location_text =
+            fs::read_to_string(base.join(APP_DATA_DIR_NAME).join(DATA_LOCATION_FILE_NAME)).unwrap();
+        assert!(location_text.contains("Moved ClipStash Data"));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn repairs_moved_app_data_by_copying_missing_files_from_default_dir() {
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-app-data-repair-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+
+        let default_dir = base.join(APP_DATA_DIR_NAME);
+        let current_dir = base.join("Moved ClipStash Data");
+        fs::create_dir_all(default_dir.join("images")).unwrap();
+        fs::create_dir_all(current_dir.join("images")).unwrap();
+        fs::write(
+            default_dir.join("images").join("missing.png"),
+            b"from-default",
+        )
+        .unwrap();
+        fs::write(default_dir.join("images").join("kept.png"), b"default-kept").unwrap();
+        fs::write(current_dir.join("images").join("kept.png"), b"current-kept").unwrap();
+
+        let current_paths = AppPaths {
+            data_dir: current_dir.clone(),
+            db_path: current_dir.join(APP_DB_NAME),
+            images_dir: current_dir.join("images"),
+        };
+        let default_conn = Connection::open(default_dir.join(APP_DB_NAME)).unwrap();
+        ensure_app_schema(&default_conn).unwrap();
+        drop(default_conn);
+        let default_db_bytes = fs::read(default_dir.join(APP_DB_NAME)).unwrap();
+
+        let result = repair_app_data_dir_from_default(&current_paths, &default_dir).unwrap();
+
+        assert!(result.copied_db);
+        assert_eq!(result.copied_images, 1);
+        assert_eq!(result.skipped_images, 1);
+        assert_eq!(
+            fs::read(current_dir.join("images").join("missing.png")).unwrap(),
+            b"from-default"
+        );
+        assert_eq!(
+            fs::read(current_dir.join("images").join("kept.png")).unwrap(),
+            b"current-kept"
+        );
+        assert_eq!(
+            fs::read(current_dir.join(APP_DB_NAME)).unwrap(),
+            default_db_bytes
+        );
+
         fs::remove_dir_all(base).unwrap();
     }
 }

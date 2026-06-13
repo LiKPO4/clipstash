@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppMigrationResult,
+  AppDataMoveResult,
+  AppDataRepairResult,
   AppSettings,
   AppSettingsPatch,
   ClipboardContent,
@@ -33,6 +35,18 @@ export function getLegacyStats() {
 
 export function migrateLegacyData() {
   return invoke<AppMigrationResult>("migrate_legacy_data");
+}
+
+export function moveAppDataToSelectedDir() {
+  return invoke<AppDataMoveResult>("move_app_data_to_selected_dir");
+}
+
+export function openAppPath(path: string) {
+  return invoke<void>("open_app_path", { path });
+}
+
+export function repairAppDataDir() {
+  return invoke<AppDataRepairResult>("repair_app_data_dir");
 }
 
 export function getAppSettings() {

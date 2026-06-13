@@ -19,6 +19,20 @@ export type AppMigrationResult = {
   stats: LegacyStats;
 };
 
+export type AppDataMoveResult = {
+  previous_data_dir: string;
+  data_dir: string;
+  stats: LegacyStats;
+};
+
+export type AppDataRepairResult = {
+  copied_db: boolean;
+  copied_images: number;
+  skipped_images: number;
+  source_data_dir: string;
+  stats: LegacyStats;
+};
+
 export type ClipboardContent = {
   kind: "text" | "image";
   text: string | null;

@@ -89,6 +89,28 @@ fn migrate_legacy_data() -> Result<app_data::AppMigrationResult, String> {
 }
 
 #[tauri::command]
+fn open_app_path(path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path.trim());
+    if !path.is_dir() {
+        return Err(format!("目录不存在：{}", path.display()));
+    }
+    open_path_in_file_manager(&path)
+}
+
+#[tauri::command]
+fn move_app_data_to_selected_dir() -> Result<app_data::AppDataMoveResult, String> {
+    let Some(target_dir) = pick_folder_with_windows_dialog()? else {
+        return Err("已取消选择数据目录".to_string());
+    };
+    app_data::move_app_data_to_dir(target_dir)
+}
+
+#[tauri::command]
+fn repair_app_data_dir() -> Result<app_data::AppDataRepairResult, String> {
+    app_data::repair_app_data_dir()
+}
+
+#[tauri::command]
 fn download_and_open_update_installer(
     download_url: String,
     filename: String,
@@ -573,17 +595,63 @@ fn parse_global_shortcut(label: &str, value: &str, errors: &mut Vec<String>) -> 
 
 fn open_app_data_dir() {
     if let Ok(stats) = app_data::read_app_stats() {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = std::process::Command::new("explorer")
-                .arg(stats.data_dir)
-                .spawn();
-        }
+        let _ = open_path_in_file_manager(&std::path::PathBuf::from(stats.data_dir));
+    }
+}
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = open::that(stats.data_dir);
+fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("打开目录失败：{}：{err}", path.display()))?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        open::that(path).map_err(|err| format!("打开目录失败：{}：{err}", path.display()))?;
+        Ok(())
+    }
+}
+
+fn pick_folder_with_windows_dialog() -> Result<Option<std::path::PathBuf>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择 ClipStash Next 数据目录'
+$dialog.ShowNewFolderButton = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.SelectedPath
+}
+"#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .output()
+            .map_err(|err| format!("打开目录选择窗口失败：{err}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if stderr.is_empty() {
+                "目录选择窗口异常退出".to_string()
+            } else {
+                stderr
+            });
         }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(std::path::PathBuf::from(selected)))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前平台暂不支持选择数据目录".to_string())
     }
 }
 
@@ -693,6 +761,8 @@ pub fn run() {
             list_external_window_targets,
             list_legacy_messages,
             migrate_legacy_data,
+            move_app_data_to_selected_dir,
+            open_app_path,
             paste_legacy_import_queue,
             paste_legacy_import_queue_to_recent_window,
             paste_legacy_import_queue_with_optional_archive,
@@ -701,6 +771,7 @@ pub fn run() {
             read_dropped_file_bytes,
             read_legacy_image_bytes,
             read_current_clipboard,
+            repair_app_data_dir,
             replace_legacy_message_images,
             set_legacy_message_archived,
             set_launch_on_startup,
