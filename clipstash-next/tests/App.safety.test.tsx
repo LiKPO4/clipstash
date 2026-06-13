@@ -104,7 +104,7 @@ describe("settings storage panel", () => {
       }
       if (command === "download_and_open_update_installer") {
         return Promise.resolve({
-          installer_path: "C:\\Temp\\ClipStash Next_2.0.7_x64-setup.exe",
+          installer_path: "C:\\Temp\\ClipStash Next_2.0.8_x64-setup.exe",
         });
       }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
@@ -213,19 +213,19 @@ describe("settings storage panel", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.7",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.7",
+          tag_name: "v2.0.8",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.8",
           body: "更新说明",
           assets: [
             {
-              name: "ClipStash Next_2.0.7_x64_en-US.msi",
+              name: "ClipStash Next_2.0.8_x64_en-US.msi",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.7/ClipStash.Next_2.0.7_x64_en-US.msi",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.8/ClipStash.Next_2.0.8_x64_en-US.msi",
             },
             {
-              name: "ClipStash Next_2.0.7_x64-setup.exe",
+              name: "ClipStash Next_2.0.8_x64-setup.exe",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.7/ClipStash.Next_2.0.7_x64-setup.exe",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.8/ClipStash.Next_2.0.8_x64-setup.exe",
             },
           ],
         }),
@@ -233,13 +233,13 @@ describe("settings storage panel", () => {
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.7")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.0.8")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.7/ClipStash.Next_2.0.7_x64-setup.exe",
-      filename: "ClipStash Next_2.0.7_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.8/ClipStash.Next_2.0.8_x64-setup.exe",
+      filename: "ClipStash Next_2.0.8_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

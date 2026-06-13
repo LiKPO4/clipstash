@@ -1,6 +1,7 @@
 import {
   type ChangeEvent,
   type ClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type FocusEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -35,6 +36,8 @@ import {
   migrateLegacyData,
   pasteLegacyImportQueueToRecentWindow,
   readCurrentClipboard,
+  readDroppedFileBytes,
+  readLegacyImageBytes,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
   setLaunchOnStartup,
@@ -62,7 +65,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.6";
+const CURRENT_VERSION = "2.0.7";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
@@ -101,6 +104,18 @@ type PreviewImageItem = {
   path: string;
   src: string;
 };
+
+type ComposerImageItem =
+  | {
+      file: File;
+      id: string;
+      kind: "file";
+    }
+  | {
+      id: string;
+      image: LegacyMessageImage;
+      kind: "existing";
+    };
 
 type EditResult = LegacyCreateTextMessageResult | LegacyReplaceImagesResult;
 
@@ -155,7 +170,7 @@ function App() {
   const [createMediaError, setCreateMediaError] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<LegacyMessage | null>(null);
   const [editTextDraft, setEditTextDraft] = useState("");
-  const [editFiles, setEditFiles] = useState<File[]>([]);
+  const [editImageItems, setEditImageItems] = useState<ComposerImageItem[]>([]);
   const [editPreviewImages, setEditPreviewImages] = useState<PreviewImageItem[]>([]);
   const [editInputKey, setEditInputKey] = useState(0);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -284,11 +299,7 @@ function App() {
     let alive = true;
 
     Promise.all(
-      editFiles.map(async (file, index) => ({
-        filename: file.name,
-        path: `edit:${index}:${file.name}:${file.size}`,
-        src: await fileToDataUrl(file),
-      })),
+      editImageItems.map(async (item) => composerImageItemToPreview(item)),
     ).then((previewImages) => {
       if (alive) setEditPreviewImages(previewImages);
     });
@@ -296,7 +307,7 @@ function App() {
     return () => {
       alive = false;
     };
-  }, [editFiles]);
+  }, [editImageItems]);
 
   useEffect(() => {
     if (!copyError && !copyResult && !copyImageError && !copyImageResult) return;
@@ -375,6 +386,40 @@ function App() {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let cleanup: (() => void) | null = null;
+    const currentWindow = getCurrentWindow();
+    if (typeof currentWindow.onDragDropEvent !== "function") {
+      return () => {
+        alive = false;
+      };
+    }
+
+    currentWindow
+      .onDragDropEvent((event) => {
+        if (!alive || event.payload.type !== "drop") return;
+        handleNativeDroppedPaths(event.payload.paths).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          if (showComposer) {
+            setCreateMediaError(message);
+          } else if (editingMessage) {
+            setEditError(message);
+          }
+        });
+      })
+      .then((unlisten) => {
+        cleanup = unlisten;
+        if (!alive) unlisten();
+      })
+      .catch(() => undefined);
+
+    return () => {
+      alive = false;
+      cleanup?.();
+    };
+  }, [showComposer, editingMessage?.id]);
 
   useEffect(() => {
     let alive = true;
@@ -722,6 +767,11 @@ function App() {
     setCreateMediaError(null);
   }
 
+  function dropMediaFiles(files: File[]) {
+    setMediaFiles((currentFiles) => [...currentFiles, ...files]);
+    setCreateMediaError(null);
+  }
+
   function removeMediaFile(indexToRemove: number) {
     setMediaFiles((currentFiles) =>
       currentFiles.filter((_, index) => index !== indexToRemove),
@@ -763,7 +813,7 @@ function App() {
   function openEditMessage(message: LegacyMessage) {
     setEditingMessage(message);
     setEditTextDraft(message.text_content ?? "");
-    setEditFiles([]);
+    setEditImageItems(message.images.map(existingImageToComposerItem));
     setEditInputKey((key) => key + 1);
     setEditError(null);
   }
@@ -775,7 +825,13 @@ function App() {
   }
 
   function selectEditFiles(event: ChangeEvent<HTMLInputElement>) {
-    setEditFiles((currentFiles) => [...currentFiles, ...Array.from(event.target.files ?? [])]);
+    const selectedFiles = Array.from(event.target.files ?? []);
+    setEditImageItems((currentItems) => [
+      ...currentItems,
+      ...selectedFiles.map((file, index) =>
+        fileToComposerItem(file, `edit:${currentItems.length + index}`),
+      ),
+    ]);
     setEditError(null);
   }
 
@@ -786,13 +842,53 @@ function App() {
     if (pastedFiles.length === 0) return;
 
     event.preventDefault();
-    setEditFiles((currentFiles) => [...currentFiles, ...pastedFiles]);
+    setEditImageItems((currentItems) => [
+      ...currentItems,
+      ...pastedFiles.map((file, index) =>
+        fileToComposerItem(file, `edit-paste:${currentItems.length + index}`),
+      ),
+    ]);
     setEditError(null);
   }
 
+  function dropEditFiles(files: File[]) {
+    setEditImageItems((currentItems) => [
+      ...currentItems,
+      ...files.map((file, index) =>
+        fileToComposerItem(file, `edit-drop:${currentItems.length + index}`),
+      ),
+    ]);
+    setEditError(null);
+  }
+
+  async function handleNativeDroppedPaths(paths: string[]) {
+    if (paths.length === 0 || (!showComposer && !editingMessage)) return;
+
+    const imagePaths = paths.filter(isImagePath);
+    const textPaths = paths.filter((path) => !isImagePath(path));
+
+    if (imagePaths.length > 0) {
+      const files = await Promise.all(imagePaths.map(droppedPathToFile));
+      if (showComposer) {
+        dropMediaFiles(files);
+      } else if (editingMessage) {
+        dropEditFiles(files);
+      }
+    }
+
+    if (textPaths.length > 0) {
+      const pathText = textPaths.join("\n");
+      if (showComposer) {
+        setMediaTextDraft((currentText) => appendTextBlock(currentText, pathText));
+      } else if (editingMessage) {
+        setEditTextDraft((currentText) => appendTextBlock(currentText, pathText));
+      }
+    }
+  }
+
   function removeEditFile(indexToRemove: number) {
-    setEditFiles((currentFiles) =>
-      currentFiles.filter((_, index) => index !== indexToRemove),
+    setEditImageItems((currentItems) =>
+      currentItems.filter((_, index) => index !== indexToRemove),
     );
     setEditInputKey((key) => key + 1);
     setEditError(null);
@@ -812,15 +908,15 @@ function App() {
       if ((editingMessage.text_content ?? null) !== normalizedText) {
         result = await updateLegacyMessageText(editingMessage.id, normalizedText);
       }
-      if (editFiles.length > 0) {
-        const imagesData = await filesToNumberArrays(editFiles);
+      if (editImagesChanged(editingMessage, editImageItems)) {
+        const imagesData = await composerImageItemsToNumberArrays(editImageItems);
         result = await replaceLegacyMessageImages(editingMessage.id, imagesData);
       }
       if (!result) {
         throw new Error("没有需要保存的变更");
       }
       await refreshAppData();
-      setEditFiles([]);
+      setEditImageItems([]);
       setEditInputKey((key) => key + 1);
       setEditingMessage(null);
     } catch (err) {
@@ -965,7 +1061,7 @@ function App() {
     (mediaTextDraft.trim().length > 0 || mediaFiles.length > 0) &&
     !creatingMediaMessage;
   const editText = editTextDraft.trim();
-  const editWillHaveImages = (editingMessage?.images.length ?? 0) > 0 || editFiles.length > 0;
+  const editWillHaveImages = editImageItems.length > 0;
   const editHasContent = editText.length > 0 || editWillHaveImages;
   const canSaveEdit =
     !!editingMessage &&
@@ -973,7 +1069,7 @@ function App() {
     editHasContent &&
     (((editingMessage.text_content ?? null) !==
       (editText.length > 0 ? editText : null)) ||
-      editFiles.length > 0);
+      editImagesChanged(editingMessage, editImageItems));
   return (
     <main className="shell" style={{ fontSize: `${14 + fontScale}px` }}>
       <header className="app-topbar">
@@ -1029,9 +1125,12 @@ function App() {
               errorTitle="写入失败"
               eyebrow="新消息"
               fileInputId="new-media-message-files"
-              files={mediaFiles}
+              imageItems={mediaFiles.map((file, index) =>
+                fileToComposerItem(file, `composer:${index}`),
+              )}
               inputKey={mediaInputKey}
               onClose={() => setShowComposer(false)}
+              onDropFiles={dropMediaFiles}
               onFileChange={selectMediaFiles}
               onPaste={pasteMediaContent}
               onPreview={setPreviewImage}
@@ -1133,7 +1232,7 @@ function App() {
       {editingMessage && (
         <EditMessageDialog
           error={editError}
-          files={editFiles}
+          imageItems={editImageItems}
           inputKey={editInputKey}
           message={editingMessage}
           previewDelaySeconds={hoverDelay}
@@ -1143,6 +1242,7 @@ function App() {
           textDraft={editTextDraft}
           canSave={canSaveEdit}
           onClose={closeEditMessage}
+          onDropFiles={dropEditFiles}
           onFileChange={selectEditFiles}
           onPaste={pasteEditMediaContent}
           onPreview={setPreviewImage}
@@ -2079,7 +2179,7 @@ function MessageList({
 function EditMessageDialog({
   canSave,
   error,
-  files,
+  imageItems,
   inputKey,
   message,
   previewDelaySeconds,
@@ -2088,6 +2188,7 @@ function EditMessageDialog({
   textAreaHeight,
   textDraft,
   onClose,
+  onDropFiles,
   onFileChange,
   onPaste,
   onPreview,
@@ -2098,7 +2199,7 @@ function EditMessageDialog({
 }: {
   canSave: boolean;
   error: string | null;
-  files: File[];
+  imageItems: ComposerImageItem[];
   inputKey: number;
   message: LegacyMessage;
   previewDelaySeconds: number;
@@ -2107,6 +2208,7 @@ function EditMessageDialog({
   textAreaHeight: number;
   textDraft: string;
   onClose: () => void;
+  onDropFiles: (files: File[]) => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onPreview: (image: PreviewImage | null) => void;
@@ -2115,8 +2217,6 @@ function EditMessageDialog({
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
 }) {
-  const existingPreviewImages = buildPreviewImages(message.images);
-
   return (
     <MessageComposerDialog
       canSave={canSave}
@@ -2125,12 +2225,11 @@ function EditMessageDialog({
       error={error}
       errorTitle="保存失败"
       eyebrow={`消息 #${message.id}`}
-      existingImages={files.length === 0 ? message.images : []}
-      existingPreviewImages={existingPreviewImages}
       fileInputId="edit-message-files"
-      files={files}
+      imageItems={imageItems}
       inputKey={inputKey}
       onClose={onClose}
+      onDropFiles={onDropFiles}
       onFileChange={onFileChange}
       onPaste={onPaste}
       onPreview={onPreview}
@@ -2157,13 +2256,12 @@ function MessageComposerDialog({
   dialogLabel,
   error,
   errorTitle,
-  existingImages = [],
-  existingPreviewImages = [],
   eyebrow,
   fileInputId,
-  files,
+  imageItems,
   inputKey,
   onClose,
+  onDropFiles,
   onFileChange,
   onPaste,
   onPreview,
@@ -2186,13 +2284,12 @@ function MessageComposerDialog({
   dialogLabel: string;
   error: string | null;
   errorTitle: string;
-  existingImages?: LegacyMessageImage[];
-  existingPreviewImages?: PreviewImageItem[];
   eyebrow: string;
   fileInputId: string;
-  files: File[];
+  imageItems: ComposerImageItem[];
   inputKey: number;
   onClose: () => void;
+  onDropFiles: (files: File[]) => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onPreview: (image: PreviewImage | null) => void;
@@ -2228,6 +2325,34 @@ function MessageComposerDialog({
     }
   }
 
+  function handleDragOver(event: ReactDragEvent<HTMLElement>) {
+    if (event.dataTransfer.types.includes("Files")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function handleDrop(event: ReactDragEvent<HTMLElement>) {
+    const droppedFiles = Array.from(event.dataTransfer.files ?? []);
+    if (droppedFiles.length === 0) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const imageFiles = droppedFiles.filter(isImageFile);
+    const pathLines = droppedFiles
+      .filter((file) => !isImageFile(file))
+      .map(fileToDroppedPath)
+      .filter(Boolean);
+
+    if (imageFiles.length > 0) {
+      onDropFiles(imageFiles);
+    }
+    if (pathLines.length > 0) {
+      onTextChange(insertTextBlock(textDraft, pathLines.join("\n"), textAreaRef.current));
+    }
+  }
+
   return (
     <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
       <section
@@ -2235,6 +2360,8 @@ function MessageComposerDialog({
         aria-modal="true"
         className="edit-dialog composer-dialog edit-message-dialog"
         role="dialog"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="edit-header">
@@ -2264,32 +2391,17 @@ function MessageComposerDialog({
               style={{ height: `${textAreaHeight}px` }}
             />
 
-            {files.length > 0 && (
+            {imageItems.length > 0 && (
               <div className="composer-image-grid" aria-label="已选图片">
-                {files.map((file, index) => (
+                {imageItems.map((item, index) => (
                   <ComposerImageTile
-                    file={file}
+                    item={item}
                     index={index}
-                    key={`${file.name}-${file.size}-${index}`}
+                    key={`${item.id}-${index}`}
                     onPreview={onPreview}
                     onRemove={onRemoveFile}
                     previewDelaySeconds={previewDelaySeconds}
                     previewImages={previewImages}
-                  />
-                ))}
-              </div>
-            )}
-
-            {files.length === 0 && existingImages.length > 0 && (
-              <div className="composer-image-grid" aria-label="已选图片">
-                {existingImages.map((image, index) => (
-                  <ExistingMessageImageTile
-                    image={image}
-                    index={index}
-                    key={image.id}
-                    onPreview={onPreview}
-                    previewDelaySeconds={previewDelaySeconds}
-                    previewImages={existingPreviewImages}
                   />
                 ))}
               </div>
@@ -2403,14 +2515,14 @@ function DeleteMessageDialog({
 }
 
 function ComposerImageTile({
-  file,
+  item,
   index,
   onPreview,
   onRemove,
   previewDelaySeconds,
   previewImages,
 }: {
-  file: File;
+  item: ComposerImageItem;
   index: number;
   onPreview: (image: PreviewImage | null) => void;
   onRemove?: (index: number) => void;
@@ -2419,6 +2531,11 @@ function ComposerImageTile({
 }) {
   const previewTimerRef = useRef<number | null>(null);
   const previewImage = previewImages[index] ?? null;
+  const filename = composerImageItemFilename(item);
+  const title =
+    item.kind === "file"
+      ? `${item.file.name} · ${formatBytes(item.file.size)}`
+      : `${item.image.filename} · ${item.image.path}`;
 
   function clearPreviewTimer() {
     if (previewTimerRef.current !== null) {
@@ -2428,7 +2545,7 @@ function ComposerImageTile({
   }
 
   function showPreview(target: HTMLButtonElement) {
-    if (!previewImage) return;
+    if (!previewImage?.src) return;
 
     clearPreviewTimer();
     const img = target.querySelector("img");
@@ -2478,110 +2595,29 @@ function ComposerImageTile({
         onMouseLeave={hidePreview}
         onFocus={(event) => showPreview(event.currentTarget)}
         onBlur={hidePreview}
-        title={`${file.name} · ${formatBytes(file.size)}`}
+        title={title}
       >
-        {previewImage && <img alt={file.name} src={previewImage.src} />}
-        <span>{file.name}</span>
+        {previewImage?.src ? (
+          <img alt={filename} src={previewImage.src} />
+        ) : (
+          <span className="composer-image-placeholder">
+            {item.kind === "existing" && !item.image.exists ? "文件缺失" : "无法读取"}
+          </span>
+        )}
+        <span>{filename}</span>
       </button>
       {onRemove && (
         <button
           type="button"
           className="composer-image-remove"
           onClick={removeFile}
-          aria-label={`删除图片 ${file.name}`}
+          aria-label={`删除图片 ${filename}`}
           title="删除图片"
         >
           ×
         </button>
       )}
     </div>
-  );
-}
-
-function ExistingMessageImageTile({
-  image,
-  index,
-  onPreview,
-  previewDelaySeconds,
-  previewImages,
-}: {
-  image: LegacyMessageImage;
-  index: number;
-  onPreview: (image: PreviewImage | null) => void;
-  previewDelaySeconds: number;
-  previewImages: PreviewImageItem[];
-}) {
-  const [broken, setBroken] = useState(false);
-  const previewTimerRef = useRef<number | null>(null);
-  const canRenderImage = image.exists && !broken;
-  const src = canRenderImage ? getAssetSrc(image.path) : "";
-
-  function clearPreviewTimer() {
-    if (previewTimerRef.current !== null) {
-      window.clearTimeout(previewTimerRef.current);
-      previewTimerRef.current = null;
-    }
-  }
-
-  function showPreview(target: HTMLButtonElement) {
-    if (!canRenderImage || !src) return;
-
-    clearPreviewTimer();
-    const img = target.querySelector("img");
-    const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
-    const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
-    const anchor = target.getBoundingClientRect();
-
-    previewTimerRef.current = window.setTimeout(() => {
-      previewTimerRef.current = null;
-      const nextPreview = {
-        filename: image.filename,
-        images: previewImages,
-        index,
-        path: image.path,
-        position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
-        src,
-        total: previewImages.length,
-      };
-      showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
-    }, Math.max(0, previewDelaySeconds * 1000));
-  }
-
-  function hidePreview() {
-    clearPreviewTimer();
-    closeHoverPreviewWindow();
-    onPreview(null);
-  }
-
-  if (!canRenderImage || !src) {
-    return (
-      <div className="composer-image-tile composer-image-tile-missing" title={image.path}>
-        <span className="composer-image-placeholder">
-          {image.exists ? "无法读取" : "文件缺失"}
-        </span>
-        <span>{image.filename}</span>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      className="composer-image-tile"
-      onMouseEnter={(event) => showPreview(event.currentTarget)}
-      onMouseLeave={hidePreview}
-      onFocus={(event) => showPreview(event.currentTarget)}
-      onBlur={hidePreview}
-      title={`${image.filename} · ${image.path}`}
-    >
-      <img
-        alt={image.filename}
-        loading="lazy"
-        src={src}
-        onError={() => setBroken(true)}
-      />
-      <span>{image.filename}</span>
-    </button>
   );
 }
 
@@ -2928,6 +2964,108 @@ function buildPreviewImages(images: LegacyMessageImage[]) {
     .filter((image) => image.src.length > 0);
 }
 
+function fileToComposerItem(file: File, prefix: string): ComposerImageItem {
+  return {
+    file,
+    id: `${prefix}:${file.name}:${file.size}:${file.lastModified}`,
+    kind: "file",
+  };
+}
+
+function existingImageToComposerItem(image: LegacyMessageImage): ComposerImageItem {
+  return {
+    id: `existing:${image.id}:${image.filename}`,
+    image,
+    kind: "existing",
+  };
+}
+
+async function composerImageItemToPreview(item: ComposerImageItem): Promise<PreviewImageItem> {
+  if (item.kind === "file") {
+    return {
+      filename: item.file.name,
+      path: item.id,
+      src: await fileToDataUrl(item.file),
+    };
+  }
+
+  return {
+    filename: item.image.filename,
+    path: item.image.path,
+    src: item.image.exists ? getAssetSrc(item.image.path) : "",
+  };
+}
+
+function composerImageItemFilename(item: ComposerImageItem) {
+  return item.kind === "file" ? item.file.name : item.image.filename;
+}
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/") || isImagePath(file.name);
+}
+
+function isImagePath(path: string) {
+  return /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(path);
+}
+
+function fileToDroppedPath(file: File) {
+  const fileWithPath = file as File & { path?: string; webkitRelativePath?: string };
+  return fileWithPath.path || fileWithPath.webkitRelativePath || file.name;
+}
+
+async function droppedPathToFile(path: string) {
+  const bytes = await readDroppedFileBytes(path);
+  const filename = path.split(/[\\/]/).pop() || "dropped-image.png";
+  return new File([new Uint8Array(bytes)], filename, {
+    type: mimeTypeFromImagePath(path),
+  });
+}
+
+function mimeTypeFromImagePath(path: string) {
+  const lowerPath = path.toLowerCase();
+  if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) return "image/jpeg";
+  if (lowerPath.endsWith(".gif")) return "image/gif";
+  if (lowerPath.endsWith(".webp")) return "image/webp";
+  if (lowerPath.endsWith(".bmp")) return "image/bmp";
+  if (lowerPath.endsWith(".avif")) return "image/avif";
+  return "image/png";
+}
+
+function appendTextBlock(currentText: string, textBlock: string) {
+  if (!textBlock) return currentText;
+  if (!currentText) return textBlock;
+  const separator = currentText.endsWith("\n") ? "" : "\n";
+  return `${currentText}${separator}${textBlock}`;
+}
+
+function insertTextBlock(
+  currentText: string,
+  textBlock: string,
+  textArea: HTMLTextAreaElement | null,
+) {
+  if (!textBlock) return currentText;
+
+  if (textArea && document.activeElement === textArea) {
+    const start = textArea.selectionStart ?? currentText.length;
+    const end = textArea.selectionEnd ?? start;
+    const before = currentText.slice(0, start);
+    const after = currentText.slice(end);
+    return `${before}${textBlock}${after}`;
+  }
+
+  return appendTextBlock(currentText, textBlock);
+}
+
+function editImagesChanged(message: LegacyMessage | null, items: ComposerImageItem[]) {
+  if (!message) return false;
+  if (message.images.length !== items.length) return true;
+
+  return items.some((item, index) => {
+    const original = message.images[index];
+    return item.kind !== "existing" || !original || item.image.id !== original.id;
+  });
+}
+
 function shiftPreviewImage(current: PreviewImage | null, offset: number) {
   if (!current || current.images.length === 0) return current;
 
@@ -3050,12 +3188,29 @@ function compareVersions(left: string, right: string) {
 }
 
 async function filesToNumberArrays(files: File[]) {
+  return Promise.all(files.map(fileToNumberArray));
+}
+
+async function composerImageItemsToNumberArrays(items: ComposerImageItem[]) {
   return Promise.all(
-    files.map(async (file) => {
-      const buffer = await file.arrayBuffer();
-      return Array.from(new Uint8Array(buffer));
-    }),
+    items.map((item) =>
+      item.kind === "file"
+        ? fileToNumberArray(item.file)
+        : existingImageToNumberArray(item.image),
+    ),
   );
+}
+
+async function fileToNumberArray(file: File) {
+  const buffer = await file.arrayBuffer();
+  return Array.from(new Uint8Array(buffer));
+}
+
+async function existingImageToNumberArray(image: LegacyMessageImage) {
+  if (!image.exists) {
+    throw new Error(`图片文件不存在，不能保存：${image.filename}`);
+  }
+  return readLegacyImageBytes(image.filename);
 }
 
 function fileToDataUrl(file: File) {

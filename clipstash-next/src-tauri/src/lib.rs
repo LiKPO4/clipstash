@@ -100,7 +100,7 @@ fn download_and_open_update_installer(
     let safe_filename = sanitize_installer_filename(&filename)?;
     let update_dir = std::env::temp_dir().join("ClipStash Next Updates");
     fs::create_dir_all(&update_dir).map_err(|err| format!("创建更新临时目录失败：{err}"))?;
-    let installer_path = update_dir.join(safe_filename);
+    let installer_path = update_dir.join(&safe_filename);
 
     let response = reqwest::blocking::Client::new()
         .get(&download_url)
@@ -120,7 +120,11 @@ fn download_and_open_update_installer(
 
     fs::write(&installer_path, &bytes)
         .map_err(|err| format!("写入安装包失败：{}：{err}", installer_path.display()))?;
-    Command::new(&installer_path)
+    let mut command = Command::new(&installer_path);
+    for arg in update_installer_args(&safe_filename) {
+        command.arg(arg);
+    }
+    command
         .spawn()
         .map_err(|err| format!("启动安装包失败：{}：{err}", installer_path.display()))?;
 
@@ -145,6 +149,14 @@ fn sanitize_installer_filename(filename: &str) -> Result<String, String> {
         return Err("安装包文件名包含非法字符".to_string());
     }
     Ok(trimmed.to_string())
+}
+
+fn update_installer_args(filename: &str) -> Vec<&'static str> {
+    if filename.to_ascii_lowercase().ends_with(".exe") {
+        vec!["/UPDATE"]
+    } else {
+        Vec::new()
+    }
 }
 
 #[tauri::command]
@@ -274,6 +286,20 @@ fn copy_legacy_image_to_clipboard(
     filename: String,
 ) -> Result<legacy_data::LegacyCopyImageResult, String> {
     app_data::copy_image_to_clipboard(filename)
+}
+
+#[tauri::command]
+fn read_legacy_image_bytes(filename: String) -> Result<Vec<u8>, String> {
+    app_data::read_image_bytes(filename)
+}
+
+#[tauri::command]
+fn read_dropped_file_bytes(path: String) -> Result<Vec<u8>, String> {
+    let path = std::path::PathBuf::from(path.trim());
+    if !path.is_file() {
+        return Err(format!("拖入文件不存在：{}", path.display()));
+    }
+    fs::read(&path).map_err(|err| format!("读取拖入文件失败：{}：{err}", path.display()))
 }
 
 #[tauri::command]
@@ -672,6 +698,8 @@ pub fn run() {
             paste_legacy_import_queue_with_optional_archive,
             paste_legacy_import_queue_item,
             preview_legacy_message_import_queue,
+            read_dropped_file_bytes,
+            read_legacy_image_bytes,
             read_current_clipboard,
             replace_legacy_message_images,
             set_legacy_message_archived,
@@ -683,4 +711,21 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_installer_args;
+
+    #[test]
+    fn passes_update_mode_to_nsis_installers_only() {
+        assert_eq!(
+            update_installer_args("ClipStash Next_2.0.7_x64-setup.exe"),
+            vec!["/UPDATE"]
+        );
+        assert_eq!(
+            update_installer_args("ClipStash Next_2.0.7_x64_en-US.msi"),
+            Vec::<&'static str>::new()
+        );
+    }
 }

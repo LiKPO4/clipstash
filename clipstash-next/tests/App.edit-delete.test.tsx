@@ -353,6 +353,7 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(updateResult);
       }
       if (command === "replace_legacy_message_images") return Promise.resolve(replaceResult);
+      if (command === "read_legacy_image_bytes") return Promise.resolve([7, 7]);
       if (command === "delete_legacy_message") {
         if (failNextDelete) {
           failNextDelete = false;
@@ -645,7 +646,7 @@ describe("edit and delete guarded actions", () => {
     expect(within(dialog).queryByText("已有图片")).toBeNull();
   });
 
-  it("replaces message images when replacement files are selected", async () => {
+  it("keeps existing edit images in the same grid when files are selected", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -658,15 +659,19 @@ describe("edit and delete guarded actions", () => {
       new File([new Uint8Array([9, 8])], "new.png", { type: "image/png" }),
     );
     const imageGrid = within(dialog).getByLabelText("已选图片");
+    expect(within(imageGrid).getByText("old.png")).toBeTruthy();
     expect(within(imageGrid).getByText("new.png")).toBeTruthy();
     expect(within(dialog).queryByText("待替换图片")).toBeNull();
     expect(within(dialog).queryByText("保存后将被新选择的图片替换")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("read_legacy_image_bytes", {
+        filename: "old.png",
+      });
       expect(invokeMock).toHaveBeenCalledWith("replace_legacy_message_images", {
         messageId: 10,
-        imagesData: [[9, 8]],
+        imagesData: [[7, 7], [9, 8]],
       });
     });
     await waitFor(() => {
@@ -687,6 +692,7 @@ describe("edit and delete guarded actions", () => {
       new File([new Uint8Array([1, 2])], "remove.png", { type: "image/png" }),
       new File([new Uint8Array([3, 4])], "keep.png", { type: "image/png" }),
     ]);
+    await user.click(within(dialog).getByRole("button", { name: "删除图片 old.png" }));
     await user.click(within(dialog).getByRole("button", { name: "删除图片 remove.png" }));
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 

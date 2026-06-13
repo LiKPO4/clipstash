@@ -13,6 +13,7 @@ use crate::{
         LegacyDeleteMessageResult, LegacyImageFilesBackup, LegacyReplaceImagesResult,
         LegacyUpdateMessageResult, LegacyWriteAudit,
     },
+    legacy_image_files::resolve_legacy_image_path,
     legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder},
     legacy_paths::{legacy_data_dir, path_to_string},
     legacy_query::{list_legacy_messages_from_dir, query_count, read_legacy_stats_from_dir},
@@ -187,6 +188,13 @@ pub fn set_message_archived(
 pub fn copy_image_to_clipboard(filename: String) -> Result<LegacyCopyImageResult, String> {
     let paths = ready_paths()?;
     copy_legacy_image_to_clipboard_from_dir(paths.data_dir, filename)
+}
+
+pub fn read_image_bytes(filename: String) -> Result<Vec<u8>, String> {
+    let paths = ready_paths()?;
+    let image_path = resolve_legacy_image_path(&paths.data_dir, &filename)?;
+    fs::read(&image_path)
+        .map_err(|err| format!("读取图片文件失败：{}：{err}", image_path.display()))
 }
 
 pub fn copy_message_text_to_clipboard(message_id: i64) -> Result<LegacyCopyTextResult, String> {

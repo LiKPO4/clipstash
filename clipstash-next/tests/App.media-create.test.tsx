@@ -272,6 +272,44 @@ describe("media create form", () => {
     });
   });
 
+  it("accepts dropped images in the same message composer", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const panel = await openMediaCreateDialog(user);
+    const file = new File([new Uint8Array([8, 6])], "dropped.png", {
+      type: "image/png",
+    });
+    fireDrop(panel, file);
+
+    expect(within(panel).getByRole("button", { name: "删除图片 dropped.png" })).toBeTruthy();
+    expect(await within(panel).findByRole("img", { name: "dropped.png" })).toBeTruthy();
+
+    await user.click(within(panel).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("create_legacy_image_message", {
+        imagesData: [[8, 6]],
+      });
+    });
+  });
+
+  it("adds dropped non-image file paths to the message text", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const panel = await openMediaCreateDialog(user);
+    const textarea = within(panel).getByLabelText("消息内容") as HTMLTextAreaElement;
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    Object.defineProperty(file, "path", {
+      configurable: true,
+      value: "D:\\WORKS\\notes.txt",
+    });
+
+    fireDrop(panel, file);
+    expect(textarea.value).toBe("D:\\WORKS\\notes.txt");
+  });
+
   it("closes the composer after saving without showing create feedback", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -303,6 +341,15 @@ function firePaste(target: HTMLElement, file: File) {
   fireEvent.paste(target, {
     clipboardData: {
       files: [file],
+    },
+  });
+}
+
+function fireDrop(target: HTMLElement, file: File) {
+  fireEvent.drop(target, {
+    dataTransfer: {
+      files: [file],
+      types: ["Files"],
     },
   });
 }

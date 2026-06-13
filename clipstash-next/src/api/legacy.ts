@@ -147,6 +147,18 @@ export function copyLegacyImageToClipboard(filename: string) {
   });
 }
 
+export function readLegacyImageBytes(filename: string) {
+  return invoke<number[]>("read_legacy_image_bytes", {
+    filename,
+  });
+}
+
+export function readDroppedFileBytes(path: string) {
+  return invoke<number[]>("read_dropped_file_bytes", {
+    path,
+  });
+}
+
 export function copyLegacyMessageTextToClipboard(messageId: number) {
   return invoke<LegacyCopyTextResult>("copy_legacy_message_text_to_clipboard", {
     messageId,
