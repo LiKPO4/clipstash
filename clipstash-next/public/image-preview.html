@@ -11,7 +11,7 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: #ffffff;
+        background: transparent;
       }
 
       body {
@@ -24,6 +24,11 @@
         width: 100vw;
         height: 100vh;
         object-fit: contain;
+        opacity: 0;
+      }
+
+      img.ready {
+        opacity: 1;
       }
     </style>
   </head>
@@ -39,6 +44,7 @@
         if (rawPayload) {
           const payload = JSON.parse(rawPayload);
           image.alt = payload.filename || "图片预览";
+          image.addEventListener("load", () => image.classList.add("ready"), { once: true });
           image.src = payload.src || "";
           document.title = payload.filename || "图片预览";
         }

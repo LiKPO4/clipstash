@@ -67,7 +67,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.8";
+const CURRENT_VERSION = "2.0.9";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
@@ -151,6 +151,7 @@ let hoverPreviewStorageKey: string | null = null;
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
   const [page, setPage] = useState<LegacyMessagePage | null>(null);
+  const [imageSources, setImageSources] = useState<Record<string, string>>({});
   const [view, setView] = useState<MessageView>("normal");
   const [sort, setSort] = useState<SortOrder>(() => getStoredSort());
   const [error, setError] = useState<string | null>(null);
@@ -234,9 +235,10 @@ function App() {
 
     setError(null);
 
-    loadAppData(view, sort)
-      .then(([nextStats, nextPage]) => {
+    loadAppDataWithImages(view, sort, imageSources)
+      .then(({ imageSources: nextImageSources, page: nextPage, stats: nextStats }) => {
         if (!alive) return;
+        setImageSources(nextImageSources);
         setStats(nextStats);
         setPage(nextPage);
         setError(null);
@@ -628,6 +630,11 @@ function App() {
         offset: page.offset + page.messages.length,
         limit: PAGE_LIMIT,
       });
+      const nextImageSources = await preloadMessageImageSources(
+        nextPage.messages,
+        imageSources,
+      );
+      setImageSources(nextImageSources);
       setPage({
         ...nextPage,
         offset: 0,
@@ -644,7 +651,9 @@ function App() {
     if (preserveListScroll) {
       pendingMessageListScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
     }
-    const [nextStats, nextPage] = await loadAppData(view, sort);
+    const { imageSources: nextImageSources, page: nextPage, stats: nextStats } =
+      await loadAppDataWithImages(view, sort, imageSources);
+    setImageSources(nextImageSources);
     setStats(nextStats);
     setPage(nextPage);
   }
@@ -740,6 +749,8 @@ function App() {
         offset: 0,
         limit: PAGE_LIMIT,
       });
+      const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+      setImageSources(nextImageSources);
       setPage(nextPage);
       setSettingsNotice(
         result.inserted_messages > 0
@@ -770,6 +781,8 @@ function App() {
         offset: 0,
         limit: PAGE_LIMIT,
       });
+      const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+      setImageSources(nextImageSources);
       setPage(nextPage);
       setSettingsNotice("数据目录已迁移，原目录已保留");
       window.setTimeout(() => setSettingsNotice(null), 2400);
@@ -799,6 +812,8 @@ function App() {
         offset: 0,
         limit: PAGE_LIMIT,
       });
+      const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+      setImageSources(nextImageSources);
       setPage(nextPage);
       setSettingsNotice(
         result.copied_images > 0 || result.copied_db
@@ -1273,6 +1288,7 @@ function App() {
               loadingMore={loadingMore}
               onLoadMore={loadMore}
               onBlankDoubleClick={() => setShowComposer(true)}
+              imageSources={imageSources}
             />
           )}
 
@@ -2097,6 +2113,7 @@ function MessageList({
   onBlankDoubleClick,
   onToggleImages,
   onPreview,
+  imageSources,
   previewDelaySeconds,
   scrollLines,
 }: {
@@ -2117,35 +2134,10 @@ function MessageList({
   onBlankDoubleClick: () => void;
   onToggleImages: (messageId: number) => void;
   onPreview: (image: PreviewImage | null) => void;
+  imageSources: Record<string, string>;
   previewDelaySeconds: number;
   scrollLines: number;
 }) {
-  const [imageSources, setImageSources] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    let alive = true;
-    const images = messages.flatMap((message) => message.images).filter((image) => image.exists);
-
-    Promise.all(
-      images.map(async (image) => {
-        try {
-          return [image.path, await legacyImageToDataUrl(image)] as const;
-        } catch {
-          return [image.path, ""] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (!alive) return;
-      setImageSources(
-        Object.fromEntries(entries.filter(([, src]) => src.length > 0)),
-      );
-    });
-
-    return () => {
-      alive = false;
-    };
-  }, [messages]);
-
   function requestMoreIfNearBottom(element: HTMLElement) {
     if (!hasMore || loadingMore) return;
 
@@ -2758,6 +2750,8 @@ function MessageImageTile({
   }
 
   function showPreview(target: HTMLButtonElement) {
+    if (!imageSrc) return;
+
     clearPreviewTimer();
     const img = target.querySelector("img");
     const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
@@ -2868,6 +2862,7 @@ async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
     resizable: false,
     skipTaskbar: true,
     title: image.filename,
+    transparent: true,
     url: `/image-preview.html?key=${encodeURIComponent(key)}`,
     visible: true,
     width: position.width,
@@ -3203,6 +3198,38 @@ function bytesToDataUrl(bytes: number[], mimeType: string) {
     binary += String.fromCharCode(...chunk);
   }
   return `data:${mimeType};base64,${window.btoa(binary)}`;
+}
+
+async function preloadMessageImageSources(
+  messages: LegacyMessage[],
+  currentSources: Record<string, string>,
+) {
+  const nextSources = { ...currentSources };
+  const missingImages = messages
+    .flatMap((message) => message.images)
+    .filter((image) => image.exists && !nextSources[image.path]);
+
+  await Promise.all(
+    missingImages.map(async (image) => {
+      try {
+        nextSources[image.path] = await legacyImageToDataUrl(image);
+      } catch {
+        // Keep missing entries absent so genuinely broken files still show a stable placeholder.
+      }
+    }),
+  );
+
+  return nextSources;
+}
+
+async function loadAppDataWithImages(
+  view: MessageView,
+  sort: SortOrder,
+  currentSources: Record<string, string>,
+) {
+  const [stats, page] = await loadAppData(view, sort);
+  const imageSources = await preloadMessageImageSources(page.messages, currentSources);
+  return { imageSources, page, stats };
 }
 
 function loadAppData(view: MessageView, sort: SortOrder) {
