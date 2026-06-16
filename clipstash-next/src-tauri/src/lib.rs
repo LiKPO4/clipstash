@@ -878,6 +878,14 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            #[cfg(not(target_os = "windows"))]
+            {
+                let data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|err| format!("定位应用数据目录失败：{err}"))?;
+                app_data::set_app_data_base_dir(data_dir);
+            }
             app_data::ensure_app_data_ready()?;
             #[cfg(target_os = "windows")]
             {

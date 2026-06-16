@@ -74,7 +74,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.2";
+const CURRENT_VERSION = "2.1.3";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -1322,7 +1322,10 @@ function App() {
       (editText.length > 0 ? editText : null)) ||
       editImagesChanged(editingMessage, editImageItems));
   return (
-    <main className="shell" style={{ fontSize: `${14 + fontScale}px` }}>
+    <main
+      className={IS_ANDROID ? "shell shell-android" : "shell"}
+      style={{ fontSize: `${14 + fontScale}px` }}
+    >
       <header className="app-topbar">
         <div className="brand-block">
           <span className="app-icon" aria-hidden="true">

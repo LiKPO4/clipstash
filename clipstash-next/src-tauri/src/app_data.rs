@@ -31,11 +31,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 const APP_DATA_DIR_NAME: &str = "ClipStash Next";
 const APP_DB_NAME: &str = "clipstash.db";
 const DATA_LOCATION_FILE_NAME: &str = "data-location.json";
+static APP_DATA_BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 pub struct AppStats {
@@ -93,6 +95,11 @@ pub fn app_data_dir_path() -> Result<PathBuf, String> {
 
 pub fn default_app_data_dir_path() -> Result<PathBuf, String> {
     Ok(appdata_base_dir()?.join(APP_DATA_DIR_NAME))
+}
+
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+pub fn set_app_data_base_dir(path: PathBuf) {
+    let _ = APP_DATA_BASE_DIR.set(path);
 }
 
 pub fn ensure_app_data_ready() -> Result<AppStats, String> {
@@ -364,10 +371,14 @@ fn app_paths() -> Result<AppPaths, String> {
 }
 
 fn appdata_base_dir() -> Result<PathBuf, String> {
+    if let Some(path) = APP_DATA_BASE_DIR.get() {
+        return Ok(path.clone());
+    }
+
     env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .ok_or_else(|| "无法定位 Windows 应用数据目录".to_string())
+        .ok_or_else(|| "无法定位应用数据目录".to_string())
 }
 
 fn configured_app_data_dir() -> Result<PathBuf, String> {
@@ -517,7 +528,28 @@ fn merge_legacy_data(
     conn: &mut Connection,
     paths: &AppPaths,
 ) -> Result<AppMigrationResult, String> {
-    let legacy_dir = legacy_data_dir()?;
+    let legacy_dir = match legacy_data_dir() {
+        Ok(path) => path,
+        Err(err) => {
+            #[cfg(target_os = "windows")]
+            {
+                return Err(err);
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                mark_migrated(conn, None, None, 0, 0)?;
+                return Ok(AppMigrationResult {
+                    inserted_messages: 0,
+                    skipped_messages: 0,
+                    copied_images: 0,
+                    skipped_images: 0,
+                    legacy_message_count: 0,
+                    legacy_image_count: 0,
+                    stats: read_app_stats_from_paths(paths)?,
+                });
+            }
+        }
+    };
     merge_legacy_data_from_dir(conn, paths, legacy_dir)
 }
 
