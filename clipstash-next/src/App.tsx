@@ -76,7 +76,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.5";
+const CURRENT_VERSION = "2.1.6";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -3303,8 +3303,8 @@ async function closeHoverPreviewWindow() {
   if (existingKey) {
     localStorage.removeItem(existingKey);
   }
-  if (existingWindow) {
-    await existingWindow.close().catch(() => undefined);
+  if (existingWindow?.close) {
+    await Promise.resolve(existingWindow.close()).catch(() => undefined);
   }
 }
 

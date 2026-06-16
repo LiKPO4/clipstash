@@ -220,11 +220,7 @@ fn download_and_open_update_installer(
 
     fs::write(&installer_path, &bytes)
         .map_err(|err| format!("写入安装包失败：{}：{err}", installer_path.display()))?;
-    let mut command = Command::new(&installer_path);
-    for arg in update_installer_args(&safe_filename) {
-        command.arg(arg);
-    }
-    command
+    Command::new(&installer_path)
         .spawn()
         .map_err(|err| format!("启动安装包失败：{}：{err}", installer_path.display()))?;
 
@@ -249,14 +245,6 @@ fn sanitize_installer_filename(filename: &str) -> Result<String, String> {
         return Err("安装包文件名包含非法字符".to_string());
     }
     Ok(trimmed.to_string())
-}
-
-fn update_installer_args(filename: &str) -> Vec<&'static str> {
-    if filename.to_ascii_lowercase().ends_with(".exe") {
-        vec!["/UPDATE"]
-    } else {
-        Vec::new()
-    }
 }
 
 #[tauri::command]
@@ -1000,17 +988,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::update_installer_args;
-
     #[test]
-    fn passes_update_mode_to_nsis_installers_only() {
+    fn downloaded_installers_open_without_special_update_args() {
+        let exe = std::path::Path::new("ClipStash Next_2.0.7_x64-setup.exe");
+        let msi = std::path::Path::new("ClipStash Next_2.0.7_x64_en-US.msi");
+
         assert_eq!(
-            update_installer_args("ClipStash Next_2.0.7_x64-setup.exe"),
-            vec!["/UPDATE"]
+            exe.extension().and_then(|value| value.to_str()),
+            Some("exe")
         );
         assert_eq!(
-            update_installer_args("ClipStash Next_2.0.7_x64_en-US.msi"),
-            Vec::<&'static str>::new()
+            msi.extension().and_then(|value| value.to_str()),
+            Some("msi")
         );
     }
 }
