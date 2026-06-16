@@ -15,6 +15,7 @@ build
 local.properties
 key.properties
 keystore.properties
+.signing/
 
 /.tauri
 /tauri.settings.gradle
