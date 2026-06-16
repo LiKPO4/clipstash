@@ -299,6 +299,7 @@ const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
   archive_after_import: false,
+  message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
   capture_hotkey: "Ctrl+Alt+V",
@@ -635,6 +636,73 @@ describe("edit and delete guarded actions", () => {
         patch: { edit_textarea_height: 512 },
       });
     });
+  });
+
+  it("opens edit dialog when double clicking a message card by default", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const textButton = await screen.findByRole("button", { name: "旧文字" });
+    await user.dblClick(textButton);
+
+    expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_message_text_to_clipboard", {
+      messageId: 10,
+    });
+    expect(await screen.findByRole("dialog", { name: "编辑消息 10" })).toBeTruthy();
+  });
+
+  it("opens edit dialog when double clicking a message image", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const image = await screen.findByRole("img", { name: "old.png" });
+    await user.dblClick(image);
+
+    expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+      filename: "old.png",
+    });
+    expect(await screen.findByRole("dialog", { name: "编辑消息 10" })).toBeTruthy();
+  });
+
+  it("can switch message double click action to create", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const settingsDialog = await screen.findByRole("dialog", { name: "设置" });
+    await user.click(within(settingsDialog).getByRole("button", { name: "新建" }));
+    await user.click(within(settingsDialog).getByRole("button", { name: "关闭设置" }));
+
+    const textButton = await screen.findByRole("button", { name: "旧文字" });
+    await user.dblClick(textButton);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+        patch: { message_double_click_action: "create" },
+      });
+    });
+    expect(await screen.findByRole("dialog", { name: "编辑新消息" })).toBeTruthy();
+  });
+
+  it("can switch message double click action to none", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const settingsDialog = await screen.findByRole("dialog", { name: "设置" });
+    await user.click(within(settingsDialog).getByRole("button", { name: "无效果" }));
+    await user.click(within(settingsDialog).getByRole("button", { name: "关闭设置" }));
+
+    const textButton = await screen.findByRole("button", { name: "旧文字" });
+    await user.dblClick(textButton);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+        patch: { message_double_click_action: "none" },
+      });
+    });
+    expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "编辑新消息" })).toBeNull();
   });
 
   it("shows existing message images in the same composer image grid", async () => {

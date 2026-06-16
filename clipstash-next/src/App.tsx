@@ -63,6 +63,7 @@ import type {
   LegacyMessagePage,
   LegacyStats,
   LegacyArchiveMessageResult,
+  MessageDoubleClickAction,
   AppMigrationResult,
   LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
@@ -75,7 +76,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.4";
+const CURRENT_VERSION = "2.1.5";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -154,6 +155,7 @@ type ReleaseDownloadAsset = {
 
 let hoverPreviewWindow: WebviewWindow | null = null;
 let hoverPreviewStorageKey: string | null = null;
+const MESSAGE_DOUBLE_CLICK_DELAY_MS = 220;
 
 function App() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
@@ -211,6 +213,8 @@ function App() {
     useState<ImportQueuePasteArchiveResult | null>(null);
   const [showComposer, setShowComposer] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [messageDoubleClickAction, setMessageDoubleClickAction] =
+    useState<MessageDoubleClickAction>("edit");
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [closeToTray, setCloseToTray] = useState(true);
   const [topmostError, setTopmostError] = useState<string | null>(null);
@@ -570,6 +574,7 @@ function App() {
     setShowHotkey(settings.show_hotkey);
     setCaptureHotkey(settings.capture_hotkey);
     setSort(settings.sort);
+    setMessageDoubleClickAction(settings.message_double_click_action ?? "edit");
     getCurrentWindow()
       .setAlwaysOnTop(settings.always_on_top)
       .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
@@ -1051,6 +1056,16 @@ function App() {
     setEditError(null);
   }
 
+  function handleMessageDoubleClick(message: LegacyMessage) {
+    if (messageDoubleClickAction === "create") {
+      setShowComposer(true);
+      return;
+    }
+    if (messageDoubleClickAction === "edit") {
+      openEditMessage(message);
+    }
+  }
+
   function closeEditMessage() {
     if (savingEdit) return;
     setEditingMessage(null);
@@ -1461,6 +1476,7 @@ function App() {
               importingMessageId={loadingImportQueueMessageId}
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
+              onMessageDoubleClick={handleMessageDoubleClick}
               onArchive={toggleArchiveMessage}
               onCopyImage={copyMessageImage}
               onCopyText={copyMessageText}
@@ -1599,6 +1615,13 @@ function App() {
           onMigrateLegacyData={runLegacyMigration}
           onExportData={exportDataPackage}
           onImportData={importDataPackage}
+          onMessageDoubleClickActionChange={(value) => {
+            setMessageDoubleClickAction(value);
+            persistAppSettings(
+              { message_double_click_action: value },
+              "消息双击行为已应用",
+            ).catch(() => undefined);
+          }}
           onMoveAppDataDir={moveAppDataDir}
           onRepairAppData={repairAppData}
           onPasteIntervalChange={(value) => {
@@ -1613,6 +1636,7 @@ function App() {
           onSortChange={updateSort}
           onStartupChange={setStartup}
           onStartupPersistChange={updateLaunchOnStartup}
+          messageDoubleClickAction={messageDoubleClickAction}
         />
       )}
 
@@ -1879,6 +1903,7 @@ function SettingsDialog({
   isAndroid,
   migrationError,
   migrationResult,
+  messageDoubleClickAction,
   migratingLegacyData,
   movingAppData,
   repairingAppData,
@@ -1900,6 +1925,7 @@ function SettingsDialog({
   onDownloadUpdate,
   onExportData,
   onImportData,
+  onMessageDoubleClickActionChange,
   onClose,
   onCloseToTrayChange,
   onFontScaleChange,
@@ -1933,6 +1959,7 @@ function SettingsDialog({
   isAndroid: boolean;
   migrationError: string | null;
   migrationResult: AppMigrationResult | null;
+  messageDoubleClickAction: MessageDoubleClickAction;
   migratingLegacyData: boolean;
   movingAppData: boolean;
   repairingAppData: boolean;
@@ -1954,6 +1981,7 @@ function SettingsDialog({
   onDownloadUpdate: () => void;
   onExportData: () => void;
   onImportData: () => void;
+  onMessageDoubleClickActionChange: (value: MessageDoubleClickAction) => void;
   onClose: () => void;
   onCloseToTrayChange: (checked: boolean) => void;
   onFontScaleChange: (value: number) => void;
@@ -1998,6 +2026,11 @@ function SettingsDialog({
   function changeSort(nextSort: SortOrder) {
     onSortChange(nextSort);
     showAutoSavedNotice("消息排序已应用");
+  }
+
+  function changeMessageDoubleClickAction(value: MessageDoubleClickAction) {
+    onMessageDoubleClickActionChange(value);
+    showAutoSavedNotice("消息双击行为已应用");
   }
 
   function changeArchiveAfterImport(checked: boolean) {
@@ -2104,6 +2137,33 @@ function SettingsDialog({
                 <option value="newest">最新优先</option>
                 <option value="oldest">最早优先</option>
               </select>
+            </label>
+
+            <label className="setting-row setting-row-segmented">
+              <span>消息双击</span>
+              <div className="segmented" aria-label="消息双击行为">
+                <button
+                  type="button"
+                  className={messageDoubleClickAction === "edit" ? "active" : ""}
+                  onClick={() => changeMessageDoubleClickAction("edit")}
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  className={messageDoubleClickAction === "create" ? "active" : ""}
+                  onClick={() => changeMessageDoubleClickAction("create")}
+                >
+                  新建
+                </button>
+                <button
+                  type="button"
+                  className={messageDoubleClickAction === "none" ? "active" : ""}
+                  onClick={() => changeMessageDoubleClickAction("none")}
+                >
+                  无效果
+                </button>
+              </div>
             </label>
 
             {!isAndroid && (
@@ -2375,6 +2435,7 @@ function MessageList({
   onCopyText,
   onDelete,
   onEdit,
+  onMessageDoubleClick,
   onLoadMore,
   onOpenImportQueue,
   onBlankDoubleClick,
@@ -2397,6 +2458,7 @@ function MessageList({
   onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
+  onMessageDoubleClick: (message: LegacyMessage) => void;
   onLoadMore: () => void;
   onOpenImportQueue: (message: LegacyMessage) => void;
   onBlankDoubleClick: () => void;
@@ -2407,6 +2469,23 @@ function MessageList({
   scrollLines: number;
   showExternalImport: boolean;
 }) {
+  const textCopyTimerRef = useRef<number | null>(null);
+
+  function clearTextCopyTimer() {
+    if (textCopyTimerRef.current !== null) {
+      window.clearTimeout(textCopyTimerRef.current);
+      textCopyTimerRef.current = null;
+    }
+  }
+
+  function scheduleTextCopy(message: LegacyMessage) {
+    clearTextCopyTimer();
+    textCopyTimerRef.current = window.setTimeout(() => {
+      textCopyTimerRef.current = null;
+      onCopyText(message);
+    }, MESSAGE_DOUBLE_CLICK_DELAY_MS);
+  }
+
   function requestMoreIfNearBottom(element: HTMLElement) {
     if (!hasMore || loadingMore) return;
 
@@ -2450,7 +2529,17 @@ function MessageList({
         const previewImages = buildPreviewImages(message.images, imageSources);
 
         return (
-          <article className="message-card" key={message.id}>
+          <article
+            className="message-card"
+            key={message.id}
+            onDoubleClick={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest(".message-actions") || target.closest(".image-expand-action")) {
+                return;
+              }
+              onMessageDoubleClick(message);
+            }}
+          >
             <header className="message-meta">
               <div className="message-meta-text">
                 <div className="message-time-line">
@@ -2504,7 +2593,8 @@ function MessageList({
               <button
                 type="button"
                 className="message-text message-text-button"
-                onClick={() => onCopyText(message)}
+                onClick={() => scheduleTextCopy(message)}
+                onDoubleClick={clearTextCopyTimer}
               >
                 <span className="message-text-content">{message.text_content}</span>
               </button>
@@ -3054,6 +3144,23 @@ function MessageImageTile({
     }
   }
 
+  function clearCopyTimer() {
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+  }
+
+  const copyTimerRef = useRef<number | null>(null);
+
+  function scheduleCopy() {
+    clearCopyTimer();
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = null;
+      onCopy(image);
+    }, MESSAGE_DOUBLE_CLICK_DELAY_MS);
+  }
+
   function showPreview(target: HTMLButtonElement) {
     if (!imageSrc) return;
 
@@ -3094,7 +3201,8 @@ function MessageImageTile({
         <button
           type="button"
           className="image-preview-action"
-          onClick={() => onCopy(image)}
+          onClick={scheduleCopy}
+          onDoubleClick={clearCopyTimer}
           onMouseEnter={(event) => showPreview(event.currentTarget)}
           onMouseLeave={hidePreview}
           onFocus={(event) => showPreview(event.currentTarget)}

@@ -1531,6 +1531,18 @@ textarea:focus,
   align-items: center;
 }
 
+.setting-row-segmented {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.setting-row-segmented .segmented {
+  width: 100%;
+}
+
+.setting-row-segmented .segmented button {
+  padding-inline: 0;
+}
+
 .setting-row select,
 .setting-field input {
   min-height: 34px;

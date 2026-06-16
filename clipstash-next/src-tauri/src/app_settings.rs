@@ -18,6 +18,7 @@ pub struct AppSettings {
     pub font_scale: i64,
     pub edit_textarea_height: i64,
     pub sort: String,
+    pub message_double_click_action: String,
 }
 
 impl Default for AppSettings {
@@ -34,6 +35,7 @@ impl Default for AppSettings {
             font_scale: 0,
             edit_textarea_height: 360,
             sort: "newest".to_string(),
+            message_double_click_action: "edit".to_string(),
         }
     }
 }
@@ -51,6 +53,7 @@ pub struct AppSettingsPatch {
     pub font_scale: Option<i64>,
     pub edit_textarea_height: Option<i64>,
     pub sort: Option<String>,
+    pub message_double_click_action: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -117,6 +120,9 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     if let Some(value) = patch.sort {
         settings.sort = value;
     }
+    if let Some(value) = patch.message_double_click_action {
+        settings.message_double_click_action = value;
+    }
 
     let settings = normalize_settings(settings);
     write_settings(&settings)?;
@@ -178,6 +184,11 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     settings.edit_textarea_height = settings.edit_textarea_height.clamp(180, 700);
     if settings.sort != "oldest" {
         settings.sort = "newest".to_string();
+    }
+    if settings.message_double_click_action != "create"
+        && settings.message_double_click_action != "none"
+    {
+        settings.message_double_click_action = "edit".to_string();
     }
     settings.show_hotkey =
         normalize_hotkey(&settings.show_hotkey, &AppSettings::default().show_hotkey);
@@ -273,6 +284,7 @@ mod tests {
         assert!(settings.close_to_tray);
         assert!(settings.archive_after_import);
         assert_eq!(settings.edit_textarea_height, 360);
+        assert_eq!(settings.message_double_click_action, "edit");
         assert_eq!(settings.sort, "oldest");
     }
 
@@ -287,6 +299,7 @@ mod tests {
             always_on_top: None,
             close_to_tray: Some(false),
             archive_after_import: None,
+            message_double_click_action: None,
             paste_interval_ms: None,
             show_hotkey: None,
             capture_hotkey: None,

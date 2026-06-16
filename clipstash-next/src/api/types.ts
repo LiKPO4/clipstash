@@ -84,9 +84,12 @@ export type AppSettings = {
   font_scale: number;
   edit_textarea_height: number;
   sort: SortOrder;
+  message_double_click_action: MessageDoubleClickAction;
 };
 
 export type AppSettingsPatch = Partial<AppSettings>;
+
+export type MessageDoubleClickAction = "edit" | "create" | "none";
 
 export type LegacyBackupFileInfo = {
   name: string;

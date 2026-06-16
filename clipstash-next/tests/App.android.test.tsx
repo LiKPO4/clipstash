@@ -52,6 +52,7 @@ const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
   archive_after_import: false,
+  message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
   capture_hotkey: "Ctrl+Alt+V",
@@ -82,8 +83,11 @@ const normalPage = {
 };
 
 describe("android shell", () => {
+  let appSettings = { ...defaultAppSettings };
+
   beforeEach(() => {
     vi.resetModules();
+    appSettings = { ...defaultAppSettings };
     Object.defineProperty(window.navigator, "userAgent", {
       configurable: true,
       value: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36",
@@ -101,9 +105,12 @@ describe("android shell", () => {
     shareMock.mockResolvedValue(undefined);
     isAlwaysOnTopMock.mockResolvedValue(false);
     setAlwaysOnTopMock.mockResolvedValue(undefined);
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "get_app_settings") return Promise.resolve(defaultAppSettings);
-      if (command === "update_app_settings") return Promise.resolve(defaultAppSettings);
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_app_settings") return Promise.resolve(appSettings);
+      if (command === "update_app_settings") {
+        appSettings = { ...appSettings, ...(args?.patch as Record<string, unknown>) };
+        return Promise.resolve(appSettings);
+      }
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") return Promise.resolve(normalPage);
       if (command === "read_legacy_image_bytes") return Promise.resolve([]);
@@ -239,5 +246,16 @@ describe("android shell", () => {
     expect(shareMock).not.toHaveBeenCalled();
     expect(openPathMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
     expect(await screen.findByText("数据包已导出")).toBeTruthy();
+  });
+
+  it("uses edit as the default double click action on android messages", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const textButton = await screen.findByRole("button", { name: "手机记录" });
+    await user.dblClick(textButton);
+
+    expect(await screen.findByRole("dialog", { name: "编辑消息 1" })).toBeTruthy();
   });
 });

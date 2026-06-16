@@ -59,6 +59,7 @@ const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
   archive_after_import: false,
+  message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
   capture_hotkey: "Ctrl+Alt+V",
