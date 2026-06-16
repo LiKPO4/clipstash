@@ -21,7 +21,6 @@ import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
   copyLegacyMessageTextToClipboard,
-  copyLegacyImageToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
   createLegacyTextMessage,
@@ -58,6 +57,7 @@ import type {
   AppSettingsPatch,
   DataExportResult,
   DataImportResult,
+  GithubReleaseInfo,
   LegacyMessageImage,
   LegacyMessage,
   LegacyMessagePage,
@@ -65,7 +65,6 @@ import type {
   LegacyArchiveMessageResult,
   MessageDoubleClickAction,
   AppMigrationResult,
-  LegacyCopyImageResult,
   LegacyCreateTextMessageResult,
   LegacyImportQueuePasteArchiveResult,
   LegacyImportQueuePasteResult,
@@ -76,14 +75,27 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.6";
+const CURRENT_VERSION = "2.1.7";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
 const MAX_EDIT_TEXTAREA_HEIGHT = 700;
+const GITHUB_RELEASE_API_URL = "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
 const GITHUB_RELEASES_URL = "https://github.com/LiKPO4/clipstash/releases/latest";
+const IS_TEST_ENV = import.meta.env.MODE === "test";
+const ANDROID_BACK_EVENT = "clipstash-android-back";
+
+declare global {
+  interface Window {
+    ClipStashAndroid?: {
+      shareZip?: (path: string) => void;
+    };
+  }
+}
+
 type PreviewImage = {
+  externalWindow?: boolean;
   filename: string;
   images: PreviewImageItem[];
   index: number;
@@ -133,8 +145,6 @@ type CopyResult = {
   messageId: number;
   textLength: number;
 };
-
-type ImageCopyResult = LegacyCopyImageResult;
 
 type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
 
@@ -197,8 +207,6 @@ function App() {
   const [archiveResult, setArchiveResult] = useState<LegacyArchiveMessageResult | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
-  const [copyImageError, setCopyImageError] = useState<string | null>(null);
-  const [copyImageResult, setCopyImageResult] = useState<ImageCopyResult | null>(null);
   const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
     useState<number | null>(null);
   const [importQueueError, setImportQueueError] = useState<string | null>(null);
@@ -334,14 +342,14 @@ function App() {
   }, [editImageItems]);
 
   useEffect(() => {
-    if (!copyError && !copyResult && !copyImageError && !copyImageResult) return;
+    if (!copyError && !copyResult) return;
 
     const timer = window.setTimeout(() => {
       clearCopyFeedback();
     }, 2400);
 
     return () => window.clearTimeout(timer);
-  }, [copyError, copyResult, copyImageError, copyImageResult]);
+  }, [copyError, copyResult]);
 
   useEffect(() => {
     if (
@@ -541,11 +549,58 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [deletingMessage, editingMessage, previewImage, showComposer, showSettings]);
 
+  useEffect(() => {
+    if (!IS_ANDROID) return;
+
+    const handleAndroidBack = (event: Event) => {
+      if (previewImage) {
+        event.preventDefault();
+        closeHoverPreviewWindow();
+        setPreviewImage(null);
+        return;
+      }
+
+      if (deletingMessage) {
+        event.preventDefault();
+        closeDeleteMessage();
+        return;
+      }
+
+      if (editingMessage) {
+        event.preventDefault();
+        closeEditMessage();
+        return;
+      }
+
+      if (showComposer) {
+        event.preventDefault();
+        if (!creatingMediaMessage) {
+          setShowComposer(false);
+          setCreateMediaError(null);
+        }
+        return;
+      }
+
+      if (showSettings) {
+        event.preventDefault();
+        setShowSettings(false);
+      }
+    };
+
+    window.addEventListener(ANDROID_BACK_EVENT, handleAndroidBack);
+    return () => window.removeEventListener(ANDROID_BACK_EVENT, handleAndroidBack);
+  }, [
+    creatingMediaMessage,
+    deletingMessage,
+    editingMessage,
+    previewImage,
+    showComposer,
+    showSettings,
+  ]);
+
   function clearCopyFeedback() {
     setCopyError(null);
     setCopyResult(null);
-    setCopyImageError(null);
-    setCopyImageResult(null);
   }
 
   function clearImportFeedback() {
@@ -716,7 +771,7 @@ function App() {
     setReleaseCheckResult(null);
 
     try {
-      const payload = await fetchLatestGithubRelease();
+      const payload = await fetchLatestReleaseForCheck();
       const latestVersion = normalizeReleaseVersion(payload.tag_name ?? "");
       if (!latestVersion) throw new Error("GitHub Release 响应缺少版本号");
 
@@ -732,6 +787,23 @@ function App() {
     } finally {
       setCheckingUpdate(false);
     }
+  }
+
+  async function fetchLatestReleaseForCheck(): Promise<GithubReleaseInfo> {
+    if (!IS_ANDROID && !IS_TEST_ENV && typeof fetch === "function") {
+      const response = await fetch(GITHUB_RELEASE_API_URL, {
+        cache: "no-store",
+        headers: {
+          Accept: "application/vnd.github+json",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`GitHub Release 检查失败：HTTP ${response.status}`);
+      }
+      return response.json() as Promise<GithubReleaseInfo>;
+    }
+
+    return fetchLatestGithubRelease();
   }
 
   async function downloadUpdate() {
@@ -1251,20 +1323,6 @@ function App() {
     }
   }
 
-  async function copyMessageImage(image: LegacyMessageImage) {
-    if (!image.exists) return;
-
-    setCopyImageError(null);
-    setCopyImageResult(null);
-
-    try {
-      const result = await copyLegacyImageToClipboard(image.filename);
-      setCopyImageResult(result);
-    } catch (err) {
-      setCopyImageError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
   async function openImportQueue(message: LegacyMessage) {
     if (loadingImportQueueMessageId !== null || pastingImportQueue) return;
 
@@ -1478,7 +1536,6 @@ function App() {
               onEdit={openEditMessage}
               onMessageDoubleClick={handleMessageDoubleClick}
               onArchive={toggleArchiveMessage}
-              onCopyImage={copyMessageImage}
               onCopyText={copyMessageText}
               onToggleImages={toggleImageExpansion}
               onOpenImportQueue={openImportQueue}
@@ -1507,7 +1564,10 @@ function App() {
       )}
 
       {previewImage && (
-        <HoverImagePreview image={previewImage} />
+        <>
+          <div className="hover-preview-dim" />
+          {!previewImage.externalWindow && <HoverImagePreview image={previewImage} />}
+        </>
       )}
 
       {editingMessage && (
@@ -1691,27 +1751,6 @@ function App() {
           ) : (
             copyResult && (
               <p>{copyResult.textLength} 个字符</p>
-            )
-          )}
-        </OperationFeedback>
-      )}
-
-      {(copyImageError || copyImageResult) && (
-        <OperationFeedback
-          dismissLabel="关闭图片复制提示"
-          onDismiss={clearCopyFeedback}
-          surface="floating"
-          variant={copyImageError ? "error" : "success"}
-          title={copyImageError ? "复制图片失败" : "已复制图片"}
-        >
-          {copyImageError ? (
-            <p>{copyImageError}</p>
-          ) : (
-            copyImageResult && (
-              <p>
-                {copyImageResult.filename} · {copyImageResult.width} ×{" "}
-                {copyImageResult.height}
-              </p>
             )
           )}
         </OperationFeedback>
@@ -2431,7 +2470,6 @@ function MessageList({
   loadingMore,
   messages,
   onArchive,
-  onCopyImage,
   onCopyText,
   onDelete,
   onEdit,
@@ -2454,7 +2492,6 @@ function MessageList({
   loadingMore: boolean;
   messages: LegacyMessage[];
   onArchive: (message: LegacyMessage) => void;
-  onCopyImage: (image: LegacyMessageImage) => void;
   onCopyText: (message: LegacyMessage) => void;
   onDelete: (message: LegacyMessage) => void;
   onEdit: (message: LegacyMessage) => void;
@@ -2611,7 +2648,6 @@ function MessageList({
                     <MessageImageTile
                       image={image}
                       key={image.id}
-                      onCopy={onCopyImage}
                       onPreview={onPreview}
                       previewDelaySeconds={previewDelaySeconds}
                       previewImages={previewImages}
@@ -2848,6 +2884,9 @@ function MessageComposerDialog({
               </label>
               <button type="submit" form={formId} className="write-submit" disabled={!canSave}>
                 {saving ? "保存中" : "保存"}
+              </button>
+              <button type="button" className="preview-close" onClick={handleClose} aria-label={closeAriaLabel}>
+                ×
               </button>
             </div>
           ) : (
@@ -3118,14 +3157,12 @@ function ComposerImageTile({
 
 function MessageImageTile({
   image,
-  onCopy,
   onPreview,
   previewDelaySeconds,
   previewImages,
   src,
 }: {
   image: LegacyMessageImage;
-  onCopy: (image: LegacyMessageImage) => void;
   onPreview: (image: PreviewImage | null) => void;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
@@ -3144,49 +3181,48 @@ function MessageImageTile({
     }
   }
 
-  function clearCopyTimer() {
-    if (copyTimerRef.current !== null) {
-      window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = null;
-    }
-  }
+  function readImagePreview(target: HTMLButtonElement) {
+    const img = target.querySelector("img");
+    const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
+    const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
+    const anchor = target.getBoundingClientRect();
+    const preview = {
+      filename: image.filename,
+      images: previewImages,
+      index: previewIndex >= 0 ? previewIndex : 0,
+      path: image.path,
+      position: calculatePreviewPosition(
+        anchor,
+        naturalWidth,
+        naturalHeight,
+      ),
+      src: imageSrc,
+      total: previewImages.length,
+    };
 
-  const copyTimerRef = useRef<number | null>(null);
-
-  function scheduleCopy() {
-    clearCopyTimer();
-    copyTimerRef.current = window.setTimeout(() => {
-      copyTimerRef.current = null;
-      onCopy(image);
-    }, MESSAGE_DOUBLE_CLICK_DELAY_MS);
+    return { anchor, preview };
   }
 
   function showPreview(target: HTMLButtonElement) {
     if (!imageSrc) return;
 
     clearPreviewTimer();
-    const img = target.querySelector("img");
-    const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
-    const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
-    const anchor = target.getBoundingClientRect();
+    const { anchor, preview } = readImagePreview(target);
 
     previewTimerRef.current = window.setTimeout(() => {
       previewTimerRef.current = null;
-      const nextPreview = {
-        filename: image.filename,
-        images: previewImages,
-        index: previewIndex >= 0 ? previewIndex : 0,
-        path: image.path,
-        position: calculatePreviewPosition(
-          anchor,
-          naturalWidth,
-          naturalHeight,
-        ),
-        src: imageSrc,
-        total: previewImages.length,
-      };
-      showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
+      onPreview({ ...preview, externalWindow: true });
+      showHoverPreviewWindow(preview, anchor).catch(() => onPreview(preview));
     }, Math.max(0, previewDelaySeconds * 1000));
+  }
+
+  function openPreview(target: HTMLButtonElement) {
+    if (!imageSrc) return;
+
+    clearPreviewTimer();
+    closeHoverPreviewWindow();
+    const { preview } = readImagePreview(target);
+    onPreview(preview);
   }
 
   function hidePreview() {
@@ -3201,8 +3237,7 @@ function MessageImageTile({
         <button
           type="button"
           className="image-preview-action"
-          onClick={scheduleCopy}
-          onDoubleClick={clearCopyTimer}
+          onClick={(event) => openPreview(event.currentTarget)}
           onMouseEnter={(event) => showPreview(event.currentTarget)}
           onMouseLeave={hidePreview}
           onFocus={(event) => showPreview(event.currentTarget)}
@@ -3768,6 +3803,11 @@ async function fileToNumberArray(file: File) {
 }
 
 async function openExportedDataPackage(filename: string, bytes: number[], path: string) {
+  if (IS_ANDROID && window.ClipStashAndroid?.shareZip) {
+    window.ClipStashAndroid.shareZip(path);
+    return;
+  }
+
   const buffer = new Uint8Array(bytes).buffer;
   const blob = new Blob([buffer], { type: "application/zip" });
   const file = new File([blob], filename, { type: "application/zip" });

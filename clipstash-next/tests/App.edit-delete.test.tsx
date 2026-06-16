@@ -78,7 +78,6 @@ const page = {
 
 let listedMessages = [message];
 let failNextTextCopy = false;
-let failNextImageCopy = false;
 let failNextImportStage = false;
 let failNextImportQueuePreview = false;
 let failNextImportQueueCopy = false;
@@ -177,13 +176,6 @@ const restoreResult = {
     archived: false,
     archived_at: null,
   },
-};
-
-const copyImageResult = {
-  filename: "old.png",
-  path: "C:\\Users\\Administrator\\AppData\\Roaming\\ClipStash\\images\\old.png",
-  width: 12,
-  height: 8,
 };
 
 const importStageResult = {
@@ -319,7 +311,6 @@ describe("edit and delete guarded actions", () => {
     setAlwaysOnTopMock.mockResolvedValue(undefined);
     listedMessages = [message];
     failNextTextCopy = false;
-    failNextImageCopy = false;
     failNextImportStage = false;
     failNextImportQueuePreview = false;
     failNextImportQueueCopy = false;
@@ -378,13 +369,6 @@ describe("edit and delete guarded actions", () => {
           return Promise.reject(new Error("文字剪贴板写入失败"));
         }
         return Promise.resolve({ message_id: message.id, text_length: 3 });
-      }
-      if (command === "copy_legacy_image_to_clipboard") {
-        if (failNextImageCopy) {
-          failNextImageCopy = false;
-          return Promise.reject(new Error("图片剪贴板写入失败"));
-        }
-        return Promise.resolve(copyImageResult);
       }
       if (command === "stage_legacy_message_import_to_clipboard") {
         if (failNextImportStage) {
@@ -991,20 +975,17 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("copies a message image without refreshing legacy data", async () => {
+  it("opens a message image preview without refreshing legacy data", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
     await user.click(await within(imageGrid).findByRole("button", { name: "old.png" }));
 
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
-        filename: "old.png",
-      });
+    expect(await screen.findByRole("tooltip", { name: "old.png" })).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+      filename: "old.png",
     });
-    expect(await screen.findByText("已复制图片")).toBeTruthy();
-    expect(screen.getByText("old.png · 12 × 8")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
@@ -1087,21 +1068,17 @@ describe("edit and delete guarded actions", () => {
     });
   });
 
-  it("shows an image copy error without refreshing legacy data", async () => {
+  it("keeps image clicks on preview even when clipboard copy would be unavailable", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    failNextImageCopy = true;
     await user.click(within(imageGrid).getByRole("button", { name: "old.png" }));
 
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
-        filename: "old.png",
-      });
+    expect(await screen.findByRole("tooltip", { name: "old.png" })).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+      filename: "old.png",
     });
-    expect(await screen.findByText("复制图片失败")).toBeTruthy();
-    expect(screen.getByText("图片剪贴板写入失败")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });

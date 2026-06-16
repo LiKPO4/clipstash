@@ -84,10 +84,14 @@ const normalPage = {
 
 describe("android shell", () => {
   let appSettings = { ...defaultAppSettings };
+  let listedPage = normalPage;
+  let androidShareZipMock: ReturnType<typeof vi.fn> | null = null;
 
   beforeEach(() => {
     vi.resetModules();
     appSettings = { ...defaultAppSettings };
+    listedPage = normalPage;
+    androidShareZipMock = null;
     Object.defineProperty(window.navigator, "userAgent", {
       configurable: true,
       value: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36",
@@ -112,7 +116,7 @@ describe("android shell", () => {
         return Promise.resolve(appSettings);
       }
       if (command === "get_legacy_stats") return Promise.resolve(stats);
-      if (command === "list_legacy_messages") return Promise.resolve(normalPage);
+      if (command === "list_legacy_messages") return Promise.resolve(listedPage);
       if (command === "read_legacy_image_bytes") return Promise.resolve([]);
       if (command === "export_normal_data_zip_bytes") {
         return Promise.resolve({
@@ -152,6 +156,7 @@ describe("android shell", () => {
     canShareMock.mockReset();
     openPathMock.mockReset();
     shareMock.mockReset();
+    Reflect.deleteProperty(window, "ClipStashAndroid");
   });
 
   it("uses android actions and hides desktop-only controls", async () => {
@@ -190,7 +195,7 @@ describe("android shell", () => {
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
     await user.click(screen.getByRole("button", { name: "+ 新建" }));
     const composer = await screen.findByRole("dialog", { name: "编辑新消息" });
-    expect(within(composer).queryByLabelText("关闭新消息")).toBeNull();
+    expect(within(composer).getByLabelText("关闭新消息")).toBeTruthy();
     expect(composer.querySelector(".edit-dialog-actions")).toBeNull();
     expect(within(composer).getByLabelText("选择图片")).toBeTruthy();
     expect(within(composer).queryByRole("button", { name: "关闭" })).toBeNull();
@@ -248,6 +253,23 @@ describe("android shell", () => {
     expect(await screen.findByText("数据包已导出")).toBeTruthy();
   });
 
+  it("uses the native android zip share bridge when available", async () => {
+    androidShareZipMock = vi.fn();
+    window.ClipStashAndroid = { shareZip: androidShareZipMock };
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "导出" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+    });
+    expect(androidShareZipMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
+    expect(shareMock).not.toHaveBeenCalled();
+    expect(openPathMock).not.toHaveBeenCalledWith("/tmp/clipstash-export.zip");
+  });
+
   it("uses edit as the default double click action on android messages", async () => {
     const user = userEvent.setup();
     const { default: App } = await import("../src/App");
@@ -257,5 +279,55 @@ describe("android shell", () => {
     await user.dblClick(textButton);
 
     expect(await screen.findByRole("dialog", { name: "编辑消息 1" })).toBeTruthy();
+  });
+
+  it("closes the edit dialog instead of leaving the app on android back", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const textButton = await screen.findByRole("button", { name: "手机记录" });
+    await user.dblClick(textButton);
+    expect(await screen.findByRole("dialog", { name: "编辑消息 1" })).toBeTruthy();
+
+    const backEvent = new Event("clipstash-android-back", { cancelable: true });
+    window.dispatchEvent(backEvent);
+
+    expect(backEvent.defaultPrevented).toBe(true);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 1" })).toBeNull();
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("update_legacy_message_text", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("replace_legacy_message_images", expect.anything());
+  });
+
+  it("opens message image previews instead of copying images on android", async () => {
+    listedPage = {
+      ...normalPage,
+      messages: [
+        {
+          ...normalPage.messages[0],
+          images: [
+            {
+              id: 10,
+              filename: "phone.png",
+              path: "/data/user/0/com.clipstash.next/files/images/phone.png",
+              exists: true,
+            },
+          ],
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const image = await screen.findByRole("img", { name: "phone.png" });
+    await user.click(image.closest("button")!);
+
+    expect(await screen.findByRole("tooltip", { name: "phone.png" })).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
+      filename: "phone.png",
+    });
   });
 });
