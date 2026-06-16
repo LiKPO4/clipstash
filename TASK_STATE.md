@@ -336,6 +336,7 @@
 - 已初始化 Tauri Android 工程 `clipstash-next/src-tauri/gen/android/`，并安装/使用 Android Rust targets；Android 打包时已产出 unsigned universal APK：`clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk`，大小 `65957728` 字节。首次 Gradle wrapper 下载超时后，已将 Gradle 8.14.3 手动下载进本机 wrapper 缓存，并在 wrapper 配置中增加 `networkTimeout=60000`。
 - 已验证 Android/数据包增量：`npm test -- --run` 通过 `62 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri -- android build --apk` 通过并生成 unsigned APK；`npm run tauri build` 通过并生成 Windows `ClipStash Next_2.0.9_x64_en-US.msi` 与 `ClipStash Next_2.0.9_x64-setup.exe`。
 - 已准备 `2.1.1` release 验收包：版本号、窗口标题、npm/Cargo/Tauri 配置和 release checklist 已同步；桌面 `npm run tauri build` 通过并生成 `ClipStash Next_2.1.1_x64_en-US.msi` 与 `ClipStash Next_2.1.1_x64-setup.exe`；Android `npm run tauri -- android build --apk` 通过并生成 release unsigned APK，随后使用本地预览签名 keystore zipalign + apksigner 签名为 `ClipStash.Next_2.1.1_android-universal-release-signed.apk`，签名验证通过 `v2=true`、`v3=true`，大小 `66037639` 字节。发布前验证已通过：`npm test -- --run` 通过 `62 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
+- 已准备 `2.1.2` Android 闪退/图标修复验收包：Android release 构建关闭 `isMinifyEnabled`，避免 Tauri/WebView/插件路径被 R8 混淆裁剪导致 release 启动闪退；Android 多密度 `ic_launcher*.png` 已由桌面同源 `src-tauri/icons/icon.png` 重新生成，APK badging 指向应用图标资源，解包 `res/9w.png` 确认为新剪贴板图标。发布前验证已通过：`npm test -- --run` 通过 `62 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.1.2_x64_en-US.msi` 与 `ClipStash Next_2.1.2_x64-setup.exe`；`npm run tauri -- android build --apk` 通过，签名后 `ClipStash.Next_2.1.2_android-universal-release-signed.apk` 通过 `apksigner verify`，`v2=true`、`v3=true`，大小 `69204194` 字节。
 
 ## 未完成
 
@@ -398,4 +399,4 @@
 
 ## 下一步
 
-- 下一步最小行动：从 GitHub Release 下载 Android release APK 侧载到真机，先验收手机新建图文、导出分享 zip、电脑导入 zip、重复导入不新增重复消息；通过后再决定是否固化正式签名配置。
+- 下一步最小行动：从 GitHub Release 下载 `2.1.2` Android release APK 侧载到真机，先验收是否仍闪退、图标是否正确，再验收手机新建图文、导出分享 zip、电脑导入 zip、重复导入不新增重复消息。
