@@ -1,5 +1,6 @@
 mod app_data;
 mod app_settings;
+mod data_transfer;
 mod import_executor;
 mod keyboard_input;
 mod legacy_backup;
@@ -22,8 +23,6 @@ mod legacy_write_precheck;
 mod legacy_write_validation;
 mod window_targets;
 
-use arboard::Clipboard;
-use image::{ImageBuffer, ImageFormat, Rgba};
 use std::fs;
 use std::process::Command;
 use std::sync::{
@@ -31,10 +30,19 @@ use std::sync::{
     Mutex,
 };
 use std::time::Duration;
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent};
+
+#[cfg(target_os = "windows")]
+use arboard::Clipboard;
+#[cfg(target_os = "windows")]
+use image::{ImageBuffer, ImageFormat, Rgba};
+#[cfg(target_os = "windows")]
+use tauri::menu::{Menu, MenuItem};
+#[cfg(target_os = "windows")]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "windows")]
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+#[cfg(target_os = "windows")]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -64,7 +72,9 @@ struct DownloadUpdateResult {
 #[derive(Default)]
 struct GlobalShortcutStatus {
     errors: Mutex<Vec<String>>,
+    #[cfg(target_os = "windows")]
     show_shortcut: Mutex<Option<Shortcut>>,
+    #[cfg(target_os = "windows")]
     capture_shortcut: Mutex<Option<Shortcut>>,
 }
 
@@ -86,6 +96,40 @@ fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
 #[tauri::command]
 fn migrate_legacy_data() -> Result<app_data::AppMigrationResult, String> {
     app_data::migrate_legacy_data()
+}
+
+#[tauri::command]
+fn export_normal_data_zip() -> Result<data_transfer::DataExportResult, String> {
+    let Some(output_path) = pick_save_zip_file_with_windows_dialog()? else {
+        return Err("已取消导出数据".to_string());
+    };
+    data_transfer::export_normal_data_zip_to_path(output_path)
+}
+
+#[tauri::command]
+fn export_normal_data_zip_bytes() -> Result<data_transfer::DataExportBytesResult, String> {
+    data_transfer::export_normal_data_zip_to_temp_bytes()
+}
+
+#[tauri::command]
+fn import_data_zip() -> Result<data_transfer::DataImportResult, String> {
+    let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
+        return Err("已取消导入数据".to_string());
+    };
+    data_transfer::import_data_zip_from_path(zip_path)
+}
+
+#[tauri::command]
+fn import_data_zip_from_path(path: String) -> Result<data_transfer::DataImportResult, String> {
+    data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
+}
+
+#[tauri::command]
+fn import_data_zip_bytes(
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<data_transfer::DataImportResult, String> {
+    data_transfer::import_data_zip_from_bytes(filename, bytes)
 }
 
 #[tauri::command]
@@ -200,27 +244,46 @@ fn get_global_shortcut_errors(
 
 #[tauri::command]
 fn get_launch_on_startup(app: AppHandle) -> Result<bool, String> {
-    app.autolaunch()
-        .is_enabled()
-        .map_err(|err| format!("读取开机自启动状态失败：{err}"))
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        return Ok(false);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        app.autolaunch()
+            .is_enabled()
+            .map_err(|err| format!("读取开机自启动状态失败：{err}"))
+    }
 }
 
 #[tauri::command]
 fn set_launch_on_startup(app: AppHandle, enabled: bool) -> Result<bool, String> {
-    let autostart = app.autolaunch();
-    if enabled {
-        autostart
-            .enable()
-            .map_err(|err| format!("启用开机自启动失败：{err}"))?;
-    } else {
-        autostart
-            .disable()
-            .map_err(|err| format!("关闭开机自启动失败：{err}"))?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        let _ = enabled;
+        return Err("开机自启动仅支持 Windows".to_string());
     }
 
-    autostart
-        .is_enabled()
-        .map_err(|err| format!("读取开机自启动状态失败：{err}"))
+    #[cfg(target_os = "windows")]
+    {
+        let autostart = app.autolaunch();
+        if enabled {
+            autostart
+                .enable()
+                .map_err(|err| format!("启用开机自启动失败：{err}"))?;
+        } else {
+            autostart
+                .disable()
+                .map_err(|err| format!("关闭开机自启动失败：{err}"))?;
+        }
+
+        autostart
+            .is_enabled()
+            .map_err(|err| format!("读取开机自启动状态失败：{err}"))
+    }
 }
 
 #[tauri::command]
@@ -234,6 +297,11 @@ fn update_app_settings(
     patch: app_settings::AppSettingsPatch,
 ) -> Result<app_settings::AppSettings, String> {
     let settings = app_settings::update_settings(patch)?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+    }
+    #[cfg(target_os = "windows")]
     reload_global_shortcuts(&app, &settings);
     Ok(settings)
 }
@@ -428,6 +496,7 @@ fn list_legacy_messages(
     app_data::list_messages(view, sort, offset, limit)
 }
 
+#[cfg(target_os = "windows")]
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -436,6 +505,7 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -478,31 +548,40 @@ fn capture_current_clipboard_to_app_data() -> Result<CaptureClipboardResult, Str
 }
 
 fn read_current_clipboard_content() -> Result<ClipboardContent, String> {
-    let mut clipboard =
-        Clipboard::new().map_err(|err| format!("打开系统剪贴板准备读取失败：{err}"))?;
-
-    if let Ok(image) = clipboard.get_image() {
-        return Ok(ClipboardContent {
-            kind: "image".to_string(),
-            text: None,
-            image_data: Some(clipboard_image_to_png(image)?),
-        });
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err("读取系统剪贴板仅支持 Windows".to_string());
     }
 
-    if let Ok(text) = clipboard.get_text() {
-        let normalized = text.trim().to_string();
-        if !normalized.is_empty() {
+    #[cfg(target_os = "windows")]
+    {
+        let mut clipboard =
+            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备读取失败：{err}"))?;
+
+        if let Ok(image) = clipboard.get_image() {
             return Ok(ClipboardContent {
-                kind: "text".to_string(),
-                text: Some(normalized),
-                image_data: None,
+                kind: "image".to_string(),
+                text: None,
+                image_data: Some(clipboard_image_to_png(image)?),
             });
         }
-    }
 
-    Err("剪切板没有可导入内容".to_string())
+        if let Ok(text) = clipboard.get_text() {
+            let normalized = text.trim().to_string();
+            if !normalized.is_empty() {
+                return Ok(ClipboardContent {
+                    kind: "text".to_string(),
+                    text: Some(normalized),
+                    image_data: None,
+                });
+            }
+        }
+
+        Err("剪切板没有可导入内容".to_string())
+    }
 }
 
+#[cfg(target_os = "windows")]
 fn clipboard_image_to_png(image: arboard::ImageData<'_>) -> Result<Vec<u8>, String> {
     let width = image.width as u32;
     let height = image.height as u32;
@@ -514,6 +593,7 @@ fn clipboard_image_to_png(image: arboard::ImageData<'_>) -> Result<Vec<u8>, Stri
     Ok(cursor.into_inner())
 }
 
+#[cfg(target_os = "windows")]
 fn handle_global_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     if event.state != ShortcutState::Pressed {
         return;
@@ -546,11 +626,13 @@ fn handle_global_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutE
     }
 }
 
+#[cfg(target_os = "windows")]
 fn setup_global_shortcuts(app: &tauri::App) {
     let settings = app_settings::read_settings().unwrap_or_default();
     reload_global_shortcuts(app.handle(), &settings);
 }
 
+#[cfg(target_os = "windows")]
 fn reload_global_shortcuts(app: &AppHandle, settings: &app_settings::AppSettings) {
     let shortcuts = app.global_shortcut();
     let mut errors = Vec::new();
@@ -583,6 +665,7 @@ fn reload_global_shortcuts(app: &AppHandle, settings: &app_settings::AppSettings
     }
 }
 
+#[cfg(target_os = "windows")]
 fn parse_global_shortcut(label: &str, value: &str, errors: &mut Vec<String>) -> Option<Shortcut> {
     match value.parse::<Shortcut>() {
         Ok(shortcut) => Some(shortcut),
@@ -593,6 +676,7 @@ fn parse_global_shortcut(label: &str, value: &str, errors: &mut Vec<String>) -> 
     }
 }
 
+#[cfg(target_os = "windows")]
 fn open_app_data_dir() {
     if let Ok(stats) = app_data::read_app_stats() {
         let _ = open_path_in_file_manager(&std::path::PathBuf::from(stats.data_dir));
@@ -611,8 +695,8 @@ fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        open::that(path).map_err(|err| format!("打开目录失败：{}：{err}", path.display()))?;
-        Ok(())
+        let _ = path;
+        Err("打开本地目录仅支持 Windows".to_string())
     }
 }
 
@@ -629,24 +713,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
   Write-Output $dialog.SelectedPath
 }
 "#;
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-STA", "-Command", script])
-            .output()
-            .map_err(|err| format!("打开目录选择窗口失败：{err}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(if stderr.is_empty() {
-                "目录选择窗口异常退出".to_string()
-            } else {
-                stderr
-            });
-        }
-        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if selected.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(std::path::PathBuf::from(selected)))
-        }
+        run_windows_dialog_script(script, "目录选择窗口")
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -655,6 +722,87 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     }
 }
 
+fn pick_save_zip_file_with_windows_dialog() -> Result<Option<std::path::PathBuf>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let default_name = format!(
+            "clipstash-export-{}.zip",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        let script = format!(
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.SaveFileDialog
+$dialog.Title = '导出 ClipStash 数据'
+$dialog.Filter = 'ClipStash 数据包 (*.zip)|*.zip'
+$dialog.FileName = '{default_name}'
+$dialog.DefaultExt = 'zip'
+$dialog.AddExtension = $true
+$dialog.OverwritePrompt = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+  Write-Output $dialog.FileName
+}}
+"#
+        );
+        run_windows_dialog_script(&script, "导出数据保存窗口")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前平台暂不支持选择导出位置".to_string())
+    }
+}
+
+fn pick_open_zip_file_with_windows_dialog() -> Result<Option<std::path::PathBuf>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '导入 ClipStash 数据'
+$dialog.Filter = 'ClipStash 数据包 (*.zip)|*.zip'
+$dialog.CheckFileExists = $true
+$dialog.Multiselect = $false
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.FileName
+}
+"#;
+        run_windows_dialog_script(script, "导入数据选择窗口")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前平台暂不支持选择导入数据包".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_dialog_script(
+    script: &str,
+    label: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-STA", "-Command", script])
+        .output()
+        .map_err(|err| format!("打开{label}失败：{err}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("{label}异常退出")
+        } else {
+            stderr
+        });
+    }
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
+}
+#[cfg(target_os = "windows")]
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show_hide = MenuItem::with_id(
         app,
@@ -710,38 +858,56 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .manage(GlobalShortcutStatus::default())
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .app_name("ClipStash Next")
-                .build(),
-        )
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app);
-        }))
+        .plugin(tauri_plugin_opener::init());
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder
+            .plugin(
+                tauri_plugin_autostart::Builder::new()
+                    .app_name("ClipStash Next")
+                    .build(),
+            )
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                show_main_window(app);
+            }));
+    }
+
+    builder
         .setup(|app| {
             app_data::ensure_app_data_ready()?;
-            window_targets::start_foreground_tracker();
-            setup_tray(app)?;
-            setup_global_shortcuts(app);
+            #[cfg(target_os = "windows")]
+            {
+                window_targets::start_foreground_tracker();
+                setup_tray(app)?;
+                setup_global_shortcuts(app);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" && !EXIT_REQUESTED.load(Ordering::SeqCst) {
-                    let should_hide_to_tray = app_settings::read_settings()
-                        .map(|settings| settings.close_to_tray)
-                        .unwrap_or(true);
-                    if should_hide_to_tray {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    } else {
-                        EXIT_REQUESTED.store(true, Ordering::SeqCst);
+            #[cfg(target_os = "windows")]
+            {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    if window.label() == "main" && !EXIT_REQUESTED.load(Ordering::SeqCst) {
+                        let should_hide_to_tray = app_settings::read_settings()
+                            .map(|settings| settings.close_to_tray)
+                            .unwrap_or(true);
+                        if should_hide_to_tray {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        } else {
+                            EXIT_REQUESTED.store(true, Ordering::SeqCst);
+                        }
                     }
                 }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = window;
+                let _ = event;
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -750,6 +916,8 @@ pub fn run() {
             create_legacy_mixed_message,
             create_legacy_text_message,
             download_and_open_update_installer,
+            export_normal_data_zip,
+            export_normal_data_zip_bytes,
             copy_legacy_image_to_clipboard,
             copy_legacy_message_text_to_clipboard,
             copy_legacy_message_import_queue_item_to_clipboard,
@@ -758,6 +926,9 @@ pub fn run() {
             get_app_settings,
             get_launch_on_startup,
             get_legacy_stats,
+            import_data_zip,
+            import_data_zip_bytes,
+            import_data_zip_from_path,
             list_external_window_targets,
             list_legacy_messages,
             migrate_legacy_data,

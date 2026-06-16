@@ -102,6 +102,27 @@ describe("settings storage panel", () => {
           stats: migratedStats,
         });
       }
+      if (command === "export_normal_data_zip") {
+        return Promise.resolve({
+          path: "D:\\clipstash-export.zip",
+          message_count: 6,
+          image_count: 4,
+          skipped_archived_count: 109,
+          skipped_missing_image_count: 0,
+          skipped_empty_message_count: 0,
+          bytes: 2048,
+        });
+      }
+      if (command === "import_data_zip") {
+        migratedStats = { ...stats, normal_count: 9, total_count: 118 };
+        return Promise.resolve({
+          path: "D:\\clipstash-export.zip",
+          inserted_messages: 3,
+          skipped_messages: 1,
+          imported_images: 2,
+          stats: migratedStats,
+        });
+      }
       if (command === "move_app_data_to_selected_dir") {
         migratedStats = {
           ...stats,
@@ -157,6 +178,8 @@ describe("settings storage panel", () => {
     expect(within(panel).getByText("数据目录")).toBeTruthy();
     expect(within(panel).getByText("数据库")).toBeTruthy();
     expect(within(panel).getByText("图片目录")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "导出数据" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "导入数据" })).toBeTruthy();
     expect(within(panel).getByRole("button", { name: "打开数据目录" })).toBeTruthy();
     expect(within(panel).getByRole("button", { name: "打开图片目录" })).toBeTruthy();
     expect(within(panel).getByRole("button", { name: "迁移旧数据" })).toBeTruthy();
@@ -186,6 +209,33 @@ describe("settings storage panel", () => {
       limit: 30,
     });
 
+  });
+
+  it("exports and imports data packages from settings", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    const panel = within(dialog).getByRole("region", { name: "本地存储" });
+
+    await user.click(within(panel).getByRole("button", { name: "导出数据" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip");
+    });
+    expect(await within(panel).findByText("已导出 6 条普通消息，图片 4 张。")).toBeTruthy();
+
+    await user.click(within(panel).getByRole("button", { name: "导入数据" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("import_data_zip");
+    });
+    expect(await within(panel).findByText("已导入 3 条，跳过 1 条重复，图片 2 张。")).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
+      view: "normal",
+      sort: "newest",
+      offset: 0,
+      limit: 30,
+    });
   });
 
   it("opens storage paths through backend and refreshes paths after moving app data", async () => {
@@ -273,19 +323,19 @@ describe("settings storage panel", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          tag_name: "v2.0.10",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.0.10",
+          tag_name: "v2.1.1",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.1",
           body: "更新说明",
           assets: [
             {
-              name: "ClipStash Next_2.0.10_x64_en-US.msi",
+              name: "ClipStash Next_2.1.1_x64_en-US.msi",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.10/ClipStash.Next_2.0.10_x64_en-US.msi",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.1.1/ClipStash.Next_2.1.1_x64_en-US.msi",
             },
             {
-              name: "ClipStash Next_2.0.10_x64-setup.exe",
+              name: "ClipStash Next_2.1.1_x64-setup.exe",
               browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.0.10/ClipStash.Next_2.0.10_x64-setup.exe",
+                "https://github.com/LiKPO4/clipstash/releases/download/v2.1.1/ClipStash.Next_2.1.1_x64-setup.exe",
             },
           ],
         }),
@@ -293,13 +343,13 @@ describe("settings storage panel", () => {
     );
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.0.10")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.1")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.0.10/ClipStash.Next_2.0.10_x64-setup.exe",
-      filename: "ClipStash Next_2.0.10_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.1/ClipStash.Next_2.1.1_x64-setup.exe",
+      filename: "ClipStash Next_2.1.1_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

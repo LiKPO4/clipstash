@@ -1,12 +1,16 @@
 use crate::{
-    legacy_image_files::resolve_legacy_image_path,
     legacy_model::{LegacyMessage, LegacyMessageImage},
-    legacy_paths::path_to_string,
     legacy_write_precheck::read_message_for_update_precheck,
 };
-use arboard::{Clipboard, ImageData};
 use serde::Serialize;
-use std::{borrow::Cow, path::PathBuf};
+use std::path::PathBuf;
+
+#[cfg(target_os = "windows")]
+use crate::{legacy_image_files::resolve_legacy_image_path, legacy_paths::path_to_string};
+#[cfg(target_os = "windows")]
+use arboard::{Clipboard, ImageData};
+#[cfg(target_os = "windows")]
+use std::borrow::Cow;
 
 #[derive(Debug, Serialize)]
 pub struct LegacyCopyImageResult {
@@ -64,29 +68,39 @@ pub(crate) fn copy_legacy_image_to_clipboard_from_dir(
     data_dir: PathBuf,
     filename: String,
 ) -> Result<LegacyCopyImageResult, String> {
-    let image_path = resolve_legacy_image_path(&data_dir, &filename)?;
-    let image = image::open(&image_path)
-        .map_err(|err| format!("读取旧图片准备复制失败：{}：{err}", image_path.display()))?
-        .to_rgba8();
-    let (width, height) = image.dimensions();
-    let bytes = image.into_raw();
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = data_dir;
+        let _ = filename;
+        return Err("复制图片到系统剪贴板仅支持 Windows".to_string());
+    }
 
-    let mut clipboard =
-        Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制图片失败：{err}"))?;
-    clipboard
-        .set_image(ImageData {
-            width: width as usize,
-            height: height as usize,
-            bytes: Cow::Owned(bytes),
+    #[cfg(target_os = "windows")]
+    {
+        let image_path = resolve_legacy_image_path(&data_dir, &filename)?;
+        let image = image::open(&image_path)
+            .map_err(|err| format!("读取旧图片准备复制失败：{}：{err}", image_path.display()))?
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        let bytes = image.into_raw();
+
+        let mut clipboard =
+            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制图片失败：{err}"))?;
+        clipboard
+            .set_image(ImageData {
+                width: width as usize,
+                height: height as usize,
+                bytes: Cow::Owned(bytes),
+            })
+            .map_err(|err| format!("写入图片到系统剪贴板失败：{err}"))?;
+
+        Ok(LegacyCopyImageResult {
+            filename,
+            path: path_to_string(image_path),
+            width,
+            height,
         })
-        .map_err(|err| format!("写入图片到系统剪贴板失败：{err}"))?;
-
-    Ok(LegacyCopyImageResult {
-        filename,
-        path: path_to_string(image_path),
-        width,
-        height,
-    })
+    }
 }
 
 pub(crate) fn copy_legacy_message_text_to_clipboard_from_dir(
@@ -102,16 +116,25 @@ pub(crate) fn copy_legacy_message_text_to_clipboard_from_dir(
         .filter(|text| !text.is_empty())
         .ok_or_else(|| format!("消息 #{message_id} 没有可复制的文字"))?;
 
-    let mut clipboard =
-        Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制文字失败：{err}"))?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = text;
+        return Err("复制文字到系统剪贴板仅支持 Windows".to_string());
+    }
 
-    Ok(LegacyCopyTextResult {
-        message_id,
-        text_length: text.chars().count(),
-    })
+    #[cfg(target_os = "windows")]
+    {
+        let mut clipboard =
+            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制文字失败：{err}"))?;
+        clipboard
+            .set_text(text.to_string())
+            .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+
+        Ok(LegacyCopyTextResult {
+            message_id,
+            text_length: text.chars().count(),
+        })
+    }
 }
 
 pub(crate) fn stage_legacy_message_import_to_clipboard_from_dir(
@@ -131,20 +154,29 @@ pub(crate) fn stage_legacy_message_import_to_clipboard_from_dir(
     let first_image_filename = first_existing_image.map(|image| image.filename.clone());
 
     if let Some(text) = text {
-        let mut clipboard =
-            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
-        clipboard
-            .set_text(text.to_string())
-            .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = text;
+            return Err("导入到系统剪贴板仅支持 Windows".to_string());
+        }
 
-        return Ok(LegacyImportStageResult {
-            message_id,
-            staged_kind: "text".to_string(),
-            text_length,
-            image_count,
-            first_image_filename,
-            copied_image: None,
-        });
+        #[cfg(target_os = "windows")]
+        {
+            let mut clipboard =
+                Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
+            clipboard
+                .set_text(text.to_string())
+                .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+
+            return Ok(LegacyImportStageResult {
+                message_id,
+                staged_kind: "text".to_string(),
+                text_length,
+                image_count,
+                first_image_filename,
+                copied_image: None,
+            });
+        }
     }
 
     if let Some(image) = first_existing_image {
@@ -244,20 +276,29 @@ pub(crate) fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
             .text
             .as_deref()
             .ok_or_else(|| format!("复制导入队列文字失败，队列项缺少文字：#{message_id}"))?;
-        let mut clipboard =
-            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
-        clipboard
-            .set_text(text.to_string())
-            .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = text;
+            return Err("导入到系统剪贴板仅支持 Windows".to_string());
+        }
 
-        return Ok(LegacyImportQueueCopyResult {
-            message_id,
-            item_index,
-            staged_kind: "text".to_string(),
-            text_length: item.text_length,
-            image_filename: None,
-            copied_image: None,
-        });
+        #[cfg(target_os = "windows")]
+        {
+            let mut clipboard =
+                Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
+            clipboard
+                .set_text(text.to_string())
+                .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+
+            return Ok(LegacyImportQueueCopyResult {
+                message_id,
+                item_index,
+                staged_kind: "text".to_string(),
+                text_length: item.text_length,
+                image_filename: None,
+                copied_image: None,
+            });
+        }
     }
 
     if item.kind == "image" {

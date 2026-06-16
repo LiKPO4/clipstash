@@ -6,6 +6,9 @@ import type {
   AppSettings,
   AppSettingsPatch,
   ClipboardContent,
+  DataExportBytesResult,
+  DataExportResult,
+  DataImportResult,
   ExternalWindowTarget,
   ExternalWindowValidation,
   LegacyCreateImageMessageResult,
@@ -35,6 +38,26 @@ export function getLegacyStats() {
 
 export function migrateLegacyData() {
   return invoke<AppMigrationResult>("migrate_legacy_data");
+}
+
+export function exportNormalDataZip() {
+  return invoke<DataExportResult>("export_normal_data_zip");
+}
+
+export function exportNormalDataZipBytes() {
+  return invoke<DataExportBytesResult>("export_normal_data_zip_bytes");
+}
+
+export function importDataZip() {
+  return invoke<DataImportResult>("import_data_zip");
+}
+
+export function importDataZipBytes(filename: string, bytes: number[]) {
+  return invoke<DataImportResult>("import_data_zip_bytes", { filename, bytes });
+}
+
+export function importDataZipFromPath(path: string) {
+  return invoke<DataImportResult>("import_data_zip_from_path", { path });
 }
 
 export function moveAppDataToSelectedDir() {

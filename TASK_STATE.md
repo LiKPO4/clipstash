@@ -8,6 +8,7 @@
 - 当前 UI 收敛方向：主页保持轻量工具窗口，只用于快速新建、复制、导入和列表操作；数据安全进入设置页。
 - 本轮继续按旧版体验校准：默认 Tauri 窗口宽度为 `370`，消息卡片头部信息与操作按钮同一行，归档时间上下分行，图片 hover 预览按原图尺寸优先并限制长边最大 `1000`，设置页补回旧版主要控件外观，图片目录打开权限已补 `opener:allow-open-path`，窗口置顶按钮已接入 Tauri always-on-top API。
 - 最新数据策略已切换：新版本首次打开时从旧 `%APPDATA%\ClipStash` 只读迁移到新 `%APPDATA%\ClipStash Next`，迁移状态写入新库后日常读写、复制、导入、归档、删除都走新库；界面不再展示旧库、安全审计、备份等旧库信息。
+- Android 版第一阶段已开始：复用 `clipstash-next` Tauri 2 + React + Rust，通过 Tauri Android 工程产出可侧载 APK；桌面端和 Android 端共用同一套新库与数据 zip 导入导出格式。
 
 ## 已完成
 
@@ -328,6 +329,12 @@
 - 已准备补丁版 `2.0.8` release：包含设置页打开/迁移/修复数据目录、迁移后图片通过后端读取不再受 asset scope 限制、已迁移用户可补复制缺失图片；版本号、窗口标题、npm/Cargo/Tauri 配置和 release checklist 均已同步到 `2.0.8`。发布前验证已通过：`npm test -- --run` 通过 `60 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`cargo fmt -- --check` 通过；`cargo test` 通过 `29 passed | 20 ignored`；`npm run tauri build` 通过并生成 `ClipStash Next_2.0.8_x64_en-US.msi` 与 `ClipStash Next_2.0.8_x64-setup.exe`。
 - 已修正图片加载闪烁：主列表图片 data URL 缓存提升到 App 顶层，初始加载、刷新、加载更多、迁移/修复刷新都会先预热当前页图片再 `setPage`，避免编辑保存回主界面先闪“无法读取”；悬停独立预览窗口改为透明窗口，预览页透明背景并在图片 load 后显形，减少白图闪烁。已验证 `npm test -- --run App.edit-delete.test.tsx App.safety.test.tsx` 通过 `31 passed | 9 skipped`；`npm test -- --run` 通过 `60 passed | 9 skipped`；`npm run build` 通过。
 - 已准备补丁版 `2.0.9` release：包含图片加载闪烁修复，版本号、窗口标题、npm/Cargo/Tauri 配置和 release checklist 均已同步到 `2.0.9`。发布前验证已通过：`npm test -- --run` 通过 `60 passed | 9 skipped`；`npm run build` 通过；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`cargo fmt -- --check` 通过；`cargo test` 通过 `29 passed | 20 ignored`；`npm run tauri build` 通过并生成 `ClipStash Next_2.0.9_x64_en-US.msi` 与 `ClipStash Next_2.0.9_x64-setup.exe`。
+- 已新增 ClipStash 数据包导入导出核心：`clipstash-export.json` + `images/` zip，`schema_version=1`，只导出普通区消息，不导出归档消息和设置；每张图片记录 sha256、扩展名、相对路径和大小；导入时校验 schema、路径穿越、缺失图片、大小与 sha256，并按 `text_content + created_at + 有序图片 sha256` 去重。
+- 已新增桌面数据包入口：设置页提供“导出数据 / 导入数据”，桌面主窗口在无弹窗时拖入单个 `.zip` 会直接导入；导入后刷新普通列表和计数。拖入非图片文件到新建/编辑弹窗时不再把裸文件名写入文字区，优先等待 Tauri 原生拖放完整路径。
+- 已新增 Android 第一阶段适配：顶部操作在 Android 下显示“导出 / 设置 / 新建”，隐藏桌面“置顶”和消息卡片“导入”按钮；设置页隐藏托盘、全局快捷键、开机自启、迁移/修复/打开本地目录等桌面专属项，但保留“导入数据 / 导出数据”。Android 导出通过后端生成 zip 字节并调用 Web Share API 分享，分享不可用时退回下载；Android 导入通过 WebView 文件选择器读取 zip 字节并走同一套后端校验/去重。
+- 已对 Windows-only 能力做 Android 编译隔离：托盘、全局快捷键、开机自启、窗口枚举、模拟 Ctrl+V、`arboard`、`image`、`windows-sys` 等移到 Windows cfg 路径；非 Windows 剪贴板/窗口/本地目录能力返回明确不支持错误。
+- 已初始化 Tauri Android 工程 `clipstash-next/src-tauri/gen/android/`，并安装/使用 Android Rust targets；Android 打包时已产出 unsigned universal APK：`clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk`，大小 `65957728` 字节。首次 Gradle wrapper 下载超时后，已将 Gradle 8.14.3 手动下载进本机 wrapper 缓存，并在 wrapper 配置中增加 `networkTimeout=60000`。
+- 已验证 Android/数据包增量：`npm test -- --run` 通过 `62 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri -- android build --apk` 通过并生成 unsigned APK；`npm run tauri build` 通过并生成 Windows `ClipStash Next_2.0.9_x64_en-US.msi` 与 `ClipStash Next_2.0.9_x64-setup.exe`。
 
 ## 未完成
 
@@ -346,10 +353,13 @@
 - 新库迁移已完成第一版代码与自动化验证，但尚未做用户侧真实打开验收；首次真实打开会在 `%APPDATA%\ClipStash Next` 生成新库并复制旧图片，不移动或删除旧 `clipstash.db` / `images/`。
 - P1 托盘与窗口行为已完成可编译/可打包代码路径，并已接入“关闭时隐藏到托盘或退出”的设置项；仍缺用户侧真实托盘菜单操作验收。
 - P1 全局快捷键、开机自启动、设置持久化和 P2 更新检查已完成代码路径与自动化验证；仍缺用户侧真实系统行为验收，例如全局热键从外部窗口触发、注销/重启后的自启动、设置重启后仍生效、断网更新检查和安装包迁移。
+- Android 第一阶段仍缺真机侧载验收：新建/编辑图文、点击复制、归档/恢复/删除、Android 分享导出 zip、Android 文件选择导入 zip，以及手机导出到电脑再重复导入去重的端到端实机检查。
+- Android 当前产物是 unsigned APK，适合本机/测试侧载；正式分发前仍需要签名配置、版本号迭代策略和 release 资产命名。
 
 ## 阻塞
 
 - 剩余未勾选 todolist 均为真实 Windows/用户侧验收项：多图/缺图 UI、设置重启保持、托盘、全局快捷键、剪贴板快速保存、开机自启动、安装包迁移和旧 Python 回滚打开原旧库。代码路径、文档和自动化证据已补齐到当前可验证范围。
+- Android 构建有 Kotlin daemon 跨盘增量编译警告，Gradle fallback 后仍成功产出 APK；若后续要消除该警告，可考虑把 Cargo registry 或 Android 工程放到同一盘符，或禁用 Kotlin incremental/daemon。
 
 ## 关键文件
 
@@ -362,6 +372,7 @@
 - `clipstash-next/src-tauri/src/legacy_safety.rs`
 - `clipstash-next/src-tauri/src/legacy_write_exec.rs`
 - `clipstash-next/src-tauri/src/import_executor.rs`
+- `clipstash-next/src-tauri/src/data_transfer.rs`
 - `clipstash-next/src-tauri/src/keyboard_input.rs`
 - `clipstash-next/src-tauri/src/window_targets.rs`
 - `clipstash-next/src-tauri/src/lib.rs`
@@ -381,7 +392,9 @@
 - `clipstash-next/migration-notes/release-checklist.md`
 - `clipstash-next/migration-notes/regression-dataset.md`
 - `clipstash-next/test-data/regression/legacy/clipstash.db`
+- `clipstash-next/tests/App.android.test.tsx`
+- `clipstash-next/src-tauri/gen/android/`
 
 ## 下一步
 
-- 下一步最小行动：交给用户做托盘、全局快捷键、开机自启动、安装包迁移和真实 UI 走查；若验收通过，再准备 release tag/说明和上传产物。
+- 下一步最小行动：把 unsigned APK 侧载到 Android 真机，先验收手机新建图文、导出分享 zip、电脑导入 zip、重复导入不新增重复消息；通过后再决定是否配置签名并发 Android 预览版 release。

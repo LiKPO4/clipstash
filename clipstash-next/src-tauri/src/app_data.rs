@@ -37,7 +37,7 @@ const APP_DATA_DIR_NAME: &str = "ClipStash Next";
 const APP_DB_NAME: &str = "clipstash.db";
 const DATA_LOCATION_FILE_NAME: &str = "data-location.json";
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct AppStats {
     pub data_dir: String,
     pub db_path: String,

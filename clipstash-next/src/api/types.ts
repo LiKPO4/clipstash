@@ -33,6 +33,30 @@ export type AppDataRepairResult = {
   stats: LegacyStats;
 };
 
+export type DataExportResult = {
+  path: string;
+  message_count: number;
+  image_count: number;
+  skipped_archived_count: number;
+  skipped_missing_image_count: number;
+  skipped_empty_message_count: number;
+  bytes: number;
+};
+
+export type DataExportBytesResult = {
+  filename: string;
+  export: DataExportResult;
+  bytes: number[];
+};
+
+export type DataImportResult = {
+  path: string;
+  inserted_messages: number;
+  skipped_messages: number;
+  imported_images: number;
+  stats: LegacyStats;
+};
+
 export type ClipboardContent = {
   kind: "text" | "image";
   text: string | null;

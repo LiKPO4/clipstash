@@ -27,10 +27,15 @@ import {
   createLegacyTextMessage,
   deleteLegacyMessage,
   downloadAndOpenUpdateInstaller,
+  exportNormalDataZip,
+  exportNormalDataZipBytes,
   getAppSettings,
   getGlobalShortcutErrors,
   getLegacyStats,
   getLaunchOnStartup,
+  importDataZip,
+  importDataZipBytes,
+  importDataZipFromPath,
   listLegacyMessages,
   migrateLegacyData,
   moveAppDataToSelectedDir,
@@ -50,6 +55,8 @@ import {
 import type {
   AppSettings,
   AppSettingsPatch,
+  DataExportResult,
+  DataImportResult,
   LegacyMessageImage,
   LegacyMessage,
   LegacyMessagePage,
@@ -67,8 +74,9 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.0.9";
+const CURRENT_VERSION = "2.1.0";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
 const MAX_EDIT_TEXTAREA_HEIGHT = 700;
@@ -223,8 +231,15 @@ function App() {
   const [repairingAppData, setRepairingAppData] = useState(false);
   const [migrationResult, setMigrationResult] = useState<AppMigrationResult | null>(null);
   const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [exportingData, setExportingData] = useState(false);
+  const [importingDataPackage, setImportingDataPackage] = useState(false);
+  const [dataExportResult, setDataExportResult] = useState<DataExportResult | null>(null);
+  const [dataImportResult, setDataImportResult] = useState<DataImportResult | null>(null);
+  const [dataTransferError, setDataTransferError] = useState<string | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
+  const dataPackageInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMessageListScrollTopRef = useRef<number | null>(null);
+  const [dataPackageInputKey, setDataPackageInputKey] = useState(0);
 
   useEffect(() => {
     document.title = APP_TITLE;
@@ -378,6 +393,11 @@ function App() {
 
   useEffect(() => {
     let alive = true;
+    if (IS_ANDROID) {
+      return () => {
+        alive = false;
+      };
+    }
 
     getCurrentWindow()
       .isAlwaysOnTop()
@@ -429,6 +449,12 @@ function App() {
 
   useEffect(() => {
     let alive = true;
+    if (IS_ANDROID) {
+      setStartup(false);
+      return () => {
+        alive = false;
+      };
+    }
     getLaunchOnStartup()
       .then((enabled) => {
         if (alive) {
@@ -447,6 +473,10 @@ function App() {
 
   useEffect(() => {
     if (!showSettings) return;
+    if (IS_ANDROID) {
+      setGlobalShortcutErrors([]);
+      return;
+    }
 
     let alive = true;
     getGlobalShortcutErrors()
@@ -765,6 +795,142 @@ function App() {
     }
   }
 
+  async function refreshPageAfterDataChange(nextStats: LegacyStats) {
+    setStats(nextStats);
+    const nextPage = await listLegacyMessages({
+      view,
+      sort,
+      offset: 0,
+      limit: PAGE_LIMIT,
+    });
+    const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+    setImageSources(nextImageSources);
+    setPage(nextPage);
+  }
+
+  async function exportDataPackage() {
+    if (exportingData) return;
+
+    setExportingData(true);
+    setDataTransferError(null);
+    setDataExportResult(null);
+
+    try {
+      const result = IS_ANDROID
+        ? await exportAndroidDataPackage()
+        : await exportNormalDataZip();
+      setDataExportResult(result);
+      setSettingsNotice(`已导出 ${result.message_count} 条普通消息`);
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "已取消导出数据") {
+        setDataTransferError(message);
+      }
+    } finally {
+      setExportingData(false);
+    }
+  }
+
+  async function exportAndroidDataPackage() {
+    const result = await exportNormalDataZipBytes();
+    await shareExportedDataPackage(result.filename, result.bytes);
+    return result.export;
+  }
+
+  async function importDataPackage() {
+    if (importingDataPackage) return;
+
+    if (IS_ANDROID) {
+      dataPackageInputRef.current?.click();
+      return;
+    }
+
+    setImportingDataPackage(true);
+    setDataTransferError(null);
+    setDataImportResult(null);
+
+    try {
+      const result = await importDataZip();
+      setDataImportResult(result);
+      await refreshPageAfterDataChange(result.stats);
+      setSettingsNotice(
+        result.inserted_messages > 0
+          ? `已导入 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
+          : `没有新增数据，已跳过 ${result.skipped_messages} 条重复`,
+      );
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "已取消导入数据") {
+        setDataTransferError(message);
+      }
+    } finally {
+      setImportingDataPackage(false);
+    }
+  }
+
+  async function importDataPackageFile(file: File) {
+    if (importingDataPackage) return;
+
+    setImportingDataPackage(true);
+    setDataTransferError(null);
+    setDataImportResult(null);
+
+    try {
+      if (!isZipPath(file.name)) {
+        throw new Error("导入数据包必须是 .zip 文件");
+      }
+      const bytes = await fileToNumberArray(file);
+      const result = await importDataZipBytes(file.name, bytes);
+      setDataImportResult(result);
+      await refreshPageAfterDataChange(result.stats);
+      setSettingsNotice(
+        result.inserted_messages > 0
+          ? `已导入 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
+          : `没有新增数据，已跳过 ${result.skipped_messages} 条重复`,
+      );
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      setDataTransferError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImportingDataPackage(false);
+      setDataPackageInputKey((key) => key + 1);
+    }
+  }
+
+  function selectDataPackageFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    importDataPackageFile(file).catch((err: unknown) => {
+      setDataTransferError(err instanceof Error ? err.message : String(err));
+    });
+  }
+
+  async function importDataPackageFromPath(path: string) {
+    if (importingDataPackage) return;
+
+    setImportingDataPackage(true);
+    setDataTransferError(null);
+    setDataImportResult(null);
+
+    try {
+      const result = await importDataZipFromPath(path);
+      setDataImportResult(result);
+      await refreshPageAfterDataChange(result.stats);
+      setSettingsNotice(
+        result.inserted_messages > 0
+          ? `已导入 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
+          : `没有新增数据，已跳过 ${result.skipped_messages} 条重复`,
+      );
+      window.setTimeout(() => setSettingsNotice(null), 2400);
+    } catch (err) {
+      setDataTransferError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImportingDataPackage(false);
+    }
+  }
+
   async function moveAppDataDir() {
     if (movingAppData) return;
 
@@ -940,7 +1106,14 @@ function App() {
   }
 
   async function handleNativeDroppedPaths(paths: string[]) {
-    if (paths.length === 0 || (!showComposer && !editingMessage)) return;
+    if (paths.length === 0) return;
+
+    if (!showComposer && !editingMessage) {
+      if (paths.length === 1 && isZipPath(paths[0])) {
+        await importDataPackageFromPath(paths[0]);
+      }
+      return;
+    }
 
     const imagePaths = paths.filter(isImagePath);
     const textPaths = paths.filter((path) => !isImagePath(path));
@@ -1162,14 +1335,20 @@ function App() {
         </div>
 
         <nav className="top-actions" aria-label="应用操作">
-          <button
-            type="button"
-            className={alwaysOnTop ? "active" : ""}
-            onClick={toggleAlwaysOnTop}
-            title={topmostError ? `置顶失败：${topmostError}` : undefined}
-          >
-            {alwaysOnTop ? "已置顶" : "置顶"}
-          </button>
+          {IS_ANDROID ? (
+            <button type="button" onClick={exportDataPackage} disabled={exportingData}>
+              {exportingData ? "导出中" : "导出"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={alwaysOnTop ? "active" : ""}
+              onClick={toggleAlwaysOnTop}
+              title={topmostError ? `置顶失败：${topmostError}` : undefined}
+            >
+              {alwaysOnTop ? "已置顶" : "置顶"}
+            </button>
+          )}
           <button type="button" onClick={() => setShowSettings(true)}>设置</button>
           <button
             type="button"
@@ -1180,6 +1359,19 @@ function App() {
           </button>
         </nav>
       </header>
+
+      {IS_ANDROID && (
+        <input
+          key={dataPackageInputKey}
+          ref={dataPackageInputRef}
+          className="composer-file-input"
+          type="file"
+          accept=".zip,application/zip"
+          onChange={selectDataPackageFile}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+      )}
 
       {error && (
         <section className="notice" role="alert">
@@ -1282,6 +1474,7 @@ function App() {
               onToggleImages={toggleImageExpansion}
               onOpenImportQueue={openImportQueue}
               onPreview={setPreviewImage}
+              showExternalImport={!IS_ANDROID}
               previewDelaySeconds={hoverDelay}
               scrollLines={scrollLines}
               hasMore={page.has_more}
@@ -1371,6 +1564,12 @@ function App() {
           migratingLegacyData={migratingLegacyData}
           movingAppData={movingAppData}
           repairingAppData={repairingAppData}
+          dataExportResult={dataExportResult}
+          dataImportResult={dataImportResult}
+          dataTransferError={dataTransferError}
+          exportingData={exportingData}
+          importingDataPackage={importingDataPackage}
+          isAndroid={IS_ANDROID}
           onArchiveAfterImportChange={(checked) => {
             setArchiveAfterImport(checked);
             persistAppSettings({ archive_after_import: checked }).catch(() => undefined);
@@ -1404,6 +1603,8 @@ function App() {
           onOpenReleasePage={openExternalUrl}
           onOpenPath={openLocalPath}
           onMigrateLegacyData={runLegacyMigration}
+          onExportData={exportDataPackage}
+          onImportData={importDataPackage}
           onMoveAppDataDir={moveAppDataDir}
           onRepairAppData={repairAppData}
           onPasteIntervalChange={(value) => {
@@ -1648,10 +1849,16 @@ function SettingsDialog({
   archiveAfterImport,
   checkingUpdate,
   closeToTray,
+  dataExportResult,
+  dataImportResult,
+  dataTransferError,
   downloadingUpdate,
+  exportingData,
   fontScale,
   globalShortcutErrors,
   hoverDelay,
+  importingDataPackage,
+  isAndroid,
   migrationError,
   migrationResult,
   migratingLegacyData,
@@ -1673,6 +1880,8 @@ function SettingsDialog({
   onArchiveAfterImportChange,
   onCheckUpdates,
   onDownloadUpdate,
+  onExportData,
+  onImportData,
   onClose,
   onCloseToTrayChange,
   onFontScaleChange,
@@ -1694,10 +1903,16 @@ function SettingsDialog({
   archiveAfterImport: boolean;
   checkingUpdate: boolean;
   closeToTray: boolean;
+  dataExportResult: DataExportResult | null;
+  dataImportResult: DataImportResult | null;
+  dataTransferError: string | null;
   downloadingUpdate: boolean;
+  exportingData: boolean;
   fontScale: number;
   globalShortcutErrors: string[];
   hoverDelay: number;
+  importingDataPackage: boolean;
+  isAndroid: boolean;
   migrationError: string | null;
   migrationResult: AppMigrationResult | null;
   migratingLegacyData: boolean;
@@ -1719,6 +1934,8 @@ function SettingsDialog({
   onArchiveAfterImportChange: (checked: boolean) => void;
   onCheckUpdates: () => void;
   onDownloadUpdate: () => void;
+  onExportData: () => void;
+  onImportData: () => void;
   onClose: () => void;
   onCloseToTrayChange: (checked: boolean) => void;
   onFontScaleChange: (value: number) => void;
@@ -1867,41 +2084,45 @@ function SettingsDialog({
               </select>
             </label>
 
-            <SettingToggle
-              checked={archiveAfterImport}
-              label="快速导入后自动归档"
-              description="导入完成后自动将消息移入已归档"
-              onChange={changeArchiveAfterImport}
-            />
+            {!isAndroid && (
+              <>
+                <SettingToggle
+                  checked={archiveAfterImport}
+                  label="快速导入后自动归档"
+                  description="导入完成后自动将消息移入已归档"
+                  onChange={changeArchiveAfterImport}
+                />
 
-            <SettingToggle
-              checked={closeToTray}
-              label="关闭窗口时隐藏到托盘"
-              description="关闭主窗口后应用继续驻留，托盘菜单可彻底退出"
-              onChange={changeCloseToTray}
-            />
+                <SettingToggle
+                  checked={closeToTray}
+                  label="关闭窗口时隐藏到托盘"
+                  description="关闭主窗口后应用继续驻留，托盘菜单可彻底退出"
+                  onChange={changeCloseToTray}
+                />
 
-            <SettingToggle
-              checked={startup}
-              label="开机自启动"
-              description="登录 Windows 后自动启动需求暂存站"
-              onChange={changeStartup}
-            />
-            {startupError && <p className="inline-error">{startupError}</p>}
+                <SettingToggle
+                  checked={startup}
+                  label="开机自启动"
+                  description="登录 Windows 后自动启动需求暂存站"
+                  onChange={changeStartup}
+                />
+                {startupError && <p className="inline-error">{startupError}</p>}
 
-            <HotkeyField label="呼出界面快捷键" value={showHotkey} onChange={changeShowHotkey} />
+                <HotkeyField label="呼出界面快捷键" value={showHotkey} onChange={changeShowHotkey} />
 
-            <HotkeyField
-              label="导入当前剪切板快捷键"
-              value={captureHotkey}
-              onChange={changeCaptureHotkey}
-            />
+                <HotkeyField
+                  label="导入当前剪切板快捷键"
+                  value={captureHotkey}
+                  onChange={changeCaptureHotkey}
+                />
 
-            {globalShortcutErrors.map((error) => (
-              <p className="inline-error" key={error}>
-                {error}
-              </p>
-            ))}
+                {globalShortcutErrors.map((error) => (
+                  <p className="inline-error" key={error}>
+                    {error}
+                  </p>
+                ))}
+              </>
+            )}
             {settingsError && <p className="inline-error">{settingsError}</p>}
 
             <button
@@ -1965,21 +2186,31 @@ function SettingsDialog({
             <PathRow label="图片目录" value={stats.images_dir} ok={stats.images_dir_exists} />
 
             <div className="safety-actions">
-              <button type="button" onClick={onMigrateLegacyData} disabled={migratingLegacyData}>
-                {migratingLegacyData ? "迁移中..." : "迁移旧数据"}
+              <button type="button" onClick={onExportData} disabled={exportingData}>
+                {exportingData ? "导出中..." : "导出数据"}
               </button>
-              <button type="button" onClick={onMoveAppDataDir} disabled={movingAppData}>
-                {movingAppData ? "迁移中..." : "迁移数据目录"}
+              <button type="button" onClick={onImportData} disabled={importingDataPackage}>
+                {importingDataPackage ? "导入中..." : "导入数据"}
               </button>
-              <button type="button" onClick={onRepairAppData} disabled={repairingAppData}>
-                {repairingAppData ? "修复中..." : "修复数据目录"}
-              </button>
-              <button type="button" onClick={() => onOpenPath(stats.data_dir)}>
-                打开数据目录
-              </button>
-              <button type="button" onClick={() => onOpenPath(stats.images_dir)}>
-                打开图片目录
-              </button>
+              {!isAndroid && (
+                <>
+                  <button type="button" onClick={onMigrateLegacyData} disabled={migratingLegacyData}>
+                    {migratingLegacyData ? "迁移中..." : "迁移旧数据"}
+                  </button>
+                  <button type="button" onClick={onMoveAppDataDir} disabled={movingAppData}>
+                    {movingAppData ? "迁移中..." : "迁移数据目录"}
+                  </button>
+                  <button type="button" onClick={onRepairAppData} disabled={repairingAppData}>
+                    {repairingAppData ? "修复中..." : "修复数据目录"}
+                  </button>
+                  <button type="button" onClick={() => onOpenPath(stats.data_dir)}>
+                    打开数据目录
+                  </button>
+                  <button type="button" onClick={() => onOpenPath(stats.images_dir)}>
+                    打开图片目录
+                  </button>
+                </>
+              )}
             </div>
 
             {migrationResult && (
@@ -1989,7 +2220,21 @@ function SettingsDialog({
                 {migrationResult.copied_images} 张。
               </p>
             )}
+            {dataExportResult && (
+              <p className="settings-notice">
+                已导出 {dataExportResult.message_count} 条普通消息，图片{" "}
+                {dataExportResult.image_count} 张。
+              </p>
+            )}
+            {dataImportResult && (
+              <p className="settings-notice">
+                已导入 {dataImportResult.inserted_messages} 条，跳过{" "}
+                {dataImportResult.skipped_messages} 条重复，图片{" "}
+                {dataImportResult.imported_images} 张。
+              </p>
+            )}
             {migrationError && <p className="inline-error">迁移失败：{migrationError}</p>}
+            {dataTransferError && <p className="inline-error">数据包处理失败：{dataTransferError}</p>}
             {openPathError && <p className="inline-error">打开目录失败：{openPathError}</p>}
           </section>
         </div>
@@ -2116,6 +2361,7 @@ function MessageList({
   imageSources,
   previewDelaySeconds,
   scrollLines,
+  showExternalImport,
 }: {
   archivingMessageId: number | null;
   expandedImageMessageIds: number[];
@@ -2137,6 +2383,7 @@ function MessageList({
   imageSources: Record<string, string>;
   previewDelaySeconds: number;
   scrollLines: number;
+  showExternalImport: boolean;
 }) {
   function requestMoreIfNearBottom(element: HTMLElement) {
     if (!hasMore || loadingMore) return;
@@ -2209,13 +2456,15 @@ function MessageList({
                 </button>
                 {!message.archived && (
                   <>
-                    <button
-                      type="button"
-                      disabled={importingMessageId !== null}
-                      onClick={() => onOpenImportQueue(message)}
-                    >
-                      {importingMessageId === message.id ? "准备中..." : "导入"}
-                    </button>
+                    {showExternalImport && (
+                      <button
+                        type="button"
+                        disabled={importingMessageId !== null}
+                        onClick={() => onOpenImportQueue(message)}
+                      >
+                        {importingMessageId === message.id ? "准备中..." : "导入"}
+                      </button>
+                    )}
                     <button type="button" onClick={() => onEdit(message)}>
                       编辑
                     </button>
@@ -3113,9 +3362,13 @@ function isImagePath(path: string) {
   return /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(path);
 }
 
+function isZipPath(path: string) {
+  return /\.zip$/i.test(path);
+}
+
 function fileToDroppedPath(file: File) {
   const fileWithPath = file as File & { path?: string; webkitRelativePath?: string };
-  return fileWithPath.path || fileWithPath.webkitRelativePath || file.name;
+  return fileWithPath.path || fileWithPath.webkitRelativePath || "";
 }
 
 async function droppedPathToFile(path: string) {
@@ -3348,6 +3601,38 @@ async function composerImageItemsToNumberArrays(items: ComposerImageItem[]) {
 async function fileToNumberArray(file: File) {
   const buffer = await file.arrayBuffer();
   return Array.from(new Uint8Array(buffer));
+}
+
+async function shareExportedDataPackage(filename: string, bytes: number[]) {
+  const buffer = new Uint8Array(bytes).buffer;
+  const blob = new Blob([buffer], { type: "application/zip" });
+  const file = new File([blob], filename, { type: "application/zip" });
+  const shareData = {
+    files: [file],
+    title: "ClipStash 数据包",
+  };
+  const shareNavigator = navigator as Navigator & {
+    canShare?: (data: typeof shareData) => boolean;
+    share?: (data: typeof shareData) => Promise<void>;
+  };
+
+  if (shareNavigator.share && shareNavigator.canShare?.(shareData)) {
+    await shareNavigator.share(shareData);
+    return;
+  }
+
+  downloadBlob(blob, filename);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function existingImageToNumberArray(image: LegacyMessageImage) {
