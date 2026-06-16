@@ -1464,6 +1464,31 @@ textarea:focus,
   border-radius: 8px;
 }
 
+.android-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100vh;
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 18px calc(18px + env(safe-area-inset-bottom, 0px));
+  border: 0;
+  background: rgba(5, 16, 32, 0.78);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.android-image-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+}
+
 .delete-dialog {
   width: min(560px, 100%);
 }

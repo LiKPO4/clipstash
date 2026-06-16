@@ -210,7 +210,7 @@ describe("android shell", () => {
     const previewButton = composer.querySelector<HTMLButtonElement>(".composer-image-tile");
     expect(previewButton).toBeTruthy();
     await user.click(previewButton!);
-    expect(await screen.findByRole("tooltip", { name: "phone.png" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "关闭图片预览 phone.png" })).toBeTruthy();
 
     fireEvent.click(composer.parentElement!);
     await waitFor(() => {
@@ -325,9 +325,15 @@ describe("android shell", () => {
     const image = await screen.findByRole("img", { name: "phone.png" });
     await user.click(image.closest("button")!);
 
-    expect(await screen.findByRole("tooltip", { name: "phone.png" })).toBeTruthy();
+    const preview = await screen.findByRole("button", { name: "关闭图片预览 phone.png" });
+    expect(within(preview).getByRole("img", { name: "phone.png" })).toBeTruthy();
     expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
       filename: "phone.png",
+    });
+
+    await user.click(within(preview).getByRole("img", { name: "phone.png" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "关闭图片预览 phone.png" })).toBeNull();
     });
   });
 });

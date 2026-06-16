@@ -75,7 +75,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.8";
+const CURRENT_VERSION = "2.1.9";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -1531,6 +1531,7 @@ function App() {
               messages={page.messages}
               archivingMessageId={archivingMessageId}
               expandedImageMessageIds={expandedImageMessageIds}
+              isAndroid={IS_ANDROID}
               importingMessageId={loadingImportQueueMessageId}
               onDelete={openDeleteMessage}
               onEdit={openEditMessage}
@@ -1564,10 +1565,14 @@ function App() {
       )}
 
       {previewImage && (
-        <>
-          <div className="hover-preview-dim" />
-          {!previewImage.externalWindow && <HoverImagePreview image={previewImage} />}
-        </>
+        IS_ANDROID ? (
+          <AndroidImagePreview image={previewImage} onClose={() => setPreviewImage(null)} />
+        ) : (
+          <>
+            <div className="hover-preview-dim" />
+            {!previewImage.externalWindow && <HoverImagePreview image={previewImage} />}
+          </>
+        )
       )}
 
       {editingMessage && (
@@ -2465,6 +2470,7 @@ function MessageList({
   archivingMessageId,
   expandedImageMessageIds,
   hasMore,
+  isAndroid,
   importingMessageId,
   listRef,
   loadingMore,
@@ -2487,6 +2493,7 @@ function MessageList({
   archivingMessageId: number | null;
   expandedImageMessageIds: number[];
   hasMore: boolean;
+  isAndroid: boolean;
   importingMessageId: number | null;
   listRef: RefObject<HTMLElement | null>;
   loadingMore: boolean;
@@ -2647,6 +2654,7 @@ function MessageList({
                   {visibleImages.map((image) => (
                     <MessageImageTile
                       image={image}
+                      isAndroid={isAndroid}
                       key={image.id}
                       onPreview={onPreview}
                       previewDelaySeconds={previewDelaySeconds}
@@ -3120,15 +3128,17 @@ function ComposerImageTile({
       <button
         type="button"
         className="composer-image-tile"
-        onMouseEnter={(event) => showPreview(event.currentTarget)}
-        onMouseLeave={hidePreview}
-        onFocus={(event) => showPreview(event.currentTarget)}
-        onBlur={hidePreview}
         onClick={(event) => {
-          if (!isAndroid) return;
-          event.preventDefault();
-          showPreview(event.currentTarget);
+          if (isAndroid) {
+            event.preventDefault();
+            event.stopPropagation();
+            showPreview(event.currentTarget);
+          }
         }}
+        onMouseEnter={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
+        onMouseLeave={isAndroid ? undefined : hidePreview}
+        onFocus={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
+        onBlur={isAndroid ? undefined : hidePreview}
         title={title}
       >
         {previewImage?.src ? (
@@ -3157,12 +3167,14 @@ function ComposerImageTile({
 
 function MessageImageTile({
   image,
+  isAndroid = false,
   onPreview,
   previewDelaySeconds,
   previewImages,
   src,
 }: {
   image: LegacyMessageImage;
+  isAndroid?: boolean;
   onPreview: (image: PreviewImage | null) => void;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
@@ -3238,10 +3250,10 @@ function MessageImageTile({
           type="button"
           className="image-preview-action"
           onClick={(event) => openPreview(event.currentTarget)}
-          onMouseEnter={(event) => showPreview(event.currentTarget)}
-          onMouseLeave={hidePreview}
-          onFocus={(event) => showPreview(event.currentTarget)}
-          onBlur={hidePreview}
+          onMouseEnter={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
+          onMouseLeave={isAndroid ? undefined : hidePreview}
+          onFocus={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
+          onBlur={isAndroid ? undefined : hidePreview}
         >
           <img
             alt={image.filename}
@@ -3284,6 +3296,25 @@ function HoverImagePreview({ image }: {
     >
       <img alt={image.filename} src={image.src} />
     </aside>
+  );
+}
+
+function AndroidImagePreview({
+  image,
+  onClose,
+}: {
+  image: PreviewImage;
+  onClose: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="android-image-preview"
+      aria-label={`关闭图片预览 ${image.filename}`}
+      onClick={onClose}
+    >
+      <img alt={image.filename} src={image.src} draggable={false} />
+    </button>
   );
 }
 
