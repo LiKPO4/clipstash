@@ -11,6 +11,7 @@ import type {
   DataImportResult,
   ExternalWindowTarget,
   ExternalWindowValidation,
+  GithubReleaseInfo,
   LegacyCreateImageMessageResult,
   LegacyArchiveMessageResult,
   LegacyCreateMixedMessageResult,
@@ -85,6 +86,10 @@ export function downloadAndOpenUpdateInstaller(downloadUrl: string, filename: st
     downloadUrl,
     filename,
   });
+}
+
+export function fetchLatestGithubRelease() {
+  return invoke<GithubReleaseInfo>("fetch_latest_github_release");
 }
 
 export function getGlobalShortcutErrors() {

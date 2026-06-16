@@ -62,7 +62,8 @@ const defaultAppSettings = {
 };
 
 describe("settings storage panel", () => {
-  let migratedStats = stats;
+let migratedStats = stats;
+let latestReleaseResponse: unknown = null;
   let appSettings = { ...defaultAppSettings };
 
   beforeEach(() => {
@@ -151,12 +152,19 @@ describe("settings storage panel", () => {
           installer_path: "C:\\Temp\\ClipStash Next_2.0.10_x64-setup.exe",
         });
       }
+      if (command === "fetch_latest_github_release") {
+        if (latestReleaseResponse instanceof Error) {
+          return Promise.reject(latestReleaseResponse);
+        }
+        return Promise.resolve(latestReleaseResponse);
+      }
       return Promise.reject(new Error(`Unexpected command: ${command}`));
     });
   });
 
   afterEach(() => {
     cleanup();
+    latestReleaseResponse = null;
     localStorage.clear();
     vi.unstubAllGlobals();
     invokeMock.mockReset();
@@ -318,38 +326,32 @@ describe("settings storage panel", () => {
     });
     expect(await within(dialog).findByText("导入剪切板快捷键已应用")).toBeTruthy();
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          tag_name: "v2.1.4",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.4",
-          body: "更新说明",
-          assets: [
-            {
-              name: "ClipStash Next_2.1.4_x64_en-US.msi",
-              browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.1.4/ClipStash.Next_2.1.4_x64_en-US.msi",
-            },
-            {
-              name: "ClipStash Next_2.1.4_x64-setup.exe",
-              browser_download_url:
-                "https://github.com/LiKPO4/clipstash/releases/download/v2.1.4/ClipStash.Next_2.1.4_x64-setup.exe",
-            },
-          ],
-        }),
-      }),
-    );
+    latestReleaseResponse = {
+      tag_name: "v2.1.5",
+      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.5",
+      body: "更新说明",
+      assets: [
+        {
+          name: "ClipStash Next_2.1.5_x64_en-US.msi",
+          browser_download_url:
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.5/ClipStash.Next_2.1.5_x64_en-US.msi",
+        },
+        {
+          name: "ClipStash Next_2.1.5_x64-setup.exe",
+          browser_download_url:
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.5/ClipStash.Next_2.1.5_x64-setup.exe",
+        },
+      ],
+    };
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.1.4")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.5")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.4/ClipStash.Next_2.1.4_x64-setup.exe",
-      filename: "ClipStash Next_2.1.4_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.5/ClipStash.Next_2.1.5_x64-setup.exe",
+      filename: "ClipStash Next_2.1.5_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });
@@ -362,34 +364,21 @@ describe("settings storage panel", () => {
     const dialog = await screen.findByRole("dialog", { name: "设置" });
     const checkButton = within(dialog).getByRole("button", { name: "检查更新" });
 
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new Error("网络不可用")));
+    latestReleaseResponse = new Error("网络不可用");
     await user.click(checkButton);
     expect(await within(dialog).findByText("网络不可用")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "打开 Release 页面" }));
     expect(openUrlMock).toHaveBeenCalledWith("https://github.com/LiKPO4/clipstash/releases/latest");
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        json: async () => ({}),
-      }),
-    );
+    latestReleaseResponse = new Error("GitHub Release 检查失败：HTTP 503");
     await user.click(checkButton);
     expect(await within(dialog).findByText("GitHub Release 检查失败：HTTP 503")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "打开 Release 页面" })).toBeTruthy();
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          html_url: "https://github.com/LiKPO4/clipstash/releases/latest",
-          body: "缺少 tag",
-        }),
-      }),
-    );
+    latestReleaseResponse = {
+      html_url: "https://github.com/LiKPO4/clipstash/releases/latest",
+      body: "缺少 tag",
+    };
     await user.click(checkButton);
     expect(await within(dialog).findByText("GitHub Release 响应缺少版本号")).toBeTruthy();
     expect(within(dialog).queryByText("待实现")).toBeNull();

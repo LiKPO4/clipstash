@@ -69,6 +69,19 @@ struct DownloadUpdateResult {
     installer_path: String,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct GithubReleaseAsset {
+    browser_download_url: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct GithubReleaseInfo {
+    assets: Option<Vec<GithubReleaseAsset>>,
+    html_url: Option<String>,
+    tag_name: Option<String>,
+}
+
 #[derive(Default)]
 struct GlobalShortcutStatus {
     errors: Mutex<Vec<String>>,
@@ -152,6 +165,27 @@ fn move_app_data_to_selected_dir() -> Result<app_data::AppDataMoveResult, String
 #[tauri::command]
 fn repair_app_data_dir() -> Result<app_data::AppDataRepairResult, String> {
     app_data::repair_app_data_dir()
+}
+
+#[tauri::command]
+fn fetch_latest_github_release() -> Result<GithubReleaseInfo, String> {
+    let response = reqwest::blocking::Client::new()
+        .get("https://api.github.com/repos/LiKPO4/clipstash/releases/latest")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, "ClipStash-Next-Update-Checker")
+        .send()
+        .map_err(|err| format!("GitHub Release 检查失败：{err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub Release 检查失败：HTTP {}",
+            response.status()
+        ));
+    }
+    let body = response
+        .text()
+        .map_err(|err| format!("读取 GitHub Release 响应失败：{err}"))?;
+    serde_json::from_str::<GithubReleaseInfo>(&body)
+        .map_err(|err| format!("解析 GitHub Release 响应失败：{err}"))
 }
 
 #[tauri::command]
@@ -926,6 +960,7 @@ pub fn run() {
             download_and_open_update_installer,
             export_normal_data_zip,
             export_normal_data_zip_bytes,
+            fetch_latest_github_release,
             copy_legacy_image_to_clipboard,
             copy_legacy_message_text_to_clipboard,
             copy_legacy_message_import_queue_item_to_clipboard,

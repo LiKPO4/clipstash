@@ -17,7 +17,7 @@ import {
 } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
   copyLegacyMessageTextToClipboard,
@@ -29,6 +29,7 @@ import {
   downloadAndOpenUpdateInstaller,
   exportNormalDataZip,
   exportNormalDataZipBytes,
+  fetchLatestGithubRelease,
   getAppSettings,
   getGlobalShortcutErrors,
   getLegacyStats,
@@ -74,14 +75,12 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.3";
+const CURRENT_VERSION = "2.1.4";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
 const MAX_EDIT_TEXTAREA_HEIGHT = 700;
-const GITHUB_LATEST_RELEASE_API =
-  "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
 const GITHUB_RELEASES_URL = "https://github.com/LiKPO4/clipstash/releases/latest";
 type PreviewImage = {
   filename: string;
@@ -712,20 +711,7 @@ function App() {
     setReleaseCheckResult(null);
 
     try {
-      const response = await fetch(GITHUB_LATEST_RELEASE_API, {
-        headers: { Accept: "application/vnd.github+json" },
-      });
-      if (!response.ok) {
-        throw new Error(`GitHub Release 检查失败：HTTP ${response.status}`);
-      }
-      const payload = (await response.json()) as {
-        assets?: Array<{
-          browser_download_url?: string;
-          name?: string;
-        }>;
-        html_url?: string;
-        tag_name?: string;
-      };
+      const payload = await fetchLatestGithubRelease();
       const latestVersion = normalizeReleaseVersion(payload.tag_name ?? "");
       if (!latestVersion) throw new Error("GitHub Release 响应缺少版本号");
 
@@ -814,6 +800,9 @@ function App() {
     setExportingData(true);
     setDataTransferError(null);
     setDataExportResult(null);
+    if (IS_ANDROID) {
+      setSettingsNotice("正在准备导出数据包");
+    }
 
     try {
       const result = IS_ANDROID
@@ -834,7 +823,7 @@ function App() {
 
   async function exportAndroidDataPackage() {
     const result = await exportNormalDataZipBytes();
-    await shareExportedDataPackage(result.filename, result.bytes);
+    await openExportedDataPackage(result.filename, result.bytes, result.export.path);
     return result.export;
   }
 
@@ -1402,6 +1391,7 @@ function App() {
                 fileToComposerItem(file, `composer:${index}`),
               )}
               inputKey={mediaInputKey}
+              isAndroid={IS_ANDROID}
               onClose={() => setShowComposer(false)}
               onDropFiles={dropMediaFiles}
               onFileChange={selectMediaFiles}
@@ -1519,6 +1509,7 @@ function App() {
           onClose={closeEditMessage}
           onDropFiles={dropEditFiles}
           onFileChange={selectEditFiles}
+          isAndroid={IS_ANDROID}
           onPaste={pasteEditMediaContent}
           onPreview={setPreviewImage}
           onRemoveFile={removeEditFile}
@@ -1696,6 +1687,30 @@ function App() {
               <p>
                 {copyImageResult.filename} · {copyImageResult.width} ×{" "}
                 {copyImageResult.height}
+              </p>
+            )
+          )}
+        </OperationFeedback>
+      )}
+
+      {IS_ANDROID && !showSettings && (dataTransferError || dataExportResult) && (
+        <OperationFeedback
+          dismissLabel="关闭数据包提示"
+          onDismiss={() => {
+            setDataTransferError(null);
+            setDataExportResult(null);
+          }}
+          surface="floating"
+          variant={dataTransferError ? "error" : "success"}
+          title={dataTransferError ? "数据包处理失败" : "数据包已导出"}
+        >
+          {dataTransferError ? (
+            <p>{dataTransferError}</p>
+          ) : (
+            dataExportResult && (
+              <p>
+                {dataExportResult.message_count} 条普通消息，图片{" "}
+                {dataExportResult.image_count} 张。
               </p>
             )
           )}
@@ -2035,38 +2050,42 @@ function SettingsDialog({
 
         <div className="settings-body">
           <section className="settings-form" aria-label="应用设置">
-            <SettingSlider
-              label="悬浮预览延迟"
-              max={2}
-              min={0}
-              step={0.1}
-              suffix="秒"
-              value={hoverDelay}
-              onChange={changeHoverDelay}
-            />
-            <p>鼠标放在图片上多久后显示预览</p>
+            {!isAndroid && (
+              <>
+                <SettingSlider
+                  label="悬浮预览延迟"
+                  max={2}
+                  min={0}
+                  step={0.1}
+                  suffix="秒"
+                  value={hoverDelay}
+                  onChange={changeHoverDelay}
+                />
+                <p>鼠标放在图片上多久后显示预览</p>
 
-            <SettingSlider
-              label="滚动速度"
-              max={8}
-              min={1}
-              step={1}
-              suffix="行"
-              value={scrollLines}
-              onChange={changeScrollLines}
-            />
-            <p>鼠标滚轮每次滚动的行数</p>
+                <SettingSlider
+                  label="滚动速度"
+                  max={8}
+                  min={1}
+                  step={1}
+                  suffix="行"
+                  value={scrollLines}
+                  onChange={changeScrollLines}
+                />
+                <p>鼠标滚轮每次滚动的行数</p>
 
-            <SettingSlider
-              label="粘贴间隔"
-              max={3000}
-              min={50}
-              step={50}
-              suffix="毫秒"
-              value={pasteIntervalMs}
-              onChange={changePasteInterval}
-            />
-            <p>导入图文消息时每一项之间的等待时间</p>
+                <SettingSlider
+                  label="粘贴间隔"
+                  max={3000}
+                  min={50}
+                  step={50}
+                  suffix="毫秒"
+                  value={pasteIntervalMs}
+                  onChange={changePasteInterval}
+                />
+                <p>导入图文消息时每一项之间的等待时间</p>
+              </>
+            )}
 
             <SettingSlider
               label="应用内文字大小"
@@ -2533,6 +2552,7 @@ function EditMessageDialog({
   error,
   imageItems,
   inputKey,
+  isAndroid,
   message,
   previewDelaySeconds,
   previewImages,
@@ -2553,6 +2573,7 @@ function EditMessageDialog({
   error: string | null;
   imageItems: ComposerImageItem[];
   inputKey: number;
+  isAndroid: boolean;
   message: LegacyMessage;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
@@ -2580,6 +2601,7 @@ function EditMessageDialog({
       fileInputId="edit-message-files"
       imageItems={imageItems}
       inputKey={inputKey}
+      isAndroid={isAndroid}
       onClose={onClose}
       onDropFiles={onDropFiles}
       onFileChange={onFileChange}
@@ -2612,6 +2634,7 @@ function MessageComposerDialog({
   fileInputId,
   imageItems,
   inputKey,
+  isAndroid = false,
   onClose,
   onDropFiles,
   onFileChange,
@@ -2640,6 +2663,7 @@ function MessageComposerDialog({
   fileInputId: string;
   imageItems: ComposerImageItem[];
   inputKey: number;
+  isAndroid?: boolean;
   onClose: () => void;
   onDropFiles: (files: File[]) => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -2659,6 +2683,7 @@ function MessageComposerDialog({
   title: string;
 }) {
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const formId = `${textAreaId}-form`;
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -2705,28 +2730,44 @@ function MessageComposerDialog({
     }
   }
 
+  function handleClose() {
+    onPreview(null);
+    onClose();
+  }
+
   return (
-    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
+    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={handleClose}>
       <section
         aria-label={dialogLabel}
         aria-modal="true"
-        className="edit-dialog composer-dialog edit-message-dialog"
+        className={`edit-dialog composer-dialog edit-message-dialog${isAndroid ? " composer-dialog-android" : ""}`}
         role="dialog"
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="edit-header">
+        <header className="edit-header composer-header">
           <div>
             <p className="eyebrow">{eyebrow}</p>
             <h2>{title}</h2>
           </div>
-          <button type="button" className="preview-close" onClick={onClose} aria-label={closeAriaLabel}>
-            ×
-          </button>
+          {isAndroid ? (
+            <div className="composer-mobile-actions">
+              <label className="composer-file-action" htmlFor={fileInputId} aria-label="选择图片" title="选择图片">
+                图片
+              </label>
+              <button type="submit" form={formId} className="write-submit" disabled={!canSave}>
+                {saving ? "保存中" : "保存"}
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="preview-close" onClick={handleClose} aria-label={closeAriaLabel}>
+              ×
+            </button>
+          )}
         </header>
 
-        <form className="text-create-form" onSubmit={onSubmit}>
+        <form id={formId} className="text-create-form" onSubmit={onSubmit}>
           <section className="message-composer-box">
             <textarea
               ref={textAreaRef}
@@ -2740,7 +2781,10 @@ function MessageComposerDialog({
               onTouchEnd={commitTextAreaHeight}
               placeholder={placeholder}
               rows={9}
-              style={{ height: `${textAreaHeight}px` }}
+              style={{
+                fontSize: isAndroid ? "1.5em" : undefined,
+                height: `${textAreaHeight}px`,
+              }}
             />
 
             {imageItems.length > 0 && (
@@ -2749,6 +2793,7 @@ function MessageComposerDialog({
                   <ComposerImageTile
                     item={item}
                     index={index}
+                    isAndroid={isAndroid}
                     key={`${item.id}-${index}`}
                     onPreview={onPreview}
                     onRemove={onRemoveFile}
@@ -2760,26 +2805,29 @@ function MessageComposerDialog({
             )}
           </section>
 
-          <div className="dialog-actions edit-dialog-actions">
+          <input
+            key={inputKey}
+            id={fileInputId}
+            className="composer-file-input"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={onFileChange}
+          />
+
+          {!isAndroid && (
+            <div className="dialog-actions edit-dialog-actions">
             <label className="composer-file-action" htmlFor={fileInputId}>
               选择图片
             </label>
-            <input
-              key={inputKey}
-              id={fileInputId}
-              className="composer-file-input"
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={onFileChange}
-            />
-            <button type="button" className="secondary-action" onClick={onClose}>
+            <button type="button" className="secondary-action" onClick={handleClose}>
               关闭
             </button>
             <button type="submit" className="write-submit" disabled={!canSave}>
               {saving ? "正在保存..." : "保存"}
             </button>
-          </div>
+            </div>
+          )}
         </form>
 
         {error && (
@@ -2869,6 +2917,7 @@ function DeleteMessageDialog({
 function ComposerImageTile({
   item,
   index,
+  isAndroid = false,
   onPreview,
   onRemove,
   previewDelaySeconds,
@@ -2876,6 +2925,7 @@ function ComposerImageTile({
 }: {
   item: ComposerImageItem;
   index: number;
+  isAndroid?: boolean;
   onPreview: (image: PreviewImage | null) => void;
   onRemove?: (index: number) => void;
   previewDelaySeconds: number;
@@ -2904,24 +2954,22 @@ function ComposerImageTile({
     const naturalWidth = img?.naturalWidth && img.naturalWidth > 0 ? img.naturalWidth : 320;
     const naturalHeight = img?.naturalHeight && img.naturalHeight > 0 ? img.naturalHeight : 240;
     const anchor = target.getBoundingClientRect();
+    const nextPreview = {
+      ...previewImage,
+      images: previewImages,
+      index,
+      position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
+      total: previewImages.length,
+    };
+
+    if (isAndroid) {
+      onPreview(nextPreview);
+      return;
+    }
 
     previewTimerRef.current = window.setTimeout(() => {
       previewTimerRef.current = null;
-      showHoverPreviewWindow({
-        ...previewImage,
-        images: previewImages,
-        index,
-        position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
-        total: previewImages.length,
-      }, anchor).catch(() => {
-        onPreview({
-          ...previewImage,
-          images: previewImages,
-          index,
-          position: calculatePreviewPosition(anchor, naturalWidth, naturalHeight),
-          total: previewImages.length,
-        });
-      });
+      showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
     }, Math.max(0, previewDelaySeconds * 1000));
   }
 
@@ -2947,6 +2995,11 @@ function ComposerImageTile({
         onMouseLeave={hidePreview}
         onFocus={(event) => showPreview(event.currentTarget)}
         onBlur={hidePreview}
+        onClick={(event) => {
+          if (!isAndroid) return;
+          event.preventDefault();
+          showPreview(event.currentTarget);
+        }}
         title={title}
       >
         {previewImage?.src ? (
@@ -3606,7 +3659,7 @@ async function fileToNumberArray(file: File) {
   return Array.from(new Uint8Array(buffer));
 }
 
-async function shareExportedDataPackage(filename: string, bytes: number[]) {
+async function openExportedDataPackage(filename: string, bytes: number[], path: string) {
   const buffer = new Uint8Array(bytes).buffer;
   const blob = new Blob([buffer], { type: "application/zip" });
   const file = new File([blob], filename, { type: "application/zip" });
@@ -3624,18 +3677,13 @@ async function shareExportedDataPackage(filename: string, bytes: number[]) {
     return;
   }
 
-  downloadBlob(blob, filename);
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    await openPath(path);
+  } catch (err) {
+    throw new Error(
+      `系统分享不可用，且无法打开导出的 zip：${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 async function existingImageToNumberArray(image: LegacyMessageImage) {

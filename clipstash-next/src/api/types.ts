@@ -57,6 +57,15 @@ export type DataImportResult = {
   stats: LegacyStats;
 };
 
+export type GithubReleaseInfo = {
+  assets?: Array<{
+    browser_download_url?: string;
+    name?: string;
+  }> | null;
+  html_url?: string | null;
+  tag_name?: string | null;
+};
+
 export type ClipboardContent = {
   kind: "text" | "image";
   text: string | null;

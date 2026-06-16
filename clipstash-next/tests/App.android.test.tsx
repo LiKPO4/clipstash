@@ -2,10 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { canShareMock, invokeMock, isAlwaysOnTopMock, setAlwaysOnTopMock, shareMock } = vi.hoisted(() => ({
+const { canShareMock, invokeMock, isAlwaysOnTopMock, openPathMock, setAlwaysOnTopMock, shareMock } = vi.hoisted(() => ({
   canShareMock: vi.fn(),
   invokeMock: vi.fn(),
   isAlwaysOnTopMock: vi.fn(),
+  openPathMock: vi.fn(),
   setAlwaysOnTopMock: vi.fn(),
   shareMock: vi.fn(),
 }));
@@ -32,7 +33,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openPath: vi.fn(),
+  openPath: openPathMock,
   openUrl: vi.fn(),
 }));
 
@@ -96,6 +97,7 @@ describe("android shell", () => {
       value: shareMock,
     });
     canShareMock.mockReturnValue(true);
+    openPathMock.mockResolvedValue(undefined);
     shareMock.mockResolvedValue(undefined);
     isAlwaysOnTopMock.mockResolvedValue(false);
     setAlwaysOnTopMock.mockResolvedValue(undefined);
@@ -141,6 +143,7 @@ describe("android shell", () => {
     isAlwaysOnTopMock.mockReset();
     setAlwaysOnTopMock.mockReset();
     canShareMock.mockReset();
+    openPathMock.mockReset();
     shareMock.mockReset();
   });
 
@@ -170,11 +173,43 @@ describe("android shell", () => {
     expect(within(storage).queryByRole("button", { name: "修复数据目录" })).toBeNull();
     expect(within(dialog).queryByText("开机自启动")).toBeNull();
     expect(within(dialog).queryByText("呼出界面快捷键")).toBeNull();
+    expect(within(dialog).queryByText("悬浮预览延迟")).toBeNull();
+    expect(within(dialog).queryByText("滚动速度")).toBeNull();
+    expect(within(dialog).queryByText("粘贴间隔")).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("get_launch_on_startup");
     expect(invokeMock).not.toHaveBeenCalledWith("get_global_shortcut_errors");
     expect(isAlwaysOnTopMock).not.toHaveBeenCalled();
 
-    await user.click(importButton);
+    await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
+    await user.click(screen.getByRole("button", { name: "+ 新建" }));
+    const composer = await screen.findByRole("dialog", { name: "编辑新消息" });
+    expect(within(composer).queryByLabelText("关闭新消息")).toBeNull();
+    expect(composer.querySelector(".edit-dialog-actions")).toBeNull();
+    expect(within(composer).getByLabelText("选择图片")).toBeTruthy();
+    expect(within(composer).queryByRole("button", { name: "关闭" })).toBeNull();
+    expect(within(composer).getByRole("button", { name: "保存" })).toBeTruthy();
+    expect((within(composer).getByLabelText("消息内容") as HTMLTextAreaElement).style.fontSize).toBe("1.5em");
+
+    await user.upload(
+      within(composer).getByLabelText("选择图片"),
+      new File([new Uint8Array([1, 2, 3])], "phone.png", { type: "image/png" }),
+    );
+    await within(composer).findByRole("img", { name: "phone.png" });
+    const previewButton = composer.querySelector<HTMLButtonElement>(".composer-image-tile");
+    expect(previewButton).toBeTruthy();
+    await user.click(previewButton!);
+    expect(await screen.findByRole("tooltip", { name: "phone.png" })).toBeTruthy();
+
+    fireEvent.click(composer.parentElement!);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑新消息" })).toBeNull();
+    });
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const reopenedDialog = await screen.findByRole("dialog", { name: "设置" });
+    const reopenedStorage = within(reopenedDialog).getByRole("region", { name: "本地存储" });
+    const reopenedImportButton = within(reopenedStorage).getByRole("button", { name: "导入数据" });
+
+    await user.click(reopenedImportButton);
     const input = container.querySelector<HTMLInputElement>('input[type="file"][accept*=".zip"]');
     expect(input).toBeTruthy();
     fireEvent.change(input!, {
@@ -188,5 +223,21 @@ describe("android shell", () => {
         bytes: [80, 75, 3, 4],
       });
     });
+  });
+
+  it("opens the exported zip path when android file sharing is unavailable", async () => {
+    canShareMock.mockReturnValue(false);
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "导出" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+    });
+    expect(shareMock).not.toHaveBeenCalled();
+    expect(openPathMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
+    expect(await screen.findByText("数据包已导出")).toBeTruthy();
   });
 });

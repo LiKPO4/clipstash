@@ -1391,6 +1391,47 @@ textarea:focus,
   padding-right: 10px;
 }
 
+.composer-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.composer-header h2,
+.composer-header .eyebrow {
+  min-width: 0;
+}
+
+.composer-mobile-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.composer-mobile-actions .composer-file-action,
+.composer-mobile-actions .secondary-action,
+.composer-mobile-actions .write-submit {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: var(--control-radius);
+  white-space: nowrap;
+}
+
+.composer-mobile-actions .write-submit {
+  justify-self: auto;
+}
+
+.composer-dialog-android {
+  height: calc(100vh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  min-height: 0;
+}
+
+.composer-dialog-android .message-composer-box textarea {
+  font-size: 1.5em;
+}
+
 .composer-dialog,
 .delete-dialog {
   max-height: calc(100vh - 28px);
