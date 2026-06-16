@@ -335,6 +335,7 @@
 - 已对 Windows-only 能力做 Android 编译隔离：托盘、全局快捷键、开机自启、窗口枚举、模拟 Ctrl+V、`arboard`、`image`、`windows-sys` 等移到 Windows cfg 路径；非 Windows 剪贴板/窗口/本地目录能力返回明确不支持错误。
 - 已初始化 Tauri Android 工程 `clipstash-next/src-tauri/gen/android/`，并安装/使用 Android Rust targets；Android 打包时已产出 unsigned universal APK：`clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk`，大小 `65957728` 字节。首次 Gradle wrapper 下载超时后，已将 Gradle 8.14.3 手动下载进本机 wrapper 缓存，并在 wrapper 配置中增加 `networkTimeout=60000`。
 - 已验证 Android/数据包增量：`npm test -- --run` 通过 `62 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri -- android build --apk` 通过并生成 unsigned APK；`npm run tauri build` 通过并生成 Windows `ClipStash Next_2.0.9_x64_en-US.msi` 与 `ClipStash Next_2.0.9_x64-setup.exe`。
+- 已准备 `2.1.1` release 验收包：版本号、窗口标题、npm/Cargo/Tauri 配置和 release checklist 已同步；桌面 `npm run tauri build` 通过并生成 `ClipStash Next_2.1.1_x64_en-US.msi` 与 `ClipStash Next_2.1.1_x64-setup.exe`；Android `npm run tauri -- android build --apk` 通过并生成 release unsigned APK，随后使用本地预览签名 keystore zipalign + apksigner 签名为 `ClipStash.Next_2.1.1_android-universal-release-signed.apk`，签名验证通过 `v2=true`、`v3=true`，大小 `66037639` 字节。发布前验证已通过：`npm test -- --run` 通过 `62 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`。
 
 ## 未完成
 
@@ -354,7 +355,7 @@
 - P1 托盘与窗口行为已完成可编译/可打包代码路径，并已接入“关闭时隐藏到托盘或退出”的设置项；仍缺用户侧真实托盘菜单操作验收。
 - P1 全局快捷键、开机自启动、设置持久化和 P2 更新检查已完成代码路径与自动化验证；仍缺用户侧真实系统行为验收，例如全局热键从外部窗口触发、注销/重启后的自启动、设置重启后仍生效、断网更新检查和安装包迁移。
 - Android 第一阶段仍缺真机侧载验收：新建/编辑图文、点击复制、归档/恢复/删除、Android 分享导出 zip、Android 文件选择导入 zip，以及手机导出到电脑再重复导入去重的端到端实机检查。
-- Android 当前产物是 unsigned APK，适合本机/测试侧载；正式分发前仍需要签名配置、版本号迭代策略和 release 资产命名。
+- Android 当前发布物改为 release 构建签名通用 APK，适合侧载验收；正式分发前仍需要稳定正式签名配置。
 
 ## 阻塞
 
@@ -397,4 +398,4 @@
 
 ## 下一步
 
-- 下一步最小行动：把 unsigned APK 侧载到 Android 真机，先验收手机新建图文、导出分享 zip、电脑导入 zip、重复导入不新增重复消息；通过后再决定是否配置签名并发 Android 预览版 release。
+- 下一步最小行动：从 GitHub Release 下载 Android release APK 侧载到真机，先验收手机新建图文、导出分享 zip、电脑导入 zip、重复导入不新增重复消息；通过后再决定是否固化正式签名配置。

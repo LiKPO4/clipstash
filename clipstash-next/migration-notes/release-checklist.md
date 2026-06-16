@@ -24,14 +24,14 @@ cargo test migrates_legacy_data_once_and_skips_duplicates_without_touching_legac
 
 ## 发布产物
 
-版本号来自 `clipstash-next/src-tauri/tauri.conf.json` 和 `clipstash-next/package.json`，当前为 `2.1.0`。
+版本号来自 `clipstash-next/src-tauri/tauri.conf.json` 和 `clipstash-next/package.json`，当前为 `2.1.1`。
 
 - 主程序：`clipstash-next/src-tauri/target/release/clipstash-next.exe`
-- MSI：`clipstash-next/src-tauri/target/release/bundle/msi/ClipStash Next_2.1.0_x64_en-US.msi`
-- NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.1.0_x64-setup.exe`
-- Android 测试 APK：`clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`
+- MSI：`clipstash-next/src-tauri/target/release/bundle/msi/ClipStash Next_2.1.1_x64_en-US.msi`
+- NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.1.1_x64-setup.exe`
+- Android release APK：`clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/ClipStash.Next_2.1.1_android-universal-release-signed.apk`
 
-GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 MSI 作为备用安装入口；Android 版当前上传 debug 签名通用 APK，仅用于侧载测试。
+GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 MSI 作为备用安装入口；Android 版上传 release 构建签名通用 APK，用于侧载验收。
 
 ## 数据目录策略
 
@@ -56,7 +56,7 @@ GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 M
 ### 1. 安装与首次迁移
 
 1. 关闭正在运行的 ClipStash Next。
-2. 运行 NSIS 安装包：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.1.0_x64-setup.exe`。
+2. 运行 NSIS 安装包：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.1.1_x64-setup.exe`。
 3. 启动 ClipStash Next。
 4. 打开设置页，确认“本地存储”指向 `%APPDATA%\ClipStash Next`。
 5. 确认 `%APPDATA%\ClipStash Next\clipstash.db` 和 `%APPDATA%\ClipStash Next\images` 存在。
