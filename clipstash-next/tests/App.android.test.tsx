@@ -191,6 +191,12 @@ describe("android shell", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("get_launch_on_startup");
     expect(invokeMock).not.toHaveBeenCalledWith("get_global_shortcut_errors");
     expect(isAlwaysOnTopMock).not.toHaveBeenCalled();
+    expect(setAlwaysOnTopMock).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
+    expect(invokeMock).not.toHaveBeenCalledWith("fetch_latest_github_release");
+    expect(invokeMock).not.toHaveBeenCalledWith("download_and_open_update_installer", expect.anything());
+    expect(await within(dialog).findByText("Android 版暂不支持应用内检查更新，请从 Release 页面安装新版 APK")).toBeTruthy();
 
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
     await user.click(screen.getByRole("button", { name: "+ 新建" }));

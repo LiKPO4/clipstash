@@ -47,6 +47,15 @@ pub struct DataImportResult {
     pub stats: app_data::AppStats,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DataImportPreview {
+    pub path: String,
+    pub total_messages: i64,
+    pub inserted_messages: i64,
+    pub skipped_messages: i64,
+    pub image_count: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ExportManifest {
     schema_version: u32,
@@ -206,6 +215,22 @@ pub fn import_data_zip_from_path(zip_path: PathBuf) -> Result<DataImportResult, 
     })
 }
 
+pub fn preview_data_zip_from_path(zip_path: PathBuf) -> Result<DataImportPreview, String> {
+    let zip_path = validate_import_zip_path(zip_path)?;
+    app_data::ensure_app_data_ready()?;
+    let data_dir = app_data::app_data_dir_path()?;
+    let (total_messages, inserted_messages, skipped_messages, image_count) =
+        preview_data_zip_against_dir(&zip_path, &data_dir)?;
+
+    Ok(DataImportPreview {
+        path: path_to_string(&zip_path),
+        total_messages,
+        inserted_messages,
+        skipped_messages,
+        image_count,
+    })
+}
+
 pub fn import_data_zip_from_bytes(
     filename: String,
     bytes: Vec<u8>,
@@ -321,6 +346,55 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
     };
 
     Ok((inserted_messages, skipped_messages, imported_images))
+}
+
+fn preview_data_zip_against_dir(
+    zip_path: &Path,
+    data_dir: &Path,
+) -> Result<(i64, i64, i64, i64), String> {
+    let db_path = data_dir.join("clipstash.db");
+    let images_dir = data_dir.join("images");
+
+    let mut archive = open_zip(zip_path)?;
+    let manifest = read_manifest(&mut archive)?;
+    validate_manifest(&manifest)?;
+
+    let conn = Connection::open(&db_path)
+        .map_err(|err| format!("打开应用数据库准备预览导入失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+
+    let mut inserted_messages = 0_i64;
+    let mut skipped_messages = 0_i64;
+    let mut image_count = 0_i64;
+
+    for message in &manifest.messages {
+        validate_import_message(message)?;
+        let image_entries = read_message_images(&mut archive, message)?;
+        image_count += image_entries.len() as i64;
+        let image_hashes: Vec<String> = image_entries
+            .iter()
+            .map(|entry| entry.manifest.sha256.clone())
+            .collect();
+
+        if message_exists_by_signature(
+            &conn,
+            &images_dir,
+            message.text_content.as_deref(),
+            &message.created_at,
+            &image_hashes,
+        )? {
+            skipped_messages += 1;
+        } else {
+            inserted_messages += 1;
+        }
+    }
+
+    Ok((
+        manifest.messages.len() as i64,
+        inserted_messages,
+        skipped_messages,
+        image_count,
+    ))
 }
 
 fn write_export_zip(
@@ -772,8 +846,16 @@ mod tests {
         )
         .unwrap();
 
+        let preview_before_import = preview_data_zip_against_dir(&zip_path, &target_data).unwrap();
+        assert_eq!(preview_before_import, (2, 2, 0, 2));
+        let stats_before_import = read_legacy_stats_from_dir(target_data.clone()).unwrap();
+        assert_eq!(stats_before_import.total_count, 0);
+
         let first = import_data_zip_into_dir(&zip_path, &target_data).unwrap();
         assert_eq!(first, (2, 0, 2));
+
+        let preview_after_import = preview_data_zip_against_dir(&zip_path, &target_data).unwrap();
+        assert_eq!(preview_after_import, (2, 0, 2, 2));
 
         let second = import_data_zip_into_dir(&zip_path, &target_data).unwrap();
         assert_eq!(second, (0, 2, 0));

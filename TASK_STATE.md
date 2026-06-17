@@ -12,6 +12,10 @@
 
 ## 已完成
 
+- 本轮修复 Android 设置页检查更新闪退风险：Android 端不再调用桌面更新下载/安装链路，设置加载后也不再调用桌面 always-on-top API。
+- 本轮强化 Android 图片预览：移动端预览层使用最高层级覆盖，图片垂直水平居中，预览时点击任意位置退出；移动端底部浮动通知上移避让手势栏。
+- 本轮补齐电脑端数据包导入确认：导入前先只读预览 zip，弹窗展示总消息数、将导入条数、重复跳过条数和图片数，确认后才写入，导入成功继续提示结果。
+- 已将上述改动发布为 `v2.1.10`，Windows NSIS/MSI 与 Android 通用 APK 均已完成构建。
 - 已在仓库内创建 `clipstash-next/`，使用 Tauri 2 + React + TypeScript 模板。
 - 已实现 Rust 侧旧数据目录定位：优先 `%APPDATA%\ClipStash`，回退 `%USERPROFILE%\ClipStash`。
 - 已实现 Rust 侧只读打开旧 `clipstash.db` 并查询 `messages` 计数的 command：`get_legacy_stats`。

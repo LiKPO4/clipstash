@@ -8,6 +8,7 @@ import type {
   ClipboardContent,
   DataExportBytesResult,
   DataExportResult,
+  DataImportPreview,
   DataImportResult,
   ExternalWindowTarget,
   ExternalWindowValidation,
@@ -51,6 +52,10 @@ export function exportNormalDataZipBytes() {
 
 export function importDataZip() {
   return invoke<DataImportResult>("import_data_zip");
+}
+
+export function previewDataZip() {
+  return invoke<DataImportPreview>("preview_data_zip");
 }
 
 export function importDataZipBytes(filename: string, bytes: number[]) {

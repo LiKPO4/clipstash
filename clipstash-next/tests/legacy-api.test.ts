@@ -14,6 +14,7 @@ import {
   pasteLegacyImportQueue,
   pasteLegacyImportQueueItem,
   pasteLegacyImportQueueWithOptionalArchive,
+  previewDataZip,
   previewLegacyMessageImportQueue,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
@@ -67,6 +68,14 @@ describe("legacy api command contracts", () => {
     await migrateLegacyData();
 
     expect(invokeMock).toHaveBeenCalledWith("migrate_legacy_data");
+  });
+
+  it("maps data import preview requests to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ total_messages: 1 });
+
+    await previewDataZip();
+
+    expect(invokeMock).toHaveBeenCalledWith("preview_data_zip");
   });
 
   it("maps external window list requests to the backend command", async () => {

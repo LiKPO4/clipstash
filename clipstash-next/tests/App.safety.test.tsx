@@ -116,6 +116,18 @@ let latestReleaseResponse: unknown = null;
         });
       }
       if (command === "import_data_zip") {
+        return Promise.reject(new Error("桌面导入必须先预览再确认"));
+      }
+      if (command === "preview_data_zip") {
+        return Promise.resolve({
+          path: "D:\\clipstash-export.zip",
+          total_messages: 4,
+          inserted_messages: 3,
+          skipped_messages: 1,
+          image_count: 2,
+        });
+      }
+      if (command === "import_data_zip_from_path") {
         migratedStats = { ...stats, normal_count: 9, total_count: 118 };
         return Promise.resolve({
           path: "D:\\clipstash-export.zip",
@@ -236,7 +248,16 @@ let latestReleaseResponse: unknown = null;
 
     await user.click(within(panel).getByRole("button", { name: "导入数据" }));
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("import_data_zip");
+      expect(invokeMock).toHaveBeenCalledWith("preview_data_zip");
+    });
+    const previewDialog = await screen.findByRole("dialog", { name: "确认导入数据包" });
+    expect(within(previewDialog).getByText("数据包包含 4 条消息，图片 2 张。")).toBeTruthy();
+    expect(within(previewDialog).getByText("将导入 3 条，跳过 1 条重复。")).toBeTruthy();
+    await user.click(within(previewDialog).getByRole("button", { name: "确认导入" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("import_data_zip_from_path", {
+        path: "D:\\clipstash-export.zip",
+      });
     });
     expect(await within(panel).findByText("已导入 3 条，跳过 1 条重复，图片 2 张。")).toBeTruthy();
     expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
@@ -328,31 +349,31 @@ let latestReleaseResponse: unknown = null;
     expect(await within(dialog).findByText("导入剪切板快捷键已应用")).toBeTruthy();
 
     latestReleaseResponse = {
-      tag_name: "v2.1.10",
-      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.10",
+      tag_name: "v2.1.11",
+      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.11",
       body: "更新说明",
       assets: [
         {
-          name: "ClipStash Next_2.1.10_x64_en-US.msi",
+          name: "ClipStash Next_2.1.11_x64_en-US.msi",
           browser_download_url:
-            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.10/ClipStash.Next_2.1.10_x64_en-US.msi",
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.11/ClipStash.Next_2.1.11_x64_en-US.msi",
         },
         {
-          name: "ClipStash Next_2.1.10_x64-setup.exe",
+          name: "ClipStash Next_2.1.11_x64-setup.exe",
           browser_download_url:
-            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.10/ClipStash.Next_2.1.10_x64-setup.exe",
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.11/ClipStash.Next_2.1.11_x64-setup.exe",
         },
       ],
     };
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.1.10")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.11")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.10/ClipStash.Next_2.1.10_x64-setup.exe",
-      filename: "ClipStash Next_2.1.10_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.11/ClipStash.Next_2.1.11_x64-setup.exe",
+      filename: "ClipStash Next_2.1.11_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

@@ -983,6 +983,7 @@ textarea:focus,
 }
 
 .message-card {
+  margin-right: -7px;
   padding: 11px 12px 12px;
   border: 1px solid #d4e0ef;
   border-radius: 8px;
@@ -1467,7 +1468,7 @@ textarea:focus,
 .android-image-preview {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 2147483647;
   display: grid;
   place-items: center;
   width: 100vw;
@@ -1476,6 +1477,7 @@ textarea:focus,
   border: 0;
   background: rgba(5, 16, 32, 0.78);
   cursor: pointer;
+  pointer-events: auto;
   touch-action: manipulation;
 }
 
@@ -1489,8 +1491,42 @@ textarea:focus,
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
 }
 
+.shell-android .operation-feedback-floating,
+.shell-android .floating-result {
+  bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+}
+
 .delete-dialog {
   width: min(560px, 100%);
+}
+
+.import-preview-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 45;
+  display: grid;
+  gap: 14px;
+  width: min(360px, calc(100vw - 28px));
+  max-height: calc(100vh - 48px);
+  transform: translate(-50%, -50%);
+}
+
+.import-preview-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.import-preview-summary p {
+  margin: 0;
+  color: #405675;
+}
+
+.import-preview-summary code {
+  display: block;
+  padding: 8px;
+  border-radius: 8px;
+  background: #edf3fa;
 }
 
 .settings-dialog {

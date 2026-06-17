@@ -133,6 +133,14 @@ fn import_data_zip() -> Result<data_transfer::DataImportResult, String> {
 }
 
 #[tauri::command]
+fn preview_data_zip() -> Result<data_transfer::DataImportPreview, String> {
+    let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
+        return Err("已取消导入数据".to_string());
+    };
+    data_transfer::preview_data_zip_from_path(zip_path)
+}
+
+#[tauri::command]
 fn import_data_zip_from_path(path: String) -> Result<data_transfer::DataImportResult, String> {
     data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
 }
@@ -964,6 +972,7 @@ pub fn run() {
             list_legacy_messages,
             migrate_legacy_data,
             move_app_data_to_selected_dir,
+            preview_data_zip,
             open_app_path,
             paste_legacy_import_queue,
             paste_legacy_import_queue_to_recent_window,

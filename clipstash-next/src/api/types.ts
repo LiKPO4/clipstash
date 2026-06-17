@@ -57,6 +57,14 @@ export type DataImportResult = {
   stats: LegacyStats;
 };
 
+export type DataImportPreview = {
+  path: string;
+  total_messages: number;
+  inserted_messages: number;
+  skipped_messages: number;
+  image_count: number;
+};
+
 export type GithubReleaseInfo = {
   assets?: Array<{
     browser_download_url?: string;

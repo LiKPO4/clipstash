@@ -33,7 +33,6 @@ import {
   getGlobalShortcutErrors,
   getLegacyStats,
   getLaunchOnStartup,
-  importDataZip,
   importDataZipBytes,
   importDataZipFromPath,
   listLegacyMessages,
@@ -41,6 +40,7 @@ import {
   moveAppDataToSelectedDir,
   openAppPath,
   pasteLegacyImportQueueToRecentWindow,
+  previewDataZip,
   readCurrentClipboard,
   readDroppedFileBytes,
   readLegacyImageBytes,
@@ -56,6 +56,7 @@ import type {
   AppSettings,
   AppSettingsPatch,
   DataExportResult,
+  DataImportPreview,
   DataImportResult,
   GithubReleaseInfo,
   LegacyMessageImage,
@@ -75,7 +76,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.9";
+const CURRENT_VERSION = "2.1.10";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -246,6 +247,7 @@ function App() {
   const [importingDataPackage, setImportingDataPackage] = useState(false);
   const [dataExportResult, setDataExportResult] = useState<DataExportResult | null>(null);
   const [dataImportResult, setDataImportResult] = useState<DataImportResult | null>(null);
+  const [dataImportPreview, setDataImportPreview] = useState<DataImportPreview | null>(null);
   const [dataTransferError, setDataTransferError] = useState<string | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
   const dataPackageInputRef = useRef<HTMLInputElement | null>(null);
@@ -630,9 +632,11 @@ function App() {
     setCaptureHotkey(settings.capture_hotkey);
     setSort(settings.sort);
     setMessageDoubleClickAction(settings.message_double_click_action ?? "edit");
-    getCurrentWindow()
-      .setAlwaysOnTop(settings.always_on_top)
-      .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
+    if (!IS_ANDROID) {
+      getCurrentWindow()
+        .setAlwaysOnTop(settings.always_on_top)
+        .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
+    }
   }
 
   async function persistAppSettings(patch: AppSettingsPatch, notice = "设置已自动保存到本机") {
@@ -766,6 +770,20 @@ function App() {
   }
 
   async function checkForUpdates() {
+    if (IS_ANDROID) {
+      setReleaseCheckError(null);
+      setReleaseCheckResult({
+        currentVersion: CURRENT_VERSION,
+        downloadAsset: null,
+        latestVersion: CURRENT_VERSION,
+        releaseUrl: GITHUB_RELEASES_URL,
+        hasUpdate: false,
+      });
+      setSettingsNotice("Android 版暂不支持应用内检查更新，请从 Release 页面安装新版 APK");
+      window.setTimeout(() => setSettingsNotice(null), 3200);
+      return;
+    }
+
     setCheckingUpdate(true);
     setReleaseCheckError(null);
     setReleaseCheckResult(null);
@@ -915,10 +933,33 @@ function App() {
     setImportingDataPackage(true);
     setDataTransferError(null);
     setDataImportResult(null);
+    setDataImportPreview(null);
 
     try {
-      const result = await importDataZip();
+      const preview = await previewDataZip();
+      setDataImportPreview(preview);
+      setSettingsNotice(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "已取消导入数据") {
+        setDataTransferError(message);
+      }
+    } finally {
+      setImportingDataPackage(false);
+    }
+  }
+
+  async function confirmDataPackageImport() {
+    if (importingDataPackage || !dataImportPreview) return;
+
+    setImportingDataPackage(true);
+    setDataTransferError(null);
+    setDataImportResult(null);
+
+    try {
+      const result = await importDataZipFromPath(dataImportPreview.path);
       setDataImportResult(result);
+      setDataImportPreview(null);
       await refreshPageAfterDataChange(result.stats);
       setSettingsNotice(
         result.inserted_messages > 0
@@ -942,6 +983,7 @@ function App() {
     setImportingDataPackage(true);
     setDataTransferError(null);
     setDataImportResult(null);
+    setDataImportPreview(null);
 
     try {
       if (!isZipPath(file.name)) {
@@ -979,6 +1021,7 @@ function App() {
     setImportingDataPackage(true);
     setDataTransferError(null);
     setDataImportResult(null);
+    setDataImportPreview(null);
 
     try {
       const result = await importDataZipFromPath(path);
@@ -1641,6 +1684,7 @@ function App() {
           repairingAppData={repairingAppData}
           dataExportResult={dataExportResult}
           dataImportResult={dataImportResult}
+          dataImportPreview={dataImportPreview}
           dataTransferError={dataTransferError}
           exportingData={exportingData}
           importingDataPackage={importingDataPackage}
@@ -1656,7 +1700,10 @@ function App() {
               checked ? "关闭窗口时将隐藏到托盘" : "关闭窗口时将退出应用",
             ).catch(() => undefined);
           }}
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            setShowSettings(false);
+            setDataImportPreview(null);
+          }}
           onCheckUpdates={checkForUpdates}
           onDownloadUpdate={downloadUpdate}
           onFontScaleChange={(value) => {
@@ -1680,6 +1727,8 @@ function App() {
           onMigrateLegacyData={runLegacyMigration}
           onExportData={exportDataPackage}
           onImportData={importDataPackage}
+          onCancelDataImportPreview={() => setDataImportPreview(null)}
+          onConfirmDataImportPreview={confirmDataPackageImport}
           onMessageDoubleClickActionChange={(value) => {
             setMessageDoubleClickAction(value);
             persistAppSettings(
@@ -1937,6 +1986,7 @@ function SettingsDialog({
   closeToTray,
   dataExportResult,
   dataImportResult,
+  dataImportPreview,
   dataTransferError,
   downloadingUpdate,
   exportingData,
@@ -1969,6 +2019,8 @@ function SettingsDialog({
   onDownloadUpdate,
   onExportData,
   onImportData,
+  onCancelDataImportPreview,
+  onConfirmDataImportPreview,
   onMessageDoubleClickActionChange,
   onClose,
   onCloseToTrayChange,
@@ -1993,6 +2045,7 @@ function SettingsDialog({
   closeToTray: boolean;
   dataExportResult: DataExportResult | null;
   dataImportResult: DataImportResult | null;
+  dataImportPreview: DataImportPreview | null;
   dataTransferError: string | null;
   downloadingUpdate: boolean;
   exportingData: boolean;
@@ -2025,6 +2078,8 @@ function SettingsDialog({
   onDownloadUpdate: () => void;
   onExportData: () => void;
   onImportData: () => void;
+  onCancelDataImportPreview: () => void;
+  onConfirmDataImportPreview: () => void;
   onMessageDoubleClickActionChange: (value: MessageDoubleClickAction) => void;
   onClose: () => void;
   onCloseToTrayChange: (checked: boolean) => void;
@@ -2366,7 +2421,62 @@ function SettingsDialog({
         </div>
 
       </section>
+      {dataImportPreview && (
+        <DataImportPreviewDialog
+          importing={importingDataPackage}
+          preview={dataImportPreview}
+          onCancel={onCancelDataImportPreview}
+          onConfirm={onConfirmDataImportPreview}
+        />
+      )}
     </div>
+  );
+}
+
+function DataImportPreviewDialog({
+  importing,
+  preview,
+  onCancel,
+  onConfirm,
+}: {
+  importing: boolean;
+  preview: DataImportPreview;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <section
+      aria-label="确认导入数据包"
+      aria-modal="true"
+      className="edit-dialog import-preview-dialog"
+      role="dialog"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <header className="edit-header">
+        <div>
+          <p className="eyebrow">导入预览</p>
+          <h2>确认导入数据包</h2>
+        </div>
+        <button type="button" className="preview-close" onClick={onCancel} aria-label="关闭导入预览">
+          ×
+        </button>
+      </header>
+      <div className="import-preview-summary">
+        <p>数据包包含 {preview.total_messages} 条消息，图片 {preview.image_count} 张。</p>
+        <p>
+          将导入 {preview.inserted_messages} 条，跳过 {preview.skipped_messages} 条重复。
+        </p>
+        <code>{preview.path}</code>
+      </div>
+      <div className="dialog-actions">
+        <button type="button" className="secondary-action" onClick={onCancel} disabled={importing}>
+          取消
+        </button>
+        <button type="button" className="write-submit" onClick={onConfirm} disabled={importing}>
+          {importing ? "导入中..." : "确认导入"}
+        </button>
+      </div>
+    </section>
   );
 }
 
