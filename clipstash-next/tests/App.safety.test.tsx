@@ -50,7 +50,10 @@ const stats = {
 const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
+  launch_on_startup: false,
+  main_window_state: null,
   archive_after_import: false,
+  archive_after_export: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -349,31 +352,31 @@ let latestReleaseResponse: unknown = null;
     expect(await within(dialog).findByText("导入剪切板快捷键已应用")).toBeTruthy();
 
     latestReleaseResponse = {
-      tag_name: "v2.1.11",
-      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.11",
+      tag_name: "v2.1.12",
+      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.12",
       body: "更新说明",
       assets: [
         {
-          name: "ClipStash Next_2.1.11_x64_en-US.msi",
+          name: "ClipStash Next_2.1.12_x64_en-US.msi",
           browser_download_url:
-            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.11/ClipStash.Next_2.1.11_x64_en-US.msi",
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.12/ClipStash.Next_2.1.12_x64_en-US.msi",
         },
         {
-          name: "ClipStash Next_2.1.11_x64-setup.exe",
+          name: "ClipStash Next_2.1.12_x64-setup.exe",
           browser_download_url:
-            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.11/ClipStash.Next_2.1.11_x64-setup.exe",
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.12/ClipStash.Next_2.1.12_x64-setup.exe",
         },
       ],
     };
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.1.11")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.12")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.11/ClipStash.Next_2.1.11_x64-setup.exe",
-      filename: "ClipStash Next_2.1.11_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.12/ClipStash.Next_2.1.12_x64-setup.exe",
+      filename: "ClipStash Next_2.1.12_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

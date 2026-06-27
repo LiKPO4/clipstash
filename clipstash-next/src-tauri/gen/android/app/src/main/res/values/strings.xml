@@ -1,4 +1,13 @@
 <resources>
     <string name="app_name">ClipStash Next</string>
     <string name="main_activity_title">ClipStash Next</string>
+    <string name="widget_todo_name">需求暂存站 - 需求</string>
+    <string name="widget_todo_title">需求</string>
+    <string name="widget_todo_footer">需求暂存站</string>
+    <string name="widget_todo_create">新建暂存</string>
+    <string name="widget_todo_share">分享数据包</string>
+    <string name="widget_todo_empty">暂无需求</string>
+    <string name="widget_todo_initialize">打开应用完成初始化</string>
+    <string name="widget_todo_unavailable">小组件暂不可用</string>
+    <string name="widget_todo_description">展示最近的需求暂存</string>
 </resources>

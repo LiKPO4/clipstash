@@ -58,7 +58,10 @@ const emptyPage = {
 const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
+  launch_on_startup: false,
+  main_window_state: null,
   archive_after_import: false,
+  archive_after_export: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",

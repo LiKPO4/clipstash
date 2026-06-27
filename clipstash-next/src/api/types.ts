@@ -47,6 +47,7 @@ export type DataExportBytesResult = {
   filename: string;
   export: DataExportResult;
   bytes: number[];
+  message_ids: number[];
 };
 
 export type DataImportResult = {
@@ -83,7 +84,10 @@ export type ClipboardContent = {
 export type AppSettings = {
   always_on_top: boolean;
   close_to_tray: boolean;
+  launch_on_startup: boolean;
+  main_window_state: MainWindowState | null;
   archive_after_import: boolean;
+  archive_after_export: boolean;
   paste_interval_ms: number;
   show_hotkey: string;
   capture_hotkey: string;
@@ -93,6 +97,13 @@ export type AppSettings = {
   edit_textarea_height: number;
   sort: SortOrder;
   message_double_click_action: MessageDoubleClickAction;
+};
+
+export type MainWindowState = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 export type AppSettingsPatch = Partial<AppSettings>;

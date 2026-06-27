@@ -30,7 +30,9 @@ use std::sync::{
     Mutex,
 };
 use std::time::Duration;
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
+};
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
@@ -122,6 +124,11 @@ fn export_normal_data_zip() -> Result<data_transfer::DataExportResult, String> {
 #[tauri::command]
 fn export_normal_data_zip_bytes() -> Result<data_transfer::DataExportBytesResult, String> {
     data_transfer::export_normal_data_zip_to_temp_bytes()
+}
+
+#[tauri::command]
+fn archive_exported_messages(message_ids: Vec<i64>) -> Result<app_data::AppStats, String> {
+    app_data::archive_messages(&message_ids)
 }
 
 #[tauri::command]
@@ -282,9 +289,20 @@ fn get_launch_on_startup(app: AppHandle) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        app.autolaunch()
+        let autostart = app.autolaunch();
+        let enabled = autostart
             .is_enabled()
-            .map_err(|err| format!("读取开机自启动状态失败：{err}"))
+            .map_err(|err| format!("读取开机自启动状态失败：{err}"))?;
+        let settings = app_settings::read_settings()?;
+        if settings.launch_on_startup && !enabled {
+            autostart
+                .enable()
+                .map_err(|err| format!("恢复开机自启动失败：{err}"))?;
+            return autostart
+                .is_enabled()
+                .map_err(|err| format!("读取开机自启动状态失败：{err}"));
+        }
+        Ok(enabled)
     }
 }
 
@@ -313,6 +331,13 @@ fn set_launch_on_startup(app: AppHandle, enabled: bool) -> Result<bool, String> 
         autostart
             .is_enabled()
             .map_err(|err| format!("读取开机自启动状态失败：{err}"))
+            .and_then(|actual| {
+                app_settings::update_settings(app_settings::AppSettingsPatch {
+                    launch_on_startup: Some(actual),
+                    ..Default::default()
+                })?;
+                Ok(actual)
+            })
     }
 }
 
@@ -522,13 +547,15 @@ fn list_legacy_messages(
     sort: legacy_data::SortOrder,
     offset: Option<i64>,
     limit: Option<i64>,
+    search: Option<String>,
 ) -> Result<legacy_data::LegacyMessagePage, String> {
-    app_data::list_messages(view, sort, offset, limit)
+    app_data::list_messages(view, sort, offset, limit, search)
 }
 
 #[cfg(target_os = "windows")]
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        restore_main_window_state(&window);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -539,13 +566,134 @@ fn show_main_window(app: &AppHandle) {
 fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
+            save_main_webview_window_state(&window);
             let _ = window.hide();
         } else {
+            restore_main_window_state(&window);
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn restore_main_window_state(window: &tauri::WebviewWindow) {
+    if window.label() != "main" {
+        return;
+    }
+    let Ok(settings) = app_settings::read_settings() else {
+        return;
+    };
+    let Some(state) = settings.main_window_state else {
+        return;
+    };
+    if !is_main_window_state_visible(window, &state) {
+        return;
+    }
+
+    let _ = window.set_size(LogicalSize::new(state.width as f64, state.height as f64));
+    let _ = window.set_position(LogicalPosition::new(state.x as f64, state.y as f64));
+}
+
+#[cfg(target_os = "windows")]
+fn save_main_window_state(window: &tauri::Window) {
+    if window.label() != "main" {
+        return;
+    }
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    if size.width < 360 || size.height < 600 {
+        return;
+    }
+
+    let _ = app_settings::update_settings(app_settings::AppSettingsPatch {
+        main_window_state: Some(Some(app_settings::MainWindowState {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        })),
+        ..Default::default()
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn save_main_webview_window_state(window: &tauri::WebviewWindow) {
+    if window.label() != "main" {
+        return;
+    }
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    if size.width < 360 || size.height < 600 {
+        return;
+    }
+
+    let _ = app_settings::update_settings(app_settings::AppSettingsPatch {
+        main_window_state: Some(Some(app_settings::MainWindowState {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        })),
+        ..Default::default()
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn is_main_window_state_visible(
+    window: &tauri::WebviewWindow,
+    state: &app_settings::MainWindowState,
+) -> bool {
+    let monitors = window.available_monitors().unwrap_or_default();
+    if monitors.is_empty() {
+        return true;
+    }
+    monitors.iter().any(|monitor| {
+        let origin = monitor.position();
+        let size = monitor.size();
+        rects_overlap_enough(
+            PhysicalPosition::new(state.x, state.y),
+            PhysicalSize::new(state.width, state.height),
+            *origin,
+            *size,
+        )
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn rects_overlap_enough(
+    window_pos: PhysicalPosition<i32>,
+    window_size: PhysicalSize<u32>,
+    monitor_pos: PhysicalPosition<i32>,
+    monitor_size: PhysicalSize<u32>,
+) -> bool {
+    let window_left = window_pos.x as i64;
+    let window_top = window_pos.y as i64;
+    let window_right = window_left + window_size.width as i64;
+    let window_bottom = window_top + window_size.height as i64;
+    let monitor_left = monitor_pos.x as i64;
+    let monitor_top = monitor_pos.y as i64;
+    let monitor_right = monitor_left + monitor_size.width as i64;
+    let monitor_bottom = monitor_top + monitor_size.height as i64;
+
+    let overlap_width = (window_right.min(monitor_right) - window_left.max(monitor_left)).max(0);
+    let overlap_height = (window_bottom.min(monitor_bottom) - window_top.max(monitor_top)).max(0);
+    overlap_width >= 120 && overlap_height >= 120
 }
 
 fn capture_current_clipboard_to_app_data() -> Result<CaptureClipboardResult, String> {
@@ -920,6 +1068,9 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 window_targets::start_foreground_tracker();
+                if let Some(window) = app.get_webview_window("main") {
+                    restore_main_window_state(&window);
+                }
                 setup_tray(app)?;
                 setup_global_shortcuts(app);
             }
@@ -928,17 +1079,29 @@ pub fn run() {
         .on_window_event(|window, event| {
             #[cfg(target_os = "windows")]
             {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    if window.label() == "main" && !EXIT_REQUESTED.load(Ordering::SeqCst) {
-                        let should_hide_to_tray = app_settings::read_settings()
-                            .map(|settings| settings.close_to_tray)
-                            .unwrap_or(true);
-                        if should_hide_to_tray {
-                            api.prevent_close();
-                            let _ = window.hide();
-                        } else {
-                            EXIT_REQUESTED.store(true, Ordering::SeqCst);
+                if window.label() == "main" {
+                    match event {
+                        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                            save_main_window_state(window);
                         }
+                        WindowEvent::CloseRequested { api, .. } => {
+                            save_main_window_state(window);
+                            if !EXIT_REQUESTED.load(Ordering::SeqCst) {
+                                let should_hide_to_tray = app_settings::read_settings()
+                                    .map(|settings| settings.close_to_tray)
+                                    .unwrap_or(true);
+                                if should_hide_to_tray {
+                                    api.prevent_close();
+                                    let _ = window.hide();
+                                } else {
+                                    EXIT_REQUESTED.store(true, Ordering::SeqCst);
+                                }
+                            }
+                        }
+                        WindowEvent::Destroyed => {
+                            save_main_window_state(window);
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -949,6 +1112,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            archive_exported_messages,
             capture_current_clipboard,
             create_legacy_image_message,
             create_legacy_mixed_message,

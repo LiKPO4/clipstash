@@ -68,6 +68,17 @@ pub(crate) fn list_legacy_messages_from_dir(
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> Result<LegacyMessagePage, String> {
+    list_legacy_messages_from_dir_filtered(data_dir, view, sort, offset, limit, None)
+}
+
+pub(crate) fn list_legacy_messages_from_dir_filtered(
+    data_dir: PathBuf,
+    view: MessageView,
+    sort: SortOrder,
+    offset: Option<i64>,
+    limit: Option<i64>,
+    search: Option<String>,
+) -> Result<LegacyMessagePage, String> {
     let db_path = data_dir.join("clipstash.db");
     let images_dir = data_dir.join("images");
 
@@ -83,7 +94,25 @@ pub(crate) fn list_legacy_messages_from_dir(
     let limit = limit
         .unwrap_or(DEFAULT_MESSAGE_LIMIT)
         .clamp(1, MAX_MESSAGE_LIMIT);
-    let total_count = query_count(&conn, view_count_sql(view))?;
+    let normalized_search = search
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let search_pattern = normalized_search
+        .as_ref()
+        .map(|value| format!("%{}%", value));
+    let total_count = if let Some(pattern) = search_pattern.as_deref() {
+        conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM messages WHERE ({}) AND text_content LIKE ?",
+                view_where_sql(view)
+            ),
+            params![pattern],
+            |row| row.get(0),
+        )
+        .map_err(|err| format!("查询旧数据库计数失败：{err}"))?
+    } else {
+        query_count(&conn, view_count_sql(view))?
+    };
     let order = match sort {
         SortOrder::Newest => "DESC",
         SortOrder::Oldest => "ASC",
@@ -92,30 +121,38 @@ pub(crate) fn list_legacy_messages_from_dir(
         MessageView::Normal => "created_at",
         MessageView::Archived => "COALESCE(archived_at, created_at)",
     };
+    let where_sql = if search_pattern.is_some() {
+        format!("({}) AND text_content LIKE ?", view_where_sql(view))
+    } else {
+        view_where_sql(view).to_string()
+    };
     let sql = format!(
         "SELECT id, text_content, created_at, archived, archived_at \
          FROM messages \
-         WHERE {} \
+         WHERE {where_sql} \
          ORDER BY {sort_column} {order}, id {order} \
-         LIMIT ? OFFSET ?",
-        view_where_sql(view)
+         LIMIT ? OFFSET ?"
     );
 
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|err| format!("准备旧消息查询失败：{err}"))?;
-    let rows = stmt
-        .query_map(params![limit, offset], |row| {
-            let archived: i64 = row.get(3)?;
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-                archived == 1,
-                row.get::<_, Option<String>>(4)?,
-            ))
-        })
-        .map_err(|err| format!("查询旧消息失败：{err}"))?;
+    let map_row = |row: &rusqlite::Row<'_>| {
+        let archived: i64 = row.get(3)?;
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            archived == 1,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    };
+    let rows = if let Some(pattern) = search_pattern.as_deref() {
+        stmt.query_map(params![pattern, limit, offset], map_row)
+    } else {
+        stmt.query_map(params![limit, offset], map_row)
+    }
+    .map_err(|err| format!("查询旧消息失败：{err}"))?;
 
     let mut messages = Vec::new();
     for row in rows {

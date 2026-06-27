@@ -181,6 +181,29 @@ h1 {
     transform 120ms ease;
 }
 
+.top-actions .icon-action {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  place-items: center;
+  line-height: 1;
+}
+
+.top-actions .search-icon {
+  display: block;
+  width: 19px;
+  height: 19px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+}
+
 .top-actions button.active {
   color: #fff;
   background: var(--blue);
@@ -213,6 +236,41 @@ h1 {
 .write-submit:hover {
   background: var(--blue-deep);
   box-shadow: 0 5px 13px rgba(63, 125, 241, 0.26);
+}
+
+.message-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 8px;
+  border: 1px solid #dbe6f4;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(9, 36, 71, 0.04);
+}
+
+.message-search input {
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #d9e4f2;
+  border-radius: var(--control-radius);
+  color: var(--ink);
+  background: #f6f9fd;
+  font: inherit;
+  outline: none;
+}
+
+.message-search input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(63, 125, 241, 0.14);
+}
+
+.message-search button {
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 .status,

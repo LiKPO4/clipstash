@@ -6,7 +6,10 @@ use crate::{
     legacy_data::{list_legacy_messages, read_legacy_stats},
     legacy_model::{LegacyMessage, MessageView, SortOrder},
     legacy_paths::legacy_data_dir,
-    legacy_query::{list_legacy_messages_from_dir, query_count, read_legacy_stats_from_dir},
+    legacy_query::{
+        list_legacy_messages_from_dir, list_legacy_messages_from_dir_filtered, query_count,
+        read_legacy_stats_from_dir,
+    },
     legacy_test_support::{
         assert_message_order_matches_db_from_dir, collect_all_messages, query_image_rows,
         tiny_png_bytes,
@@ -124,6 +127,20 @@ fn lists_messages_with_ordered_image_status() {
     assert_eq!(archived_page.total_count, 1);
     assert_eq!(archived_page.messages[0].id, 3);
     assert!(archived_page.messages[0].archived);
+
+    let search_page = list_legacy_messages_from_dir_filtered(
+        data_dir.clone(),
+        MessageView::Normal,
+        SortOrder::Newest,
+        Some(0),
+        Some(10),
+        Some("older".to_string()),
+    )
+    .expect("search normal messages");
+
+    assert_eq!(search_page.total_count, 1);
+    assert!(!search_page.has_more);
+    assert_eq!(search_page.messages[0].id, 1);
 
     fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
 }

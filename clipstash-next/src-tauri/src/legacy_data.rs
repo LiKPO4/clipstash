@@ -16,8 +16,10 @@ pub use crate::legacy_clipboard::{
 pub use crate::legacy_model::LegacyMessageImage;
 pub use crate::legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder};
 use crate::legacy_paths::legacy_data_dir;
+#[cfg(test)]
+use crate::legacy_query::list_legacy_messages_from_dir;
 pub use crate::legacy_query::LegacyStats;
-use crate::legacy_query::{list_legacy_messages_from_dir, read_legacy_stats_from_dir};
+use crate::legacy_query::{list_legacy_messages_from_dir_filtered, read_legacy_stats_from_dir};
 pub use crate::legacy_write_audit::LegacyWriteAudit;
 use crate::legacy_write_ops::{
     create_image_message_with_backup_for_path, create_mixed_message_with_backup_for_path,
@@ -177,8 +179,18 @@ pub fn list_legacy_messages(
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> Result<LegacyMessagePage, String> {
+    list_legacy_messages_filtered(view, sort, offset, limit, None)
+}
+
+pub fn list_legacy_messages_filtered(
+    view: MessageView,
+    sort: SortOrder,
+    offset: Option<i64>,
+    limit: Option<i64>,
+    search: Option<String>,
+) -> Result<LegacyMessagePage, String> {
     let data_dir = legacy_data_dir()?;
-    list_legacy_messages_from_dir(data_dir, view, sort, offset, limit)
+    list_legacy_messages_from_dir_filtered(data_dir, view, sort, offset, limit, search)
 }
 
 #[cfg(test)]

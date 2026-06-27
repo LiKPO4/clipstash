@@ -9,13 +9,32 @@
 - 本轮继续按旧版体验校准：默认 Tauri 窗口宽度为 `370`，消息卡片头部信息与操作按钮同一行，归档时间上下分行，图片 hover 预览按原图尺寸优先并限制长边最大 `1000`，设置页补回旧版主要控件外观，图片目录打开权限已补 `opener:allow-open-path`，窗口置顶按钮已接入 Tauri always-on-top API。
 - 最新数据策略已切换：新版本首次打开时从旧 `%APPDATA%\ClipStash` 只读迁移到新 `%APPDATA%\ClipStash Next`，迁移状态写入新库后日常读写、复制、导入、归档、删除都走新库；界面不再展示旧库、安全审计、备份等旧库信息。
 - Android 版第一阶段已开始：复用 `clipstash-next` Tauri 2 + React + Rust，通过 Tauri Android 工程产出可侧载 APK；桌面端和 Android 端共用同一套新库与数据 zip 导入导出格式。
+- 当前 Windows 更新体验新增处理方向：开机自启动不再只依赖系统自启动项即时状态，而是把用户勾选意图持久化到 `settings.json`，下次读取设置/启动检查时若发现系统项被安装更新清掉，会尝试自动恢复。
+- 当前 Windows 桌面窗口体验新增处理方向：主窗口会保存 `x/y/width/height`，启动、托盘显示和单实例唤起时尝试恢复上次位置；恢复前会检查显示器可见区域，避免窗口跑到屏幕外。
+- Android 小组件方向已进入设计阶段：首个目标是参考桌面“待办”卡片，实现原生 AppWidget，展示最新普通消息/待办数量，并支持点击打开 App 或进入新建。
+- Android 小组件阶段 1 已实现：新增原生静态 `需求暂存站 - 待办` AppWidget，当前展示静态 3 条待办示例，点击卡片/条目/新建图标会打开 App，后续再接真实 SQLite 数据。
+- Android 小组件阶段 2 已实现：小组件 Provider 通过 Kotlin 只读 SQLite 读取 Android 数据库，展示最新 3 条普通消息和普通消息总数；阶段 3 已接入主要写入/导入成功后的主动刷新，首次打开 App 后刷新仍待补。
+- 当前消息列表已新增搜索方向：顶部操作区增加放大镜入口，展开后可按消息文字搜索；搜索参数下沉到 Rust/SQLite 分页查询，避免只筛当前已加载页。
+- Android 交互新增方向：WebView 和 viewport 均关闭用户缩放，避免编辑/新建页面被双指捏合放大；Android 系统分享文字或图片到 ClipStash 时会直接创建一条新消息。
 
 ## 已完成
 
+- 本轮修正 Android 小组件空状态：无普通消息时不再伪造带空心圆的“暂无需求”消息行，改为隐藏消息列表，并在标题栏下方剩余内容区水平、垂直居中显示单行“暂无需求”。
+- 本轮新增 Android 小组件分享入口：在新建按钮左侧增加分享图标，点击后打开 App 并复用现有 Android 数据包导出/系统分享流程；Android 设置新增“导出后自动归档”，默认关闭，开启后只批量归档本次实际写入 zip 的消息，并同步刷新主界面与小组件。
+- 本轮修复 Android 小组件归档后的行状态残留：完整刷新绑定消息行时显式恢复正常文字颜色，避免上一条归档变灰后，补位到同一行的下一条消息继续显示灰色。
 - 本轮修复 Android 设置页检查更新闪退风险：Android 端不再调用桌面更新下载/安装链路，设置加载后也不再调用桌面 always-on-top API。
 - 本轮强化 Android 图片预览：移动端预览层使用最高层级覆盖，图片垂直水平居中，预览时点击任意位置退出；移动端底部浮动通知上移避让手势栏。
 - 本轮补齐电脑端数据包导入确认：导入前先只读预览 zip，弹窗展示总消息数、将导入条数、重复跳过条数和图片数，确认后才写入，导入成功继续提示结果。
 - 已将上述改动发布为 `v2.1.10`，Windows NSIS/MSI 与 Android 通用 APK 均已完成构建。
+- 本轮修复 Windows 开机自启动勾选在安装更新后丢失的问题：新增 `launch_on_startup` 设置持久化，旧设置迁移支持该字段，设置开关写入成功后同步保存，读取时可按用户意图恢复系统自启动项。
+- 本轮显式固定 Windows NSIS `installMode=currentUser`，降低不同安装模式导致更新需要卸载重装的概率；已保留现有 WiX `upgradeCode`。
+- 本轮新增 Windows 主窗口位置/尺寸记忆：移动、缩放、关闭隐藏、退出销毁时保存 `main_window_state`，启动、托盘显示和单实例唤起时恢复；已补屏幕可见性检查和设置持久化单测。
+- 本轮新增 Android 小组件基础设计文档：`clipstash-next/migration-notes/android-widget-design.md`，明确 MVP 视觉、交互、原生文件落点、只读 SQLite 数据方案、刷新触发和分阶段验收清单。
+- 本轮完成 Android 小组件阶段 1：注册 `ClipStashWidgetProvider`，新增 `widget_todo.xml`、`clipstash_widget_info.xml`、卡片背景/状态圆/新建图标 drawable，并通过完整 `npm run tauri -- android build --apk` 生成 universal release APK；用 `aapt dump xmltree` 确认 APK Manifest 中包含 appwidget receiver 和 metadata。
+- 本轮新增消息搜索功能：顶部操作区放大镜按钮可展开搜索框，按关键词过滤当前普通/归档视图的消息文字；后端 `list_legacy_messages` 支持可选 `search` 参数并在 SQLite 层分页过滤，已补前端交互测试和 Rust 查询测试。
+- 本轮修复 Android 页面可被捏合缩放的问题：HTML viewport 禁用用户缩放，Android `MainActivity` 关闭 WebView zoom controls 并固定 `textZoom=100`。
+- 本轮新增 Android 系统分享导入：Manifest 注册 `ACTION_SEND text/plain`、`ACTION_SEND image/*`、`ACTION_SEND_MULTIPLE image/*`，`MainActivity` 读取分享文字/图片字节并通过 JS bridge 交给前端，前端复用现有创建文字/图片/图文消息 command，成功后刷新普通列表并显示“分享已保存”。
+- 本轮推进 Android 小组件阶段 2/3：新增 `ClipStashWidgetData.kt`，小组件读取 `ClipStash Next/clipstash.db` 或 `data-location.json` 指向目录，展示普通消息总数和最新 3 条；`ClipStashWidgetProvider` 不再写死示例数据；`MainActivity` 新增 `ClipStashAndroid.refreshWidgets()`，前端在 Android 新建、编辑、删除、归档/恢复、数据包导入、系统分享创建消息成功后刷新小组件。
 - 已在仓库内创建 `clipstash-next/`，使用 Tauri 2 + React + TypeScript 模板。
 - 已实现 Rust 侧旧数据目录定位：优先 `%APPDATA%\ClipStash`，回退 `%USERPROFILE%\ClipStash`。
 - 已实现 Rust 侧只读打开旧 `clipstash.db` 并查询 `messages` 计数的 command：`get_legacy_stats`。
@@ -415,4 +434,4 @@
 
 ## 下一步
 
-- 下一步最小行动：如需真机验收本轮 Android 新建/编辑弹窗、设置页收敛和导出兜底，迭代到下一补丁版本并发布 Android release APK；随后侧载检查图片预览、顶部图片/保存按钮、设置页选项和导出系统响应。
+- 下一步最小行动：在 Android 真机添加桌面小组件，确认显示真实普通消息数量和最新 3 条内容；随后新建、归档、删除、导入或系统分享一条消息，确认桌面小组件会刷新。如需发布，先迭代版本号到下一补丁版再跑完整打包流程。

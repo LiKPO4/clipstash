@@ -16,7 +16,10 @@ use crate::{
     legacy_image_files::resolve_legacy_image_path,
     legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder},
     legacy_paths::{legacy_data_dir, path_to_string},
-    legacy_query::{list_legacy_messages_from_dir, query_count, read_legacy_stats_from_dir},
+    legacy_query::{
+        list_legacy_messages_from_dir, list_legacy_messages_from_dir_filtered, query_count,
+        read_legacy_stats_from_dir,
+    },
     legacy_schema::ensure_legacy_schema,
     legacy_write_exec::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
@@ -233,9 +236,10 @@ pub fn list_messages(
     sort: SortOrder,
     offset: Option<i64>,
     limit: Option<i64>,
+    search: Option<String>,
 ) -> Result<LegacyMessagePage, String> {
     let paths = ready_paths()?;
-    list_legacy_messages_from_dir(paths.data_dir, view, sort, offset, limit)
+    list_legacy_messages_from_dir_filtered(paths.data_dir, view, sort, offset, limit, search)
 }
 
 pub fn create_text_message(text_content: String) -> Result<LegacyCreateTextMessageResult, String> {
@@ -313,6 +317,43 @@ pub fn set_message_archived(
         audit: audit("set_message_archived", message.id),
         message,
     })
+}
+
+pub fn archive_messages(message_ids: &[i64]) -> Result<AppStats, String> {
+    let paths = ready_paths()?;
+    if message_ids.is_empty() {
+        return read_app_stats_from_paths(&paths);
+    }
+
+    archive_messages_for_path(&paths.db_path, message_ids)?;
+    read_app_stats_from_paths(&paths)
+}
+
+fn archive_messages_for_path(db_path: &Path, message_ids: &[i64]) -> Result<usize, String> {
+    let mut conn = Connection::open(db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
+    let transaction = conn
+        .transaction()
+        .map_err(|err| format!("开始批量归档事务失败：{err}"))?;
+    let archived_at = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut archived_count = 0;
+    {
+        let mut statement = transaction
+            .prepare(
+                "UPDATE messages
+                 SET archived = 1, archived_at = ?1
+                 WHERE id = ?2 AND (archived = 0 OR archived IS NULL)",
+            )
+            .map_err(|err| format!("准备批量归档消息失败：{err}"))?;
+        for message_id in message_ids.iter().copied().filter(|id| *id > 0) {
+            archived_count += statement
+                .execute(params![archived_at, message_id])
+                .map_err(|err| format!("批量归档消息 #{message_id} 失败：{err}"))?;
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|err| format!("提交批量归档事务失败：{err}"))?;
+    Ok(archived_count)
 }
 
 pub fn copy_image_to_clipboard(filename: String) -> Result<LegacyCopyImageResult, String> {
@@ -1095,6 +1136,52 @@ mod tests {
         );
         assert_eq!(fs::read(&legacy_db).unwrap(), legacy_db_before);
         assert_eq!(fs::read(&legacy_image).unwrap(), legacy_image_before);
+
+        drop(conn);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn archives_only_requested_normal_messages() {
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-export-archive-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let db_path = base.join(APP_DB_NAME);
+        let conn = Connection::open(&db_path).unwrap();
+        ensure_app_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO messages (id, text_content, archived) VALUES
+                (1, 'first', 0),
+                (2, 'second', 0),
+                (3, 'already archived', 1);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let archived = archive_messages_for_path(&db_path, &[1, 3, 99]).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert_eq!(archived, 1);
+        assert_eq!(
+            query_count(&conn, "SELECT COUNT(*) FROM messages WHERE archived = 1").unwrap(),
+            2
+        );
+        assert_eq!(
+            query_count(
+                &conn,
+                "SELECT COUNT(*) FROM messages WHERE id = 2 AND archived = 0"
+            )
+            .unwrap(),
+            1
+        );
+        assert!(conn
+            .query_row("SELECT archived_at FROM messages WHERE id = 1", [], |row| {
+                row.get::<_, Option<String>>(0)
+            },)
+            .unwrap()
+            .is_some());
 
         drop(conn);
         fs::remove_dir_all(base).unwrap();

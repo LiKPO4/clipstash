@@ -20,6 +20,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
+  archiveExportedMessages,
   copyLegacyMessageTextToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
@@ -76,7 +77,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.10";
+const CURRENT_VERSION = "2.1.11";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -86,10 +87,15 @@ const GITHUB_RELEASE_API_URL = "https://api.github.com/repos/LiKPO4/clipstash/re
 const GITHUB_RELEASES_URL = "https://github.com/LiKPO4/clipstash/releases/latest";
 const IS_TEST_ENV = import.meta.env.MODE === "test";
 const ANDROID_BACK_EVENT = "clipstash-android-back";
+const ANDROID_SHARE_EVENT = "clipstash-android-share-ready";
+const ANDROID_WIDGET_ACTION_EVENT = "clipstash-android-widget-action-ready";
 
 declare global {
   interface Window {
     ClipStashAndroid?: {
+      consumePendingShare?: () => string;
+      consumePendingWidgetAction?: () => string;
+      refreshWidgets?: () => void;
       shareZip?: (path: string) => void;
     };
   }
@@ -151,6 +157,16 @@ type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
 
 type ImportQueuePasteArchiveResult = LegacyImportQueuePasteArchiveResult;
 
+type AndroidSharedPayload = {
+  text?: string;
+  images?: AndroidSharedImage[];
+};
+
+type AndroidSharedImage = {
+  mimeType?: string;
+  data: string;
+};
+
 type ReleaseCheckResult = {
   currentVersion: string;
   downloadAsset: ReleaseDownloadAsset | null;
@@ -174,6 +190,9 @@ function App() {
   const [imageSources, setImageSources] = useState<Record<string, string>>({});
   const [view, setView] = useState<MessageView>("normal");
   const [sort, setSort] = useState<SortOrder>(() => getStoredSort());
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
@@ -208,6 +227,8 @@ function App() {
   const [archiveResult, setArchiveResult] = useState<LegacyArchiveMessageResult | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
+  const [androidShareError, setAndroidShareError] = useState<string | null>(null);
+  const [androidShareResult, setAndroidShareResult] = useState<LegacyMessage | null>(null);
   const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
     useState<number | null>(null);
   const [importQueueError, setImportQueueError] = useState<string | null>(null);
@@ -218,6 +239,8 @@ function App() {
   const [importQueuePasteAllResult, setImportQueuePasteAllResult] =
     useState<ImportQueuePasteAllResult | null>(null);
   const [archiveAfterImport, setArchiveAfterImport] = useState(false);
+  const [archiveAfterExport, setArchiveAfterExport] = useState(false);
+  const [appSettingsReady, setAppSettingsReady] = useState(false);
   const [importQueuePasteArchiveResult, setImportQueuePasteArchiveResult] =
     useState<ImportQueuePasteArchiveResult | null>(null);
   const [showComposer, setShowComposer] = useState(false);
@@ -259,11 +282,61 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!IS_ANDROID) return;
+
+    function consumeAndroidShare() {
+      const rawPayload = window.ClipStashAndroid?.consumePendingShare?.();
+      if (!rawPayload) return;
+
+      try {
+        const payload = JSON.parse(rawPayload) as AndroidSharedPayload;
+        createMessageFromAndroidShare(payload).catch((err: unknown) => {
+          setAndroidShareError(err instanceof Error ? err.message : String(err));
+          setAndroidShareResult(null);
+        });
+      } catch (err) {
+        setAndroidShareError(err instanceof Error ? err.message : String(err));
+        setAndroidShareResult(null);
+      }
+    }
+
+    consumeAndroidShare();
+    window.addEventListener(ANDROID_SHARE_EVENT, consumeAndroidShare);
+    return () => window.removeEventListener(ANDROID_SHARE_EVENT, consumeAndroidShare);
+  }, [sort, imageSources]);
+
+  useEffect(() => {
+    if (!IS_ANDROID) return;
+
+    function consumeWidgetAction() {
+      if (!appSettingsReady) return;
+      const action = window.ClipStashAndroid?.consumePendingWidgetAction?.();
+      if (!action) return;
+
+      setShowSettings(false);
+      setEditingMessage(null);
+      setDeletingMessage(null);
+      setPreviewImage(null);
+      if (action === "export") {
+        exportDataPackage().catch(() => undefined);
+        return;
+      }
+      if (action !== "create") return;
+      setCreateMediaError(null);
+      setShowComposer(true);
+    }
+
+    consumeWidgetAction();
+    window.addEventListener(ANDROID_WIDGET_ACTION_EVENT, consumeWidgetAction);
+    return () => window.removeEventListener(ANDROID_WIDGET_ACTION_EVENT, consumeWidgetAction);
+  }, [appSettingsReady, archiveAfterExport, exportingData]);
+
+  useEffect(() => {
     let alive = true;
 
     setError(null);
 
-    loadAppDataWithImages(view, sort, imageSources)
+    loadAppDataWithImages(view, sort, imageSources, searchQuery)
       .then(({ imageSources: nextImageSources, page: nextPage, stats: nextStats }) => {
         if (!alive) return;
         setImageSources(nextImageSources);
@@ -279,7 +352,7 @@ function App() {
     return () => {
       alive = false;
     };
-  }, [view, sort]);
+  }, [view, sort, searchQuery]);
 
   useLayoutEffect(() => {
     const pendingScrollTop = pendingMessageListScrollTopRef.current;
@@ -354,6 +427,17 @@ function App() {
   }, [copyError, copyResult]);
 
   useEffect(() => {
+    if (!androidShareError && !androidShareResult) return;
+
+    const timer = window.setTimeout(() => {
+      setAndroidShareError(null);
+      setAndroidShareResult(null);
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [androidShareError, androidShareResult]);
+
+  useEffect(() => {
     if (
       !importQueueError &&
       !importQueuePreview &&
@@ -394,9 +478,13 @@ function App() {
         applyAppSettings(actualSettings);
         clearLegacyLocalSettings();
         setSettingsError(null);
+        setAppSettingsReady(true);
       })
       .catch((err: unknown) => {
-        if (alive) setSettingsError(err instanceof Error ? err.message : String(err));
+        if (alive) {
+          setSettingsError(err instanceof Error ? err.message : String(err));
+          setAppSettingsReady(true);
+        }
       });
 
     return () => {
@@ -622,7 +710,9 @@ function App() {
   function applyAppSettings(settings: AppSettings) {
     setAlwaysOnTop(settings.always_on_top);
     setCloseToTray(settings.close_to_tray);
+    setStartup(settings.launch_on_startup);
     setArchiveAfterImport(settings.archive_after_import);
+    setArchiveAfterExport(settings.archive_after_export);
     setPasteIntervalMs(settings.paste_interval_ms);
     setHoverDelay(settings.hover_delay);
     setScrollLines(settings.scroll_lines);
@@ -722,6 +812,7 @@ function App() {
         sort,
         offset: page.offset + page.messages.length,
         limit: PAGE_LIMIT,
+        search: searchQuery,
       });
       const nextImageSources = await preloadMessageImageSources(
         nextPage.messages,
@@ -745,10 +836,16 @@ function App() {
       pendingMessageListScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
     }
     const { imageSources: nextImageSources, page: nextPage, stats: nextStats } =
-      await loadAppDataWithImages(view, sort, imageSources);
+      await loadAppDataWithImages(view, sort, imageSources, searchQuery);
     setImageSources(nextImageSources);
     setStats(nextStats);
     setPage(nextPage);
+  }
+
+  function refreshAndroidWidgets() {
+    if (IS_ANDROID) {
+      window.ClipStashAndroid?.refreshWidgets?.();
+    }
   }
 
   async function openLocalPath(path: string) {
@@ -758,6 +855,17 @@ function App() {
     } catch (err) {
       setOpenPathError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  function submitSearch(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    setSearchQuery(searchDraft.trim());
+  }
+
+  function clearSearch() {
+    setSearchDraft("");
+    setSearchQuery("");
+    setSearchOpen(false);
   }
 
   async function openExternalUrl(url: string) {
@@ -904,7 +1012,11 @@ function App() {
         ? await exportAndroidDataPackage()
         : await exportNormalDataZip();
       setDataExportResult(result);
-      setSettingsNotice(`已导出 ${result.message_count} 条普通消息`);
+      setSettingsNotice(
+        IS_ANDROID && archiveAfterExport && result.message_count > 0
+          ? `已导出 ${result.message_count} 条普通消息并自动归档`
+          : `已导出 ${result.message_count} 条普通消息`,
+      );
       window.setTimeout(() => setSettingsNotice(null), 2400);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -919,6 +1031,11 @@ function App() {
   async function exportAndroidDataPackage() {
     const result = await exportNormalDataZipBytes();
     await openExportedDataPackage(result.filename, result.bytes, result.export.path);
+    if (archiveAfterExport && result.message_ids.length > 0) {
+      const nextStats = await archiveExportedMessages(result.message_ids);
+      await refreshPageAfterDataChange(nextStats);
+      refreshAndroidWidgets();
+    }
     return result.export;
   }
 
@@ -961,6 +1078,7 @@ function App() {
       setDataImportResult(result);
       setDataImportPreview(null);
       await refreshPageAfterDataChange(result.stats);
+      refreshAndroidWidgets();
       setSettingsNotice(
         result.inserted_messages > 0
           ? `已导入 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
@@ -993,6 +1111,7 @@ function App() {
       const result = await importDataZipBytes(file.name, bytes);
       setDataImportResult(result);
       await refreshPageAfterDataChange(result.stats);
+      refreshAndroidWidgets();
       setSettingsNotice(
         result.inserted_messages > 0
           ? `已导入 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
@@ -1027,6 +1146,7 @@ function App() {
       const result = await importDataZipFromPath(path);
       setDataImportResult(result);
       await refreshPageAfterDataChange(result.stats);
+      refreshAndroidWidgets();
       setSettingsNotice(
         result.inserted_messages > 0
           ? `已导入 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
@@ -1152,6 +1272,7 @@ function App() {
         await createLegacyImageMessage(imagesData);
       }
       await refreshAppData();
+      refreshAndroidWidgets();
       setMediaTextDraft("");
       setMediaFiles([]);
       setMediaInputKey((key) => key + 1);
@@ -1161,6 +1282,39 @@ function App() {
     } finally {
       setCreatingMediaMessage(false);
     }
+  }
+
+  async function createMessageFromAndroidShare(payload: AndroidSharedPayload) {
+    const text = payload.text?.trim() ?? "";
+    const imagesData = (payload.images ?? [])
+      .map((image) => base64ToNumberArray(image.data))
+      .filter((bytes) => bytes.length > 0);
+    if (!text && imagesData.length === 0) {
+      throw new Error("分享内容为空");
+    }
+
+    setAndroidShareError(null);
+    setAndroidShareResult(null);
+    setShowComposer(false);
+    setEditingMessage(null);
+    setSearchDraft("");
+    setSearchQuery("");
+
+    const result =
+      text && imagesData.length > 0
+        ? await createLegacyMixedMessage(text, imagesData)
+        : text
+          ? await createLegacyTextMessage(text)
+          : await createLegacyImageMessage(imagesData);
+
+    const [nextStats, nextPage] = await loadAppData("normal", sort, "");
+    const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+    setView("normal");
+    setStats(nextStats);
+    setImageSources(nextImageSources);
+    setPage(nextPage);
+    setAndroidShareResult(result.message);
+    refreshAndroidWidgets();
   }
 
   function openEditMessage(message: LegacyMessage) {
@@ -1286,6 +1440,7 @@ function App() {
         throw new Error("没有需要保存的变更");
       }
       await refreshAppData();
+      refreshAndroidWidgets();
       setEditImageItems([]);
       setEditInputKey((key) => key + 1);
       setEditingMessage(null);
@@ -1320,6 +1475,7 @@ function App() {
     try {
       const result = await deleteLegacyMessage(deletingMessage.id);
       await refreshAppData();
+      refreshAndroidWidgets();
       setDeleteResult(result);
       setDeletingMessage(null);
       setDeleteConfirmed(false);
@@ -1340,6 +1496,7 @@ function App() {
     try {
       const result = await setLegacyMessageArchived(message.id, !message.archived);
       await refreshAppData();
+      refreshAndroidWidgets();
       setArchiveResult(result);
     } catch (err) {
       setArchiveError(err instanceof Error ? err.message : String(err));
@@ -1405,6 +1562,7 @@ function App() {
       setImportQueuePasteArchiveResult(result);
       if (result.archive_result) {
         await refreshAppData();
+        refreshAndroidWidgets();
       }
     } catch (err) {
       setImportQueuePasteAllError(err instanceof Error ? err.message : String(err));
@@ -1443,6 +1601,25 @@ function App() {
         </div>
 
         <nav className="top-actions" aria-label="应用操作">
+          <button
+            type="button"
+            className={searchOpen || searchQuery ? "icon-action active" : "icon-action"}
+            onClick={() => {
+              setSearchOpen((open) => !open);
+            }}
+            aria-label="搜索消息"
+            title="搜索消息"
+          >
+            <svg
+              className="search-icon"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              focusable="false"
+            >
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="M15.5 15.5 21 21" />
+            </svg>
+          </button>
           {IS_ANDROID ? (
             <button type="button" onClick={exportDataPackage} disabled={exportingData}>
               {exportingData ? "导出中" : "导出"}
@@ -1467,6 +1644,27 @@ function App() {
           </button>
         </nav>
       </header>
+
+      {searchOpen && (
+        <form className="message-search" role="search" onSubmit={submitSearch}>
+          <input
+            type="search"
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            placeholder="搜索消息内容"
+            autoFocus
+            aria-label="搜索消息内容"
+          />
+          {searchQuery && (
+            <button type="button" className="secondary-action" onClick={clearSearch}>
+              清空
+            </button>
+          )}
+          <button type="submit" className="write-submit">
+            搜索
+          </button>
+        </form>
+      )}
 
       {IS_ANDROID && (
         <input
@@ -1601,7 +1799,7 @@ function App() {
               className="empty empty-create-target"
               onDoubleClick={() => setShowComposer(true)}
             >
-              当前视图没有消息。双击空白处创建。
+              {searchQuery ? "没有匹配的消息。" : "当前视图没有消息。双击空白处创建。"}
             </button>
           )}
         </>
@@ -1657,6 +1855,7 @@ function App() {
 
       {showSettings && stats && (
         <SettingsDialog
+          archiveAfterExport={archiveAfterExport}
           archiveAfterImport={archiveAfterImport}
           checkingUpdate={checkingUpdate}
           closeToTray={closeToTray}
@@ -1689,6 +1888,10 @@ function App() {
           exportingData={exportingData}
           importingDataPackage={importingDataPackage}
           isAndroid={IS_ANDROID}
+          onArchiveAfterExportChange={(checked) => {
+            setArchiveAfterExport(checked);
+            persistAppSettings({ archive_after_export: checked }).catch(() => undefined);
+          }}
           onArchiveAfterImportChange={(checked) => {
             setArchiveAfterImport(checked);
             persistAppSettings({ archive_after_import: checked }).catch(() => undefined);
@@ -1827,9 +2030,31 @@ function App() {
             dataExportResult && (
               <p>
                 {dataExportResult.message_count} 条普通消息，图片{" "}
-                {dataExportResult.image_count} 张。
+                {dataExportResult.image_count} 张
+                {archiveAfterExport && dataExportResult.message_count > 0
+                  ? "，已自动归档。"
+                  : "。"}
               </p>
             )
+          )}
+        </OperationFeedback>
+      )}
+
+      {IS_ANDROID && (androidShareError || androidShareResult) && (
+        <OperationFeedback
+          dismissLabel="关闭分享提示"
+          onDismiss={() => {
+            setAndroidShareError(null);
+            setAndroidShareResult(null);
+          }}
+          surface="floating"
+          variant={androidShareError ? "error" : "success"}
+          title={androidShareError ? "分享保存失败" : "分享已保存"}
+        >
+          {androidShareError ? (
+            <p>{androidShareError}</p>
+          ) : (
+            androidShareResult && <p>已创建 #{androidShareResult.id}</p>
           )}
         </OperationFeedback>
       )}
@@ -1981,6 +2206,7 @@ function OperationFeedback({
 }
 
 function SettingsDialog({
+  archiveAfterExport,
   archiveAfterImport,
   checkingUpdate,
   closeToTray,
@@ -2014,6 +2240,7 @@ function SettingsDialog({
   startup,
   startupError,
   captureHotkey,
+  onArchiveAfterExportChange,
   onArchiveAfterImportChange,
   onCheckUpdates,
   onDownloadUpdate,
@@ -2040,6 +2267,7 @@ function SettingsDialog({
   onStartupChange,
   onStartupPersistChange,
 }: {
+  archiveAfterExport: boolean;
   archiveAfterImport: boolean;
   checkingUpdate: boolean;
   closeToTray: boolean;
@@ -2073,6 +2301,7 @@ function SettingsDialog({
   startup: boolean;
   startupError: string | null;
   captureHotkey: string;
+  onArchiveAfterExportChange: (checked: boolean) => void;
   onArchiveAfterImportChange: (checked: boolean) => void;
   onCheckUpdates: () => void;
   onDownloadUpdate: () => void;
@@ -2134,6 +2363,11 @@ function SettingsDialog({
 
   function changeArchiveAfterImport(checked: boolean) {
     onArchiveAfterImportChange(checked);
+    showAutoSavedNotice();
+  }
+
+  function changeArchiveAfterExport(checked: boolean) {
+    onArchiveAfterExportChange(checked);
     showAutoSavedNotice();
   }
 
@@ -2303,6 +2537,14 @@ function SettingsDialog({
                   </p>
                 ))}
               </>
+            )}
+            {isAndroid && (
+              <SettingToggle
+                checked={archiveAfterExport}
+                label="导出后自动归档"
+                description="数据包分享后自动将本次导出的消息移入已归档"
+                onChange={changeArchiveAfterExport}
+              />
             )}
             {settingsError && <p className="inline-error">{settingsError}</p>}
 
@@ -3793,6 +4035,15 @@ function bytesToDataUrl(bytes: number[], mimeType: string) {
   return `data:${mimeType};base64,${window.btoa(binary)}`;
 }
 
+function base64ToNumberArray(value: string) {
+  const binary = window.atob(value);
+  const bytes = new Array<number>(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 async function preloadMessageImageSources(
   messages: LegacyMessage[],
   currentSources: Record<string, string>,
@@ -3819,16 +4070,17 @@ async function loadAppDataWithImages(
   view: MessageView,
   sort: SortOrder,
   currentSources: Record<string, string>,
+  search: string,
 ) {
-  const [stats, page] = await loadAppData(view, sort);
+  const [stats, page] = await loadAppData(view, sort, search);
   const imageSources = await preloadMessageImageSources(page.messages, currentSources);
   return { imageSources, page, stats };
 }
 
-function loadAppData(view: MessageView, sort: SortOrder) {
+function loadAppData(view: MessageView, sort: SortOrder, search: string) {
   return Promise.all([
     getLegacyStats(),
-    listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT }),
+    listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT, search }),
   ]);
 }
 

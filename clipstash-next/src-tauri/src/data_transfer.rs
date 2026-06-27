@@ -36,6 +36,7 @@ pub struct DataExportBytesResult {
     pub filename: String,
     pub export: DataExportResult,
     pub bytes: Vec<u8>,
+    pub message_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,7 +93,10 @@ pub fn export_normal_data_zip_to_temp_bytes() -> Result<DataExportBytesResult, S
     fs::create_dir_all(&temp_dir)
         .map_err(|err| format!("创建导出临时目录失败：{}：{err}", temp_dir.display()))?;
     let output_path = temp_dir.join(&filename);
-    let export = export_normal_data_zip_to_path(output_path.clone())?;
+    let stats = app_data::ensure_app_data_ready()?;
+    let data_dir = app_data::app_data_dir_path()?;
+    let (export, message_ids) =
+        build_normal_data_zip_from_dir(&data_dir, output_path.clone(), stats.archived_count)?;
     let bytes = fs::read(&output_path)
         .map_err(|err| format!("读取导出数据包失败：{}：{err}", output_path.display()))?;
 
@@ -100,6 +104,7 @@ pub fn export_normal_data_zip_to_temp_bytes() -> Result<DataExportBytesResult, S
         filename,
         export,
         bytes,
+        message_ids,
     })
 }
 
@@ -108,6 +113,15 @@ fn export_normal_data_zip_from_dir(
     output_path: PathBuf,
     skipped_archived_count: i64,
 ) -> Result<DataExportResult, String> {
+    build_normal_data_zip_from_dir(data_dir, output_path, skipped_archived_count)
+        .map(|(export, _)| export)
+}
+
+fn build_normal_data_zip_from_dir(
+    data_dir: &Path,
+    output_path: PathBuf,
+    skipped_archived_count: i64,
+) -> Result<(DataExportResult, Vec<i64>), String> {
     let output_path = ensure_zip_output_path(output_path)?;
 
     if let Some(parent) = output_path.parent() {
@@ -119,6 +133,7 @@ fn export_normal_data_zip_from_dir(
     collect_messages(&data_dir, MessageView::Normal, &mut messages)?;
 
     let mut manifest_messages = Vec::new();
+    let mut exported_message_ids = Vec::new();
     let mut staged_images = Vec::new();
     let mut skipped_missing_image_count = 0_i64;
     let mut skipped_empty_message_count = 0_i64;
@@ -168,6 +183,7 @@ fn export_normal_data_zip_from_dir(
             created_at: message.created_at.clone(),
             images: manifest_images,
         });
+        exported_message_ids.push(message.id);
     }
 
     let manifest = ExportManifest {
@@ -184,7 +200,7 @@ fn export_normal_data_zip_from_dir(
         .map_err(|err| format!("读取导出文件信息失败：{}：{err}", output_path.display()))?
         .len();
 
-    Ok(DataExportResult {
+    let export = DataExportResult {
         path: path_to_string(&output_path),
         message_count: manifest.messages.len() as i64,
         image_count: manifest
@@ -196,7 +212,8 @@ fn export_normal_data_zip_from_dir(
         skipped_missing_image_count,
         skipped_empty_message_count,
         bytes,
-    })
+    };
+    Ok((export, exported_message_ids))
 }
 
 pub fn import_data_zip_from_path(zip_path: PathBuf) -> Result<DataImportResult, String> {
@@ -797,11 +814,13 @@ mod tests {
         let data_dir = seed_app_data("export-normal");
         let zip_path = data_dir.join("export.zip");
 
-        let result = export_normal_data_zip_from_dir(&data_dir, zip_path.clone(), 1).unwrap();
+        let (result, message_ids) =
+            build_normal_data_zip_from_dir(&data_dir, zip_path.clone(), 1).unwrap();
 
         assert_eq!(result.message_count, 2);
         assert_eq!(result.image_count, 2);
         assert_eq!(result.skipped_archived_count, 1);
+        assert_eq!(message_ids, vec![1, 3]);
 
         let mut archive = open_zip(&zip_path).unwrap();
         let manifest = read_manifest(&mut archive).unwrap();

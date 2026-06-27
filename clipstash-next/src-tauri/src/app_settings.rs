@@ -9,7 +9,10 @@ const SETTINGS_FILE_NAME: &str = "settings.json";
 pub struct AppSettings {
     pub always_on_top: bool,
     pub close_to_tray: bool,
+    pub launch_on_startup: bool,
+    pub main_window_state: Option<MainWindowState>,
     pub archive_after_import: bool,
+    pub archive_after_export: bool,
     pub paste_interval_ms: u64,
     pub show_hotkey: String,
     pub capture_hotkey: String,
@@ -21,12 +24,23 @@ pub struct AppSettings {
     pub message_double_click_action: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MainWindowState {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             always_on_top: false,
             close_to_tray: true,
+            launch_on_startup: false,
+            main_window_state: None,
             archive_after_import: false,
+            archive_after_export: false,
             paste_interval_ms: 250,
             show_hotkey: "Ctrl+Shift+V".to_string(),
             capture_hotkey: "Ctrl+Alt+V".to_string(),
@@ -40,11 +54,14 @@ impl Default for AppSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct AppSettingsPatch {
     pub always_on_top: Option<bool>,
     pub close_to_tray: Option<bool>,
+    pub launch_on_startup: Option<bool>,
+    pub main_window_state: Option<Option<MainWindowState>>,
     pub archive_after_import: Option<bool>,
+    pub archive_after_export: Option<bool>,
     pub paste_interval_ms: Option<u64>,
     pub show_hotkey: Option<String>,
     pub capture_hotkey: Option<String>,
@@ -60,6 +77,7 @@ pub struct AppSettingsPatch {
 struct LegacySettings {
     hover_delay_ms: Option<u64>,
     auto_archive_after_import: Option<bool>,
+    launch_on_startup: Option<bool>,
     sort_order: Option<String>,
     show_hotkey: Option<String>,
     capture_hotkey: Option<String>,
@@ -93,8 +111,17 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     if let Some(value) = patch.close_to_tray {
         settings.close_to_tray = value;
     }
+    if let Some(value) = patch.launch_on_startup {
+        settings.launch_on_startup = value;
+    }
+    if let Some(value) = patch.main_window_state {
+        settings.main_window_state = value;
+    }
     if let Some(value) = patch.archive_after_import {
         settings.archive_after_import = value;
+    }
+    if let Some(value) = patch.archive_after_export {
+        settings.archive_after_export = value;
     }
     if let Some(value) = patch.paste_interval_ms {
         settings.paste_interval_ms = value;
@@ -157,6 +184,9 @@ fn read_legacy_settings() -> Option<AppSettings> {
     if let Some(value) = legacy.auto_archive_after_import {
         settings.archive_after_import = value;
     }
+    if let Some(value) = legacy.launch_on_startup {
+        settings.launch_on_startup = value;
+    }
     if let Some(value) = legacy.sort_order {
         settings.sort = value;
     }
@@ -177,6 +207,9 @@ fn read_legacy_settings() -> Option<AppSettings> {
 }
 
 fn normalize_settings(mut settings: AppSettings) -> AppSettings {
+    if let Some(state) = settings.main_window_state.take() {
+        settings.main_window_state = normalize_main_window_state(state);
+    }
     settings.paste_interval_ms = settings.paste_interval_ms.clamp(50, 3000);
     settings.hover_delay = settings.hover_delay.clamp(0.0, 2.0);
     settings.scroll_lines = settings.scroll_lines.clamp(1, 8);
@@ -197,6 +230,20 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
         &AppSettings::default().capture_hotkey,
     );
     settings
+}
+
+fn normalize_main_window_state(state: MainWindowState) -> Option<MainWindowState> {
+    let width = state.width.clamp(360, 2400);
+    let height = state.height.clamp(600, 2400);
+    if state.x.abs() > 100_000 || state.y.abs() > 100_000 {
+        return None;
+    }
+    Some(MainWindowState {
+        x: state.x,
+        y: state.y,
+        width,
+        height,
+    })
 }
 
 fn normalize_hotkey(value: &str, fallback: &str) -> String {
@@ -282,7 +329,10 @@ mod tests {
 
         assert!(settings.always_on_top);
         assert!(settings.close_to_tray);
+        assert!(!settings.launch_on_startup);
+        assert!(settings.main_window_state.is_none());
         assert!(settings.archive_after_import);
+        assert!(!settings.archive_after_export);
         assert_eq!(settings.edit_textarea_height, 360);
         assert_eq!(settings.message_double_click_action, "edit");
         assert_eq!(settings.sort, "oldest");
@@ -298,7 +348,10 @@ mod tests {
         let settings = update_settings(AppSettingsPatch {
             always_on_top: None,
             close_to_tray: Some(false),
+            launch_on_startup: None,
+            main_window_state: None,
             archive_after_import: None,
+            archive_after_export: None,
             message_double_click_action: None,
             paste_interval_ms: None,
             show_hotkey: None,
@@ -315,6 +368,51 @@ mod tests {
 
         let persisted = read_settings().unwrap();
         assert!(!persisted.close_to_tray);
+    }
+
+    #[test]
+    fn updates_main_window_state_setting() {
+        let _guard = env_lock().lock().unwrap();
+        let appdata = isolated_appdata("window-state");
+        reset_dir(&appdata);
+        env::set_var("APPDATA", &appdata);
+
+        let settings = update_settings(AppSettingsPatch {
+            main_window_state: Some(Some(MainWindowState {
+                x: 120,
+                y: 80,
+                width: 390,
+                height: 740,
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let state = settings.main_window_state.unwrap();
+        assert_eq!(state.x, 120);
+        assert_eq!(state.y, 80);
+        assert_eq!(state.width, 390);
+        assert_eq!(state.height, 740);
+
+        let persisted = read_settings().unwrap();
+        assert_eq!(persisted.main_window_state.unwrap().x, 120);
+    }
+
+    #[test]
+    fn updates_archive_after_export_setting() {
+        let _guard = env_lock().lock().unwrap();
+        let appdata = isolated_appdata("archive-after-export");
+        reset_dir(&appdata);
+        env::set_var("APPDATA", &appdata);
+
+        let settings = update_settings(AppSettingsPatch {
+            archive_after_export: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(settings.archive_after_export);
+        assert!(read_settings().unwrap().archive_after_export);
     }
 
     #[test]
@@ -349,6 +447,7 @@ mod tests {
         assert_eq!(settings.capture_hotkey, "Ctrl+Alt+V");
         assert_eq!(settings.scroll_lines, 5);
         assert_eq!(settings.font_scale, 2);
+        assert!(settings.launch_on_startup);
         assert!(settings.close_to_tray);
         assert!(appdata
             .join("ClipStash Next")

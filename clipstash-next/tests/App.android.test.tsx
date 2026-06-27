@@ -51,7 +51,10 @@ const stats = {
 const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
+  launch_on_startup: false,
+  main_window_state: null,
   archive_after_import: false,
+  archive_after_export: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -82,16 +85,45 @@ const normalPage = {
   ],
 };
 
+const createdMessage = {
+  id: 2,
+  text_content: "分享文字",
+  created_at: "2026-06-16 10:10:00",
+  archived: false,
+  archived_at: null,
+  images: [],
+};
+
+const createResult = {
+  backup: {
+    source_path: stats.db_path,
+    backup_path: `${stats.db_path}.bak-20260616-101000`,
+    bytes_copied: 4096,
+  },
+  audit: {
+    operation: "create_message",
+    message_id: 2,
+    db_backup_path: `${stats.db_path}.bak-20260616-101000`,
+    image_backup_dir: null,
+  },
+  message: createdMessage,
+};
+
 describe("android shell", () => {
   let appSettings = { ...defaultAppSettings };
   let listedPage = normalPage;
+  let androidRefreshWidgetsMock: ReturnType<typeof vi.fn>;
   let androidShareZipMock: ReturnType<typeof vi.fn> | null = null;
 
   beforeEach(() => {
     vi.resetModules();
     appSettings = { ...defaultAppSettings };
     listedPage = normalPage;
+    androidRefreshWidgetsMock = vi.fn();
     androidShareZipMock = null;
+    window.ClipStashAndroid = {
+      refreshWidgets: androidRefreshWidgetsMock,
+    };
     Object.defineProperty(window.navigator, "userAgent", {
       configurable: true,
       value: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36",
@@ -118,6 +150,19 @@ describe("android shell", () => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") return Promise.resolve(listedPage);
       if (command === "read_legacy_image_bytes") return Promise.resolve([]);
+      if (command === "create_legacy_text_message") return Promise.resolve(createResult);
+      if (command === "create_legacy_image_message") {
+        return Promise.resolve({
+          ...createResult,
+          message: { ...createdMessage, text_content: null, images: [{ id: 20, filename: "share.png", path: "/images/share.png", exists: true }] },
+        });
+      }
+      if (command === "create_legacy_mixed_message") {
+        return Promise.resolve({
+          ...createResult,
+          message: { ...createdMessage, images: [{ id: 20, filename: "share.png", path: "/images/share.png", exists: true }] },
+        });
+      }
       if (command === "export_normal_data_zip_bytes") {
         return Promise.resolve({
           filename: "clipstash-export-20260616-100000.zip",
@@ -131,7 +176,12 @@ describe("android shell", () => {
             bytes: 512,
           },
           bytes: [80, 75, 3, 4],
+          message_ids: [1],
         });
+      }
+      if (command === "archive_exported_messages") {
+        listedPage = { ...normalPage, total_count: 0, messages: [] };
+        return Promise.resolve({ ...stats, normal_count: 0, archived_count: 1 });
       }
       if (command === "import_data_zip_bytes") {
         return Promise.resolve({
@@ -188,6 +238,7 @@ describe("android shell", () => {
     expect(within(dialog).queryByText("悬浮预览延迟")).toBeNull();
     expect(within(dialog).queryByText("滚动速度")).toBeNull();
     expect(within(dialog).queryByText("粘贴间隔")).toBeNull();
+    expect(within(dialog).getByText("导出后自动归档")).toBeTruthy();
     expect(invokeMock).not.toHaveBeenCalledWith("get_launch_on_startup");
     expect(invokeMock).not.toHaveBeenCalledWith("get_global_shortcut_errors");
     expect(isAlwaysOnTopMock).not.toHaveBeenCalled();
@@ -216,7 +267,12 @@ describe("android shell", () => {
     const previewButton = composer.querySelector<HTMLButtonElement>(".composer-image-tile");
     expect(previewButton).toBeTruthy();
     await user.click(previewButton!);
-    expect(await screen.findByRole("button", { name: "关闭图片预览 phone.png" })).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "关闭图片预览 phone.png" }));
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      expect(androidRefreshWidgetsMock).toHaveBeenCalled();
+    });
 
     fireEvent.click(composer.parentElement!);
     await waitFor(() => {
@@ -261,7 +317,10 @@ describe("android shell", () => {
 
   it("uses the native android zip share bridge when available", async () => {
     androidShareZipMock = vi.fn();
-    window.ClipStashAndroid = { shareZip: androidShareZipMock };
+    window.ClipStashAndroid = {
+      refreshWidgets: androidRefreshWidgetsMock,
+      shareZip: androidShareZipMock,
+    };
     const user = userEvent.setup();
     const { default: App } = await import("../src/App");
     render(<App />);
@@ -274,6 +333,82 @@ describe("android shell", () => {
     expect(androidShareZipMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
     expect(shareMock).not.toHaveBeenCalled();
     expect(openPathMock).not.toHaveBeenCalledWith("/tmp/clipstash-export.zip");
+  });
+
+  it("archives exported messages when the android setting is enabled", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("checkbox", { name: /导出后自动归档/ }));
+    expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+      patch: { archive_after_export: true },
+    });
+    await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
+    await user.click(screen.getByRole("button", { name: "导出" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("archive_exported_messages", {
+        messageIds: [1],
+      });
+    });
+    expect(androidRefreshWidgetsMock).toHaveBeenCalled();
+    expect(await screen.findByText(/已自动归档/)).toBeTruthy();
+  });
+
+  it("starts the same export flow from the widget share action", async () => {
+    const consumePendingWidgetAction = vi.fn().mockReturnValueOnce("export").mockReturnValue("");
+    androidShareZipMock = vi.fn();
+    window.ClipStashAndroid = {
+      consumePendingWidgetAction,
+      refreshWidgets: androidRefreshWidgetsMock,
+      shareZip: androidShareZipMock,
+    };
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+    });
+    expect(androidShareZipMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
+  });
+
+  it("creates a message from android shared text", async () => {
+    window.ClipStashAndroid = {
+      consumePendingShare: vi.fn().mockReturnValue(JSON.stringify({ text: "  分享文字  ", images: [] })),
+      refreshWidgets: androidRefreshWidgetsMock,
+    };
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("create_legacy_text_message", {
+        textContent: "分享文字",
+      });
+    });
+    expect(await screen.findByText("分享已保存")).toBeTruthy();
+    expect(await screen.findByText("已创建 #2")).toBeTruthy();
+    expect(androidRefreshWidgetsMock).toHaveBeenCalled();
+  });
+
+  it("creates a message from android shared image", async () => {
+    window.ClipStashAndroid = {
+      consumePendingShare: vi
+        .fn()
+        .mockReturnValue(JSON.stringify({ text: "", images: [{ mimeType: "image/png", data: "AQID" }] })),
+      refreshWidgets: androidRefreshWidgetsMock,
+    };
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("create_legacy_image_message", {
+        imagesData: [[1, 2, 3]],
+      });
+    });
+    expect(await screen.findByText("分享已保存")).toBeTruthy();
   });
 
   it("uses edit as the default double click action on android messages", async () => {

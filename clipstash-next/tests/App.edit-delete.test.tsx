@@ -290,7 +290,10 @@ const tinyPngBytes = [
 const defaultAppSettings = {
   always_on_top: false,
   close_to_tray: true,
+  launch_on_startup: false,
+  main_window_state: null,
   archive_after_import: false,
+  archive_after_export: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -334,11 +337,15 @@ describe("edit and delete guarded actions", () => {
       if (command === "list_legacy_messages") {
         const offset = Number(args?.offset ?? 0);
         const limit = Number(args?.limit ?? 30);
-        const messages = listedMessages.slice(offset, offset + limit);
+        const search = String(args?.search ?? "").trim();
+        const sourceMessages = search
+          ? listedMessages.filter((item) => item.text_content?.includes(search))
+          : listedMessages;
+        const messages = sourceMessages.slice(offset, offset + limit);
         return Promise.resolve({
           ...page,
-          total_count: listedMessages.length,
-          has_more: offset + messages.length < listedMessages.length,
+          total_count: sourceMessages.length,
+          has_more: offset + messages.length < sourceMessages.length,
           offset,
           limit,
           messages,
@@ -499,6 +506,34 @@ describe("edit and delete guarded actions", () => {
       });
     });
     expect(await screen.findByText("#31")).toBeTruthy();
+  });
+
+  it("searches messages from the top action", async () => {
+    const user = userEvent.setup();
+    listedMessages = [
+      { ...message, id: 10, text_content: "导入提示弹窗" },
+      { ...message, id: 11, text_content: "移动端图片预览" },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText("#10")).toBeTruthy();
+    expect(screen.getByText("移动端图片预览")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "搜索消息" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索消息内容" }), "预览");
+    await user.click(screen.getByRole("button", { name: "搜索" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_legacy_messages", {
+        view: "normal",
+        sort: "newest",
+        offset: 0,
+        limit: 30,
+        search: "预览",
+      });
+    });
+    expect(await screen.findByText("#11")).toBeTruthy();
+    expect(screen.queryByText("导入提示弹窗")).toBeNull();
   });
 
   it("updates message text after content changes", async () => {

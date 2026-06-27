@@ -50,6 +50,10 @@ export function exportNormalDataZipBytes() {
   return invoke<DataExportBytesResult>("export_normal_data_zip_bytes");
 }
 
+export function archiveExportedMessages(messageIds: number[]) {
+  return invoke<LegacyStats>("archive_exported_messages", { messageIds });
+}
+
 export function importDataZip() {
   return invoke<DataImportResult>("import_data_zip");
 }
@@ -128,18 +132,31 @@ export function listLegacyMessages({
   sort,
   offset,
   limit,
+  search,
 }: {
   view: MessageView;
   sort: SortOrder;
   offset: number;
   limit: number;
+  search?: string;
 }) {
-  return invoke<LegacyMessagePage>("list_legacy_messages", {
+  const args: {
+    view: MessageView;
+    sort: SortOrder;
+    offset: number;
+    limit: number;
+    search?: string;
+  } = {
     view,
     sort,
     offset,
     limit,
-  });
+  };
+  const normalizedSearch = search?.trim();
+  if (normalizedSearch) {
+    args.search = normalizedSearch;
+  }
+  return invoke<LegacyMessagePage>("list_legacy_messages", args);
 }
 
 export function createLegacyTextMessage(textContent: string) {
