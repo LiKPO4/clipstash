@@ -135,7 +135,6 @@ object ClipStashWidgetData {
         WHERE m.archived = 0 OR m.archived IS NULL
         GROUP BY m.id
         ORDER BY m.created_at DESC, m.id DESC
-        LIMIT 3
       """.trimIndent(),
       emptyArray(),
     ).use { cursor ->
@@ -161,8 +160,17 @@ object ClipStashWidgetData {
     }
   }
 
-  private fun formatItem(text: String, imageCount: Int): String {
-    if (text.isNotEmpty()) return text
-    return if (imageCount > 0) "[图片]" else "无文字内容"
+  internal fun formatItem(text: String, imageCount: Int): String {
+    val imageLabel = when {
+      imageCount <= 0 -> ""
+      imageCount == 1 -> "[图片]"
+      else -> "[图片] ×$imageCount"
+    }
+    return when {
+      text.isNotEmpty() && imageLabel.isNotEmpty() -> "$text $imageLabel"
+      text.isNotEmpty() -> text
+      imageLabel.isNotEmpty() -> imageLabel
+      else -> "无文字内容"
+    }
   }
 }

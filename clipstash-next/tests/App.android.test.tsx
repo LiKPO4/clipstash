@@ -112,6 +112,7 @@ const createResult = {
 describe("android shell", () => {
   let appSettings = { ...defaultAppSettings };
   let listedPage = normalPage;
+  let androidDownloadAndInstallApkMock: ReturnType<typeof vi.fn>;
   let androidRefreshWidgetsMock: ReturnType<typeof vi.fn>;
   let androidShareZipMock: ReturnType<typeof vi.fn> | null = null;
 
@@ -119,9 +120,11 @@ describe("android shell", () => {
     vi.resetModules();
     appSettings = { ...defaultAppSettings };
     listedPage = normalPage;
+    androidDownloadAndInstallApkMock = vi.fn().mockReturnValue(true);
     androidRefreshWidgetsMock = vi.fn();
     androidShareZipMock = null;
     window.ClipStashAndroid = {
+      downloadAndInstallApk: androidDownloadAndInstallApkMock,
       refreshWidgets: androidRefreshWidgetsMock,
     };
     Object.defineProperty(window.navigator, "userAgent", {
@@ -150,6 +153,22 @@ describe("android shell", () => {
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") return Promise.resolve(listedPage);
       if (command === "read_legacy_image_bytes") return Promise.resolve([]);
+      if (command === "fetch_latest_github_release") {
+        return Promise.resolve({
+          tag_name: "v2.1.13",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.13",
+          assets: [
+            {
+              name: "ClipStash.Next_2.1.13_android-universal-release-signed.apk",
+              browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.13/ClipStash.Next_2.1.13_android-universal-release-signed.apk",
+            },
+            {
+              name: "ClipStash.Next_2.1.13_x64-setup.exe",
+              browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.13/ClipStash.Next_2.1.13_x64-setup.exe",
+            },
+          ],
+        });
+      }
       if (command === "create_legacy_text_message") return Promise.resolve(createResult);
       if (command === "create_legacy_image_message") {
         return Promise.resolve({
@@ -245,9 +264,14 @@ describe("android shell", () => {
     expect(setAlwaysOnTopMock).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(invokeMock).not.toHaveBeenCalledWith("fetch_latest_github_release");
+    expect(invokeMock).toHaveBeenCalledWith("fetch_latest_github_release");
     expect(invokeMock).not.toHaveBeenCalledWith("download_and_open_update_installer", expect.anything());
-    expect(await within(dialog).findByText("Android 版暂不支持应用内检查更新，请从 Release 页面安装新版 APK")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.13")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "下载并安装" }));
+    expect(androidDownloadAndInstallApkMock).toHaveBeenCalledWith(
+      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.13/ClipStash.Next_2.1.13_android-universal-release-signed.apk",
+      "ClipStash.Next_2.1.13_android-universal-release-signed.apk",
+    );
 
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
     await user.click(screen.getByRole("button", { name: "+ 新建" }));

@@ -6,30 +6,26 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.graphics.Paint
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
-import android.widget.Toast
 import android.widget.RemoteViews
+import android.widget.Toast
 
 class ClipStashWidgetProvider : AppWidgetProvider() {
   override fun onReceive(context: Context, intent: Intent) {
     super.onReceive(context, intent)
-    if (intent.action == ACTION_ARCHIVE_MESSAGE) {
-      val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
-      val rowIndex = intent.getIntExtra(EXTRA_ROW_INDEX, -1)
-      val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, 0)
-      if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID && rowIndex >= 0) {
-        showArchiveFeedback(context, appWidgetId, rowIndex)
-      }
-      val archived = ClipStashWidgetData.archiveMessage(context, messageId)
-      Toast.makeText(
-        context,
-        if (archived) "已归档" else "归档失败",
-        Toast.LENGTH_SHORT,
-      ).show()
-      Handler(Looper.getMainLooper()).postDelayed({ refreshAll(context) }, 650)
+    if (intent.action != ACTION_ITEM_CLICK) return
+
+    val appWidgetId = intent.getIntExtra(
+      AppWidgetManager.EXTRA_APPWIDGET_ID,
+      AppWidgetManager.INVALID_APPWIDGET_ID,
+    )
+    when (intent.getStringExtra(EXTRA_ITEM_ACTION)) {
+      ITEM_ACTION_OPEN -> openApp(context, appWidgetId)
+      ITEM_ACTION_ARCHIVE -> archiveMessage(context, intent, appWidgetId)
     }
   }
 
@@ -47,18 +43,21 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
     const val EXTRA_WIDGET_ACTION = "clipstash_widget_action"
     const val ACTION_CREATE = "create"
     const val ACTION_EXPORT = "export"
+    const val ACTION_ITEM_CLICK = "com.clipstash.next.widget.ITEM_CLICK"
+    const val EXTRA_ITEM_ACTION = "clipstash_widget_item_action"
+    const val EXTRA_MESSAGE_ID = "clipstash_widget_message_id"
+    const val EXTRA_ROW_INDEX = "clipstash_widget_row_index"
+    const val EXTRA_MESSAGE_TEXT = "clipstash_widget_message_text"
+    const val ITEM_ACTION_OPEN = "open"
+    const val ITEM_ACTION_ARCHIVE = "archive"
     private const val ACTION_OPEN = "open"
-    private const val ACTION_ARCHIVE_MESSAGE = "com.clipstash.next.widget.ARCHIVE_MESSAGE"
-    private const val EXTRA_MESSAGE_ID = "clipstash_widget_message_id"
-    private const val EXTRA_ROW_INDEX = "clipstash_widget_row_index"
-    private val rowDoneIds = intArrayOf(R.id.widget_done_1, R.id.widget_done_2, R.id.widget_done_3)
-    private val rowTextIds = intArrayOf(R.id.widget_item_1, R.id.widget_item_2, R.id.widget_item_3)
+    private const val FEEDBACK_DURATION_MS = 650L
+    private val archiveFeedbacks = mutableMapOf<Int, ArchiveFeedback>()
 
     fun refreshAll(context: Context) {
       val appWidgetManager = AppWidgetManager.getInstance(context)
       val component = ComponentName(context, ClipStashWidgetProvider::class.java)
-      val appWidgetIds = appWidgetManager.getAppWidgetIds(component)
-      appWidgetIds.forEach { appWidgetId ->
+      appWidgetManager.getAppWidgetIds(component).forEach { appWidgetId ->
         updateWidget(context, appWidgetManager, appWidgetId)
       }
     }
@@ -69,11 +68,15 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
       appWidgetId: Int,
     ) {
       val state = ClipStashWidgetData.load(context)
+      val serviceIntent = Intent(context, ClipStashWidgetService::class.java).apply {
+        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+        data = Uri.parse("clipstash://widget/$appWidgetId")
+      }
       val views = RemoteViews(context.packageName, R.layout.widget_todo).apply {
         setTextViewText(R.id.widget_title, context.getString(R.string.widget_todo_title))
         setTextViewText(R.id.widget_count, state.count.toString())
         val showRows = state.status == ClipStashWidgetStatus.Ready && state.items.isNotEmpty()
-        setViewVisibility(R.id.widget_rows, if (showRows) View.VISIBLE else View.GONE)
+        setViewVisibility(R.id.widget_list, if (showRows) View.VISIBLE else View.GONE)
         setViewVisibility(R.id.widget_empty, if (showRows) View.GONE else View.VISIBLE)
         setTextViewText(
           R.id.widget_empty,
@@ -85,74 +88,76 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
             },
           ),
         )
-        bindRow(context, appWidgetId, this, R.id.widget_row_1, R.id.widget_done_1, R.id.widget_item_1, state.items.getOrNull(0), 0)
-        bindRow(context, appWidgetId, this, R.id.widget_row_2, R.id.widget_done_2, R.id.widget_item_2, state.items.getOrNull(1), 1)
-        bindRow(context, appWidgetId, this, R.id.widget_row_3, R.id.widget_done_3, R.id.widget_item_3, state.items.getOrNull(2), 2)
-
-        setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, appWidgetId, ACTION_OPEN))
+        setRemoteAdapter(R.id.widget_list, serviceIntent)
+        setEmptyView(R.id.widget_list, R.id.widget_empty)
+        setPendingIntentTemplate(R.id.widget_list, itemClickTemplate(context, appWidgetId))
         setOnClickPendingIntent(R.id.widget_share, openAppIntent(context, appWidgetId, ACTION_EXPORT))
         setOnClickPendingIntent(R.id.widget_compose, openAppIntent(context, appWidgetId, ACTION_CREATE))
-        setOnClickPendingIntent(R.id.widget_row_1, openAppIntent(context, appWidgetId, ACTION_OPEN))
-        setOnClickPendingIntent(R.id.widget_row_2, openAppIntent(context, appWidgetId, ACTION_OPEN))
-        setOnClickPendingIntent(R.id.widget_row_3, openAppIntent(context, appWidgetId, ACTION_OPEN))
       }
 
       appWidgetManager.updateAppWidget(appWidgetId, views)
+      appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
     }
 
-    private fun bindRow(
-      context: Context,
-      appWidgetId: Int,
-      views: RemoteViews,
-      rowId: Int,
-      doneId: Int,
-      textId: Int,
-      item: ClipStashWidgetItem?,
-      index: Int,
-    ) {
-      if (item == null) {
-        views.setViewVisibility(rowId, View.GONE)
+    fun getArchiveFeedback(appWidgetId: Int): ArchiveFeedback? = synchronized(archiveFeedbacks) {
+      val feedback = archiveFeedbacks[appWidgetId] ?: return@synchronized null
+      if (feedback.expiresAt > SystemClock.elapsedRealtime()) {
+        feedback
+      } else {
+        archiveFeedbacks.remove(appWidgetId)
+        null
+      }
+    }
+
+    private fun archiveMessage(context: Context, intent: Intent, appWidgetId: Int) {
+      val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, 0)
+      val rowIndex = intent.getIntExtra(EXTRA_ROW_INDEX, 0)
+      val messageText = intent.getStringExtra(EXTRA_MESSAGE_TEXT).orEmpty()
+      if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID || messageId <= 0) return
+
+      synchronized(archiveFeedbacks) {
+        archiveFeedbacks[appWidgetId] = ArchiveFeedback(
+          item = ClipStashWidgetItem(messageId, messageText),
+          position = rowIndex,
+          expiresAt = SystemClock.elapsedRealtime() + FEEDBACK_DURATION_MS,
+        )
+      }
+      val manager = AppWidgetManager.getInstance(context)
+      manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
+
+      val archived = ClipStashWidgetData.archiveMessage(context, messageId)
+      Toast.makeText(context, if (archived) "已归档" else "归档失败", Toast.LENGTH_SHORT).show()
+      if (!archived) {
+        synchronized(archiveFeedbacks) { archiveFeedbacks.remove(appWidgetId) }
+        refreshAll(context)
         return
       }
-      views.setViewVisibility(rowId, View.VISIBLE)
-      views.setTextViewText(textId, item.text)
-      views.setImageViewResource(doneId, R.drawable.widget_status_circle)
-      views.setInt(textId, "setPaintFlags", 0)
-      views.setTextColor(textId, context.getColor(R.color.widget_text))
-      if (item.id > 0) {
-        views.setOnClickPendingIntent(doneId, archiveIntent(context, appWidgetId, item.id, index))
-      }
+
+      Handler(Looper.getMainLooper()).postDelayed({
+        synchronized(archiveFeedbacks) { archiveFeedbacks.remove(appWidgetId) }
+        refreshAll(context)
+      }, FEEDBACK_DURATION_MS)
     }
 
-    private fun archiveIntent(
-      context: Context,
-      appWidgetId: Int,
-      messageId: Long,
-      index: Int,
-    ): PendingIntent {
+    private fun openApp(context: Context, appWidgetId: Int) {
+      val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        ?: Intent(context, MainActivity::class.java)
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+      context.startActivity(intent)
+    }
+
+    private fun itemClickTemplate(context: Context, appWidgetId: Int): PendingIntent {
       val intent = Intent(context, ClipStashWidgetProvider::class.java).apply {
-        action = ACTION_ARCHIVE_MESSAGE
-        putExtra(EXTRA_MESSAGE_ID, messageId)
-        putExtra(EXTRA_ROW_INDEX, index)
+        action = ACTION_ITEM_CLICK
         putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
       }
       return PendingIntent.getBroadcast(
         context,
-        appWidgetId * 100 + index,
+        appWidgetId,
         intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
       )
-    }
-
-    private fun showArchiveFeedback(context: Context, appWidgetId: Int, rowIndex: Int) {
-      val doneId = rowDoneIds.getOrNull(rowIndex) ?: return
-      val textId = rowTextIds.getOrNull(rowIndex) ?: return
-      val views = RemoteViews(context.packageName, R.layout.widget_todo).apply {
-        setImageViewResource(doneId, R.drawable.widget_status_done)
-        setInt(textId, "setPaintFlags", Paint.STRIKE_THRU_TEXT_FLAG)
-        setTextColor(textId, context.getColor(R.color.widget_circle))
-      }
-      AppWidgetManager.getInstance(context).partiallyUpdateAppWidget(appWidgetId, views)
     }
 
     private fun openAppIntent(context: Context, appWidgetId: Int, action: String): PendingIntent {
@@ -167,13 +172,18 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
         ACTION_EXPORT -> 2
         else -> 0
       }
-      val requestCode = appWidgetId * 10 + actionCode
       return PendingIntent.getActivity(
         context,
-        requestCode,
+        appWidgetId * 10 + actionCode,
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
     }
   }
 }
+
+data class ArchiveFeedback(
+  val item: ClipStashWidgetItem,
+  val position: Int,
+  val expiresAt: Long,
+)

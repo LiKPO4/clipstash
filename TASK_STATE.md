@@ -16,9 +16,15 @@
 - Android 小组件阶段 2 已实现：小组件 Provider 通过 Kotlin 只读 SQLite 读取 Android 数据库，展示最新 3 条普通消息和普通消息总数；阶段 3 已接入主要写入/导入成功后的主动刷新，首次打开 App 后刷新仍待补。
 - 当前消息列表已新增搜索方向：顶部操作区增加放大镜入口，展开后可按消息文字搜索；搜索参数下沉到 Rust/SQLite 分页查询，避免只筛当前已加载页。
 - Android 交互新增方向：WebView 和 viewport 均关闭用户缩放，避免编辑/新建页面被双指捏合放大；Android 系统分享文字或图片到 ClipStash 时会直接创建一条新消息。
+- Android 小组件已改为系统原生可滚动列表，不再限制最新 3 条；Android 设置页检查更新可选择 GitHub Release 中的正式签名 universal APK，下载后唤起系统安装器。
 
 ## 已完成
 
+- 已准备 `v2.1.12` 发布候选：Android 小组件支持全部消息上下滑动、按消息 ID 归档反馈、正确显示图文/多图数量；Android 设置页可从 GitHub Release 下载正式 APK 并唤起系统安装器。发布前验证通过：前端 `77 passed | 9 skipped`、Rust 全测、Android 小组件单测、真实旧库只读审计、Windows NSIS/MSI 构建和正式签名 Android universal APK 构建；APK 为 `2.1.12`、versionCode `2001012`，正式证书指纹保持不变。
+- 本轮修正 Android 小组件图片消息摘要：纯图片消息按实际数量显示 `[图片]` 或 `[图片] ×N`，图文消息在文字后追加同样的图片标记；Android 单元测试覆盖纯图片、图文、纯文字和空内容格式，release APK 构建通过。
+- 本轮将 Android 小组件静态三行改为 `ListView + RemoteViewsService`：普通消息全部进入可上下滑动列表，归档反馈按消息 ID 显示实心勾和删除线，避免补位消息误变灰；点击消息仍可打开 App。
+- 本轮接入 Android 应用内更新：复用后端 GitHub Release 检查，优先选择 `android-universal-release-signed.apk`，通过系统 `DownloadManager` 下载并用 `FileProvider` 唤起 APK 安装器；首次使用会进入 Android“允许安装未知应用”授权页。
+- 本轮验证通过：`npm test -- --run` 为 `77 passed | 9 skipped`；`npm run build` 通过；`npm run tauri -- android build --apk` 通过并生成版本 `2.1.11`、v2 签名有效的 universal release APK，大小 `69582791` 字节。
 - 已发布 `v2.1.11`：发布提交 `30bf331`，Windows NSIS/MSI 与正式签名 Android universal APK 已上传至 GitHub Release；Android APK 版本为 `2.1.11`、versionCode `2001011`，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。
 - 本轮修正 Android 小组件空状态：无普通消息时不再伪造带空心圆的“暂无需求”消息行，改为隐藏消息列表，并在标题栏下方剩余内容区水平、垂直居中显示单行“暂无需求”。
 - 本轮新增 Android 小组件分享入口：在新建按钮左侧增加分享图标，点击后打开 App 并复用现有 Android 数据包导出/系统分享流程；Android 设置新增“导出后自动归档”，默认关闭，开启后只批量归档本次实际写入 zip 的消息，并同步刷新主界面与小组件。
@@ -435,4 +441,4 @@
 
 ## 下一步
 
-- 下一步最小行动：在 Android 真机添加桌面小组件，确认显示真实普通消息数量和最新 3 条内容；随后新建、归档、删除、导入或系统分享一条消息，确认桌面小组件会刷新。如需发布，先迭代版本号到下一补丁版再跑完整打包流程。
+- 下一步最小行动：真机重新添加小组件，验证 4 条以上消息可上下滑动且归档只影响目标消息；再从设置检查更新，验证 APK 下载、首次安装来源授权和系统覆盖安装流程。如需发布，先迭代版本号到下一补丁版再跑完整发布流程。

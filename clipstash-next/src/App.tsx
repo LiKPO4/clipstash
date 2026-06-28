@@ -77,7 +77,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.11";
+const CURRENT_VERSION = "2.1.12";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -89,12 +89,14 @@ const IS_TEST_ENV = import.meta.env.MODE === "test";
 const ANDROID_BACK_EVENT = "clipstash-android-back";
 const ANDROID_SHARE_EVENT = "clipstash-android-share-ready";
 const ANDROID_WIDGET_ACTION_EVENT = "clipstash-android-widget-action-ready";
+const ANDROID_UPDATE_EVENT = "clipstash-android-update";
 
 declare global {
   interface Window {
     ClipStashAndroid?: {
       consumePendingShare?: () => string;
       consumePendingWidgetAction?: () => string;
+      downloadAndInstallApk?: (downloadUrl: string, filename: string) => boolean;
       refreshWidgets?: () => void;
       shareZip?: (path: string) => void;
     };
@@ -165,6 +167,11 @@ type AndroidSharedPayload = {
 type AndroidSharedImage = {
   mimeType?: string;
   data: string;
+};
+
+type AndroidUpdateEventDetail = {
+  message?: string;
+  status?: "downloading" | "installing" | "permission" | "error";
 };
 
 type ReleaseCheckResult = {
@@ -304,6 +311,25 @@ function App() {
     window.addEventListener(ANDROID_SHARE_EVENT, consumeAndroidShare);
     return () => window.removeEventListener(ANDROID_SHARE_EVENT, consumeAndroidShare);
   }, [sort, imageSources]);
+
+  useEffect(() => {
+    if (!IS_ANDROID) return;
+
+    function handleAndroidUpdate(event: Event) {
+      const detail = (event as CustomEvent<AndroidUpdateEventDetail>).detail;
+      const message = detail?.message?.trim();
+      if (detail?.status === "error") {
+        setReleaseCheckError(message || "Android 更新失败");
+        setSettingsNotice(null);
+        return;
+      }
+      setReleaseCheckError(null);
+      if (message) setSettingsNotice(message);
+    }
+
+    window.addEventListener(ANDROID_UPDATE_EVENT, handleAndroidUpdate);
+    return () => window.removeEventListener(ANDROID_UPDATE_EVENT, handleAndroidUpdate);
+  }, []);
 
   useEffect(() => {
     if (!IS_ANDROID) return;
@@ -878,20 +904,6 @@ function App() {
   }
 
   async function checkForUpdates() {
-    if (IS_ANDROID) {
-      setReleaseCheckError(null);
-      setReleaseCheckResult({
-        currentVersion: CURRENT_VERSION,
-        downloadAsset: null,
-        latestVersion: CURRENT_VERSION,
-        releaseUrl: GITHUB_RELEASES_URL,
-        hasUpdate: false,
-      });
-      setSettingsNotice("Android 版暂不支持应用内检查更新，请从 Release 页面安装新版 APK");
-      window.setTimeout(() => setSettingsNotice(null), 3200);
-      return;
-    }
-
     setCheckingUpdate(true);
     setReleaseCheckError(null);
     setReleaseCheckResult(null);
@@ -903,7 +915,9 @@ function App() {
 
       setReleaseCheckResult({
         currentVersion: CURRENT_VERSION,
-        downloadAsset: selectWindowsInstallerAsset(payload.assets ?? []),
+        downloadAsset: IS_ANDROID
+          ? selectAndroidApkAsset(payload.assets ?? [])
+          : selectWindowsInstallerAsset(payload.assets ?? []),
         latestVersion,
         releaseUrl: payload.html_url || GITHUB_RELEASES_URL,
         hasUpdate: compareVersions(latestVersion, CURRENT_VERSION) > 0,
@@ -938,6 +952,17 @@ function App() {
     setDownloadingUpdate(true);
     setReleaseCheckError(null);
     try {
+      if (IS_ANDROID) {
+        const downloadAndInstallApk = window.ClipStashAndroid?.downloadAndInstallApk;
+        if (!downloadAndInstallApk) throw new Error("当前 Android 安装包不支持应用内更新");
+        const started = downloadAndInstallApk(
+          releaseCheckResult.downloadAsset.downloadUrl,
+          releaseCheckResult.downloadAsset.filename,
+        );
+        if (!started) throw new Error("无法启动 Android 更新下载");
+        setSettingsNotice("正在下载更新安装包");
+        return;
+      }
       await downloadAndOpenUpdateInstaller(
         releaseCheckResult.downloadAsset.downloadUrl,
         releaseCheckResult.downloadAsset.filename,
@@ -2571,7 +2596,7 @@ function SettingsDialog({
                     onClick={onDownloadUpdate}
                     disabled={downloadingUpdate}
                   >
-                    {downloadingUpdate ? "下载中..." : "下载更新"}
+                    {downloadingUpdate ? "下载中..." : isAndroid ? "下载并安装" : "下载更新"}
                   </button>
                 ) : (
                   releaseCheckResult.hasUpdate && (
@@ -4161,6 +4186,24 @@ function selectWindowsInstallerAsset(
   if (exe) return exe;
 
   return candidates.find((asset) => /\.msi$/i.test(asset.filename)) ?? null;
+}
+
+function selectAndroidApkAsset(
+  assets: Array<{ browser_download_url?: string; name?: string }>,
+): ReleaseDownloadAsset | null {
+  const candidates = assets
+    .map((asset) => ({
+      downloadUrl: asset.browser_download_url ?? "",
+      filename: asset.name ?? "",
+    }))
+    .filter((asset) => asset.downloadUrl && /\.apk$/i.test(asset.filename));
+
+  const signedUniversal = candidates.find((asset) =>
+    /android.*universal.*release.*signed\.apk$/i.test(asset.filename),
+  );
+  if (signedUniversal) return signedUniversal;
+
+  return candidates.find((asset) => /universal.*\.apk$/i.test(asset.filename)) ?? candidates[0] ?? null;
 }
 
 function compareVersions(left: string, right: string) {

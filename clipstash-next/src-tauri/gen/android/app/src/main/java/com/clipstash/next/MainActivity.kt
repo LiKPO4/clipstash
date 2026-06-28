@@ -1,9 +1,14 @@
 package com.clipstash.next
 
 import android.content.ActivityNotFoundException
+import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -19,6 +24,7 @@ class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
   private var pendingShareJson: String? = null
   private var pendingWidgetAction: String? = null
+  private var pendingUpdateApk: File? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -78,6 +84,15 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  override fun onResume() {
+    super.onResume()
+    val apk = pendingUpdateApk ?: return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+      pendingUpdateApk = null
+      openApkInstaller(apk)
+    }
+  }
+
   inner class ClipStashAndroidBridge {
     @JavascriptInterface
     fun consumePendingShare(): String {
@@ -125,6 +140,137 @@ class MainActivity : TauriActivity() {
           Toast.makeText(this@MainActivity, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
         }
       }
+    }
+
+    @JavascriptInterface
+    fun downloadAndInstallApk(downloadUrl: String, filename: String): Boolean {
+      return try {
+        val safeFilename = validateUpdateDownload(downloadUrl, filename)
+        val downloadDir = File(
+          getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
+          "updates",
+        ).apply { mkdirs() }
+        val apk = File(downloadDir, safeFilename)
+        if (apk.exists() && !apk.delete()) {
+          throw IllegalStateException("无法覆盖旧的更新安装包")
+        }
+
+        val request = DownloadManager.Request(Uri.parse(downloadUrl)).apply {
+          setTitle("ClipStash Next 更新")
+          setDescription("正在下载 $safeFilename")
+          setMimeType(APK_MIME_TYPE)
+          setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+          setDestinationInExternalFilesDir(
+            this@MainActivity,
+            Environment.DIRECTORY_DOWNLOADS,
+            "updates/$safeFilename",
+          )
+        }
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val downloadId = manager.enqueue(request)
+        notifyAndroidUpdate("downloading", "正在下载更新安装包")
+        watchUpdateDownload(manager, downloadId, apk)
+        true
+      } catch (err: Exception) {
+        notifyAndroidUpdate("error", err.message ?: "启动更新下载失败")
+        false
+      }
+    }
+  }
+
+  private fun validateUpdateDownload(downloadUrl: String, filename: String): String {
+    val uri = Uri.parse(downloadUrl)
+    if (
+      uri.scheme != "https" ||
+      uri.host != "github.com" ||
+      !uri.path.orEmpty().startsWith("/LiKPO4/clipstash/releases/download/")
+    ) {
+      throw IllegalArgumentException("更新下载链接不是 ClipStash 官方 Release 地址")
+    }
+    val safeFilename = filename.trim()
+    if (
+      safeFilename.isEmpty() ||
+      !safeFilename.endsWith(".apk", ignoreCase = true) ||
+      safeFilename.any { it in "<>:\"/\\|?*" }
+    ) {
+      throw IllegalArgumentException("更新资产不是有效的 Android APK")
+    }
+    return safeFilename
+  }
+
+  private fun watchUpdateDownload(manager: DownloadManager, downloadId: Long, apk: File) {
+    Thread {
+      while (true) {
+        Thread.sleep(500)
+        val query = DownloadManager.Query().setFilterById(downloadId)
+        manager.query(query)?.use { cursor ->
+          if (!cursor.moveToFirst()) return@use
+          val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+          when (status) {
+            DownloadManager.STATUS_SUCCESSFUL -> {
+              runOnUiThread {
+                notifyAndroidUpdate("installing", "下载完成，正在打开系统安装界面")
+                installDownloadedApk(apk)
+              }
+              return@Thread
+            }
+            DownloadManager.STATUS_FAILED -> {
+              val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+              notifyAndroidUpdate("error", "更新安装包下载失败（$reason）")
+              return@Thread
+            }
+          }
+        }
+      }
+    }.start()
+  }
+
+  private fun installDownloadedApk(apk: File) {
+    if (!apk.isFile || apk.length() <= 0) {
+      notifyAndroidUpdate("error", "下载的更新安装包不可用")
+      return
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+      pendingUpdateApk = apk
+      notifyAndroidUpdate("permission", "请允许 ClipStash 安装未知应用")
+      startActivity(
+        Intent(
+          Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+          Uri.parse("package:$packageName"),
+        ),
+      )
+      return
+    }
+    openApkInstaller(apk)
+  }
+
+  private fun openApkInstaller(apk: File) {
+    val uri = FileProvider.getUriForFile(
+      this,
+      "$packageName.fileprovider",
+      apk,
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+      setDataAndType(uri, APK_MIME_TYPE)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+      startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+      notifyAndroidUpdate("error", "系统中没有可用的 APK 安装器")
+    }
+  }
+
+  private fun notifyAndroidUpdate(status: String, message: String) {
+    val payload = JSONObject().put("status", status).put("message", message).toString()
+    appWebView?.post {
+      appWebView?.evaluateJavascript(
+        "window.dispatchEvent(new CustomEvent('clipstash-android-update', { detail: $payload }))",
+        null,
+      )
+    }
+    runOnUiThread {
+      Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -201,5 +347,9 @@ class MainActivity : TauriActivity() {
       return intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
     }
     return intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { listOf(it) }.orEmpty()
+  }
+
+  companion object {
+    private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
   }
 }

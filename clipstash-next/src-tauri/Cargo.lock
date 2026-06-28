@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "clipstash-next"
-version = "2.1.11"
+version = "2.1.12"
 dependencies = [
  "arboard",
  "chrono",
