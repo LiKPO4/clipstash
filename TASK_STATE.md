@@ -20,7 +20,7 @@
 
 ## 已完成
 
-- 已准备 `v2.1.12` 发布候选：Android 小组件支持全部消息上下滑动、按消息 ID 归档反馈、正确显示图文/多图数量；Android 设置页可从 GitHub Release 下载正式 APK 并唤起系统安装器。发布前验证通过：前端 `77 passed | 9 skipped`、Rust 全测、Android 小组件单测、真实旧库只读审计、Windows NSIS/MSI 构建和正式签名 Android universal APK 构建；APK 为 `2.1.12`、versionCode `2001012`，正式证书指纹保持不变。
+- 已发布 `v2.1.12`：发布提交 `2413bd9`，Windows NSIS/MSI 与正式签名 Android universal APK 已上传至 GitHub Release。Android 小组件支持全部消息上下滑动、按消息 ID 归档反馈、正确显示图文/多图数量；Android 设置页可从 GitHub Release 下载正式 APK 并唤起系统安装器。发布前验证通过：前端 `77 passed | 9 skipped`、Rust 全测、Android 小组件单测、真实旧库只读审计、双平台构建；APK 为 `2.1.12`、versionCode `2001012`，正式证书指纹保持不变。
 - 本轮修正 Android 小组件图片消息摘要：纯图片消息按实际数量显示 `[图片]` 或 `[图片] ×N`，图文消息在文字后追加同样的图片标记；Android 单元测试覆盖纯图片、图文、纯文字和空内容格式，release APK 构建通过。
 - 本轮将 Android 小组件静态三行改为 `ListView + RemoteViewsService`：普通消息全部进入可上下滑动列表，归档反馈按消息 ID 显示实心勾和删除线，避免补位消息误变灰；点击消息仍可打开 App。
 - 本轮接入 Android 应用内更新：复用后端 GitHub Release 检查，优先选择 `android-universal-release-signed.apk`，通过系统 `DownloadManager` 下载并用 `FileProvider` 唤起 APK 安装器；首次使用会进入 Android“允许安装未知应用”授权页。
