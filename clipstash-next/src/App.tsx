@@ -77,7 +77,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.12";
+const CURRENT_VERSION = "2.1.13";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -96,6 +96,7 @@ declare global {
     ClipStashAndroid?: {
       consumePendingShare?: () => string;
       consumePendingWidgetAction?: () => string;
+      checkForUpdates?: () => boolean;
       downloadAndInstallApk?: (downloadUrl: string, filename: string) => boolean;
       refreshWidgets?: () => void;
       shareZip?: (path: string) => void;
@@ -171,7 +172,8 @@ type AndroidSharedImage = {
 
 type AndroidUpdateEventDetail = {
   message?: string;
-  status?: "downloading" | "installing" | "permission" | "error";
+  release?: GithubReleaseInfo;
+  status?: "checked" | "downloading" | "installing" | "permission" | "error";
 };
 
 type ReleaseCheckResult = {
@@ -318,9 +320,20 @@ function App() {
     function handleAndroidUpdate(event: Event) {
       const detail = (event as CustomEvent<AndroidUpdateEventDetail>).detail;
       const message = detail?.message?.trim();
+      if (detail?.status === "checked" && detail.release) {
+        try {
+          applyReleaseCheckResult(detail.release);
+          setReleaseCheckError(null);
+        } catch (err) {
+          setReleaseCheckError(err instanceof Error ? err.message : String(err));
+        }
+        setCheckingUpdate(false);
+        return;
+      }
       if (detail?.status === "error") {
         setReleaseCheckError(message || "Android 更新失败");
         setSettingsNotice(null);
+        setCheckingUpdate(false);
         return;
       }
       setReleaseCheckError(null);
@@ -908,25 +921,43 @@ function App() {
     setReleaseCheckError(null);
     setReleaseCheckResult(null);
 
+    if (IS_ANDROID) {
+      const nativeCheck = window.ClipStashAndroid?.checkForUpdates;
+      if (!nativeCheck) {
+        setReleaseCheckError("当前 Android 安装包不支持应用内检查更新");
+        setCheckingUpdate(false);
+        return;
+      }
+      if (!nativeCheck()) {
+        setReleaseCheckError("无法启动 Android 更新检查");
+        setCheckingUpdate(false);
+      }
+      return;
+    }
+
     try {
       const payload = await fetchLatestReleaseForCheck();
-      const latestVersion = normalizeReleaseVersion(payload.tag_name ?? "");
-      if (!latestVersion) throw new Error("GitHub Release 响应缺少版本号");
-
-      setReleaseCheckResult({
-        currentVersion: CURRENT_VERSION,
-        downloadAsset: IS_ANDROID
-          ? selectAndroidApkAsset(payload.assets ?? [])
-          : selectWindowsInstallerAsset(payload.assets ?? []),
-        latestVersion,
-        releaseUrl: payload.html_url || GITHUB_RELEASES_URL,
-        hasUpdate: compareVersions(latestVersion, CURRENT_VERSION) > 0,
-      });
+      applyReleaseCheckResult(payload);
     } catch (err: unknown) {
       setReleaseCheckError(err instanceof Error ? err.message : String(err));
     } finally {
       setCheckingUpdate(false);
     }
+  }
+
+  function applyReleaseCheckResult(payload: GithubReleaseInfo) {
+    const latestVersion = normalizeReleaseVersion(payload.tag_name ?? "");
+    if (!latestVersion) throw new Error("GitHub Release 响应缺少版本号");
+
+    setReleaseCheckResult({
+      currentVersion: CURRENT_VERSION,
+      downloadAsset: IS_ANDROID
+        ? selectAndroidApkAsset(payload.assets ?? [])
+        : selectWindowsInstallerAsset(payload.assets ?? []),
+      latestVersion,
+      releaseUrl: payload.html_url || GITHUB_RELEASES_URL,
+      hasUpdate: compareVersions(latestVersion, CURRENT_VERSION) > 0,
+    });
   }
 
   async function fetchLatestReleaseForCheck(): Promise<GithubReleaseInfo> {

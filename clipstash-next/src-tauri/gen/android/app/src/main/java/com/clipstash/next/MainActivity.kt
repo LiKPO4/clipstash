@@ -16,6 +16,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.core.content.FileProvider
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
@@ -143,6 +145,40 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
+    fun checkForUpdates(): Boolean {
+      return try {
+        Thread {
+          try {
+            val connection = URL(GITHUB_RELEASE_API_URL).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 20_000
+            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.setRequestProperty("User-Agent", "ClipStash-Next-Android-Updater")
+            try {
+              val statusCode = connection.responseCode
+              if (statusCode !in 200..299) {
+                throw IllegalStateException("GitHub Release 检查失败：HTTP $statusCode")
+              }
+              val release = connection.inputStream.bufferedReader().use { reader ->
+                JSONObject(reader.readText())
+              }
+              notifyAndroidUpdate("checked", "检查完成", release)
+            } finally {
+              connection.disconnect()
+            }
+          } catch (err: Exception) {
+            notifyAndroidUpdate("error", err.message ?: "Android 更新检查失败")
+          }
+        }.start()
+        true
+      } catch (err: Exception) {
+        notifyAndroidUpdate("error", err.message ?: "无法启动 Android 更新检查")
+        false
+      }
+    }
+
+    @JavascriptInterface
     fun downloadAndInstallApk(downloadUrl: String, filename: String): Boolean {
       return try {
         val safeFilename = validateUpdateDownload(downloadUrl, filename)
@@ -261,8 +297,10 @@ class MainActivity : TauriActivity() {
     }
   }
 
-  private fun notifyAndroidUpdate(status: String, message: String) {
-    val payload = JSONObject().put("status", status).put("message", message).toString()
+  private fun notifyAndroidUpdate(status: String, message: String, release: JSONObject? = null) {
+    val payload = JSONObject().put("status", status).put("message", message).apply {
+      if (release != null) put("release", release)
+    }.toString()
     appWebView?.post {
       appWebView?.evaluateJavascript(
         "window.dispatchEvent(new CustomEvent('clipstash-android-update', { detail: $payload }))",
@@ -351,5 +389,7 @@ class MainActivity : TauriActivity() {
 
   companion object {
     private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+    private const val GITHUB_RELEASE_API_URL =
+      "https://api.github.com/repos/LiKPO4/clipstash/releases/latest"
   }
 }

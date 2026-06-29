@@ -78,7 +78,6 @@
             android:clipToPadding="false"
             android:divider="@null"
             android:paddingTop="8dp"
-            android:scrollbarStyle="insideInset"
-            android:scrollbars="vertical" />
+            android:scrollbars="none" />
     </FrameLayout>
 </LinearLayout>
