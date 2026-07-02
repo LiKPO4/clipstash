@@ -66,6 +66,12 @@ pub struct LegacyArchiveMessageResult {
     pub message: LegacyMessage,
 }
 
+#[derive(Serialize)]
+pub struct LegacySplitMessageResult {
+    pub original_message_id: i64,
+    pub messages: Vec<LegacyMessage>,
+}
+
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {
     let data_dir = legacy_data_dir()?;
     read_legacy_stats_from_dir(data_dir)
@@ -199,10 +205,85 @@ mod tests {
     use crate::legacy_image_files::resolve_legacy_image_path;
     use crate::legacy_query::query_count;
     use crate::legacy_test_support::{query_image_rows, tiny_png_bytes};
-    use crate::legacy_write_exec::{create_image_message_for_path, create_text_message_for_path};
+    use crate::legacy_write_exec::{
+        create_image_message_for_path, create_text_message_for_path, split_message_for_path,
+    };
     use crate::legacy_write_precheck::read_message_for_update_precheck;
     use rusqlite::Connection;
     use std::{env, fs, path::PathBuf, process};
+
+    #[test]
+    fn splits_lines_and_distributes_images_in_order() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-split-message-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create split fixture dir");
+        let db_path = data_dir.join("clipstash.db");
+        let old_image_path = data_dir.join("images").join("old.png");
+        fs::write(&old_image_path, tiny_png_bytes()).expect("write old split image");
+        let conn = Connection::open(&db_path).expect("open split fixture db");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (id, text_content, created_at, archived, archived_at)
+            VALUES (1, 'old', '2026-07-02 10:00:00', 0, NULL);
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'old.png');
+            ",
+        )
+        .expect("seed split fixture");
+        drop(conn);
+
+        let messages = split_message_for_path(
+            &db_path,
+            1,
+            "a\nb\nc\nd".to_string(),
+            vec![tiny_png_bytes(), tiny_png_bytes(), tiny_png_bytes()],
+        )
+        .expect("split message");
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.text_content.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c"), Some("d")]
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.images.len())
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1, 0]
+        );
+        assert!(messages
+            .iter()
+            .flat_map(|message| &message.images)
+            .all(|image| PathBuf::from(&image.path).is_file()));
+        assert!(!old_image_path.exists());
+
+        let conn = Connection::open(&db_path).expect("reopen split fixture db");
+        let original_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .expect("query original split message");
+        assert_eq!(original_count, 0);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
 
     #[test]
     fn creates_timestamped_legacy_db_backup_without_mutating_source() {

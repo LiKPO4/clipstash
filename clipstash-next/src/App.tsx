@@ -49,6 +49,7 @@ import {
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
   setLaunchOnStartup,
+  splitLegacyMessage,
   previewLegacyMessageImportQueue,
   updateLegacyMessageText,
   updateAppSettings,
@@ -77,7 +78,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.13";
+const CURRENT_VERSION = "2.1.14";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -90,13 +91,17 @@ const ANDROID_BACK_EVENT = "clipstash-android-back";
 const ANDROID_SHARE_EVENT = "clipstash-android-share-ready";
 const ANDROID_WIDGET_ACTION_EVENT = "clipstash-android-widget-action-ready";
 const ANDROID_UPDATE_EVENT = "clipstash-android-update";
+const ANDROID_UPDATE_POLL_MS = 250;
+const ANDROID_UPDATE_TIMEOUT_MS = 40_000;
 
 declare global {
   interface Window {
     ClipStashAndroid?: {
       consumePendingShare?: () => string;
       consumePendingWidgetAction?: () => string;
+      consumePendingUpdate?: () => string;
       checkForUpdates?: () => boolean;
+      copyText?: (text: string) => boolean;
       downloadAndInstallApk?: (downloadUrl: string, filename: string) => boolean;
       refreshWidgets?: () => void;
       shareZip?: (path: string) => void;
@@ -225,6 +230,7 @@ function App() {
   const [editPreviewImages, setEditPreviewImages] = useState<PreviewImageItem[]>([]);
   const [editInputKey, setEditInputKey] = useState(0);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [splittingEdit, setSplittingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [deletingMessage, setDeletingMessage] = useState<LegacyMessage | null>(null);
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
@@ -319,6 +325,7 @@ function App() {
 
     function handleAndroidUpdate(event: Event) {
       const detail = (event as CustomEvent<AndroidUpdateEventDetail>).detail;
+      window.ClipStashAndroid?.consumePendingUpdate?.();
       const message = detail?.message?.trim();
       if (detail?.status === "checked" && detail.release) {
         try {
@@ -343,6 +350,35 @@ function App() {
     window.addEventListener(ANDROID_UPDATE_EVENT, handleAndroidUpdate);
     return () => window.removeEventListener(ANDROID_UPDATE_EVENT, handleAndroidUpdate);
   }, []);
+
+  useEffect(() => {
+    if (!IS_ANDROID || !checkingUpdate) return;
+
+    function consumePendingUpdate() {
+      const rawPayload = window.ClipStashAndroid?.consumePendingUpdate?.();
+      if (!rawPayload) return;
+
+      try {
+        const detail = JSON.parse(rawPayload) as AndroidUpdateEventDetail;
+        window.dispatchEvent(new CustomEvent(ANDROID_UPDATE_EVENT, { detail }));
+      } catch (err) {
+        setReleaseCheckError(err instanceof Error ? err.message : String(err));
+        setCheckingUpdate(false);
+      }
+    }
+
+    consumePendingUpdate();
+    const pollTimer = window.setInterval(consumePendingUpdate, ANDROID_UPDATE_POLL_MS);
+    const timeoutTimer = window.setTimeout(() => {
+      setReleaseCheckError("检查更新超时，请检查网络后重试");
+      setCheckingUpdate(false);
+    }, ANDROID_UPDATE_TIMEOUT_MS);
+
+    return () => {
+      window.clearInterval(pollTimer);
+      window.clearTimeout(timeoutTimer);
+    };
+  }, [checkingUpdate]);
 
   useEffect(() => {
     if (!IS_ANDROID) return;
@@ -928,6 +964,7 @@ function App() {
         setCheckingUpdate(false);
         return;
       }
+      window.ClipStashAndroid?.consumePendingUpdate?.();
       if (!nativeCheck()) {
         setReleaseCheckError("无法启动 Android 更新检查");
         setCheckingUpdate(false);
@@ -1392,7 +1429,7 @@ function App() {
   }
 
   function closeEditMessage() {
-    if (savingEdit) return;
+    if (savingEdit || splittingEdit) return;
     setEditingMessage(null);
     setEditError(null);
   }
@@ -1507,6 +1544,32 @@ function App() {
     }
   }
 
+  async function splitEditedMessage() {
+    if (!editingMessage || splittingEdit || savingEdit) return;
+
+    const lines = splitMessageLines(editTextDraft);
+    if (lines.length < 2) {
+      setEditError("至少需要两行非空文字才能拆分");
+      return;
+    }
+
+    setSplittingEdit(true);
+    setEditError(null);
+    try {
+      const imagesData = await composerImageItemsToNumberArrays(editImageItems);
+      await splitLegacyMessage(editingMessage.id, lines.join("\n"), imagesData);
+      await refreshAppData();
+      refreshAndroidWidgets();
+      setEditImageItems([]);
+      setEditInputKey((key) => key + 1);
+      setEditingMessage(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSplittingEdit(false);
+    }
+  }
+
   function openDeleteMessage(message: LegacyMessage) {
     setDeletingMessage(message);
     setDeleteConfirmed(false);
@@ -1569,6 +1632,18 @@ function App() {
     setCopyResult(null);
 
     try {
+      if (IS_ANDROID) {
+        const nativeCopyText = window.ClipStashAndroid?.copyText;
+        if (!nativeCopyText || !nativeCopyText(text)) {
+          throw new Error("写入 Android 系统剪贴板失败");
+        }
+        setCopyResult({
+          messageId: message.id,
+          textLength: Array.from(text).length,
+        });
+        return;
+      }
+
       const result = await copyLegacyMessageTextToClipboard(message.id);
       setCopyResult({
         messageId: result.message_id,
@@ -1631,11 +1706,13 @@ function App() {
     (mediaTextDraft.trim().length > 0 || mediaFiles.length > 0) &&
     !creatingMediaMessage;
   const editText = editTextDraft.trim();
+  const canSplitEdit = !!editingMessage && splitMessageLines(editTextDraft).length >= 2;
   const editWillHaveImages = editImageItems.length > 0;
   const editHasContent = editText.length > 0 || editWillHaveImages;
   const canSaveEdit =
     !!editingMessage &&
     !savingEdit &&
+    !splittingEdit &&
     editHasContent &&
     (((editingMessage.text_content ?? null) !==
       (editText.length > 0 ? editText : null)) ||
@@ -1881,8 +1958,10 @@ function App() {
           previewDelaySeconds={hoverDelay}
           previewImages={editPreviewImages}
           saving={savingEdit}
+          splitting={splittingEdit}
           textAreaHeight={editTextareaHeight}
           textDraft={editTextDraft}
+          canSplit={canSplitEdit}
           canSave={canSaveEdit}
           onClose={closeEditMessage}
           onDropFiles={dropEditFiles}
@@ -1892,6 +1971,7 @@ function App() {
           onPreview={setPreviewImage}
           onRemoveFile={removeEditFile}
           onSubmit={saveEditedMessage}
+          onSplit={splitEditedMessage}
           onTextAreaHeightCommit={persistEditTextareaHeight}
           onTextChange={setEditTextDraft}
         />
@@ -2192,6 +2272,19 @@ function App() {
   );
 }
 
+function formatDisplayPath(value: string) {
+  const extendedUncPrefix = "\\\\?\\UNC\\";
+  const extendedPathPrefix = "\\\\?\\";
+
+  if (value.startsWith(extendedUncPrefix)) {
+    return `\\\\${value.slice(extendedUncPrefix.length)}`;
+  }
+  if (value.startsWith(extendedPathPrefix)) {
+    return value.slice(extendedPathPrefix.length);
+  }
+  return value;
+}
+
 function PathRow({
   label,
   value,
@@ -2201,11 +2294,13 @@ function PathRow({
   value: string;
   ok: boolean;
 }) {
+  const displayValue = formatDisplayPath(value);
+
   return (
     <div className="path-row">
       <span className={ok ? "dot ok-dot" : "dot error-dot"} />
       <span className="path-label">{label}</span>
-      <code title={value}>{value}</code>
+      <code title={displayValue}>{displayValue}</code>
     </div>
   );
 }
@@ -3090,6 +3185,7 @@ function MessageList({
 }
 
 function EditMessageDialog({
+  canSplit,
   canSave,
   error,
   imageItems,
@@ -3099,6 +3195,7 @@ function EditMessageDialog({
   previewDelaySeconds,
   previewImages,
   saving,
+  splitting,
   textAreaHeight,
   textDraft,
   onClose,
@@ -3108,9 +3205,11 @@ function EditMessageDialog({
   onPreview,
   onRemoveFile,
   onSubmit,
+  onSplit,
   onTextAreaHeightCommit,
   onTextChange,
 }: {
+  canSplit: boolean;
   canSave: boolean;
   error: string | null;
   imageItems: ComposerImageItem[];
@@ -3120,6 +3219,7 @@ function EditMessageDialog({
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
   saving: boolean;
+  splitting: boolean;
   textAreaHeight: number;
   textDraft: string;
   onClose: () => void;
@@ -3129,11 +3229,13 @@ function EditMessageDialog({
   onPreview: (image: PreviewImage | null) => void;
   onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSplit: () => void;
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
 }) {
   return (
     <MessageComposerDialog
+      canSplit={canSplit}
       canSave={canSave}
       closeAriaLabel="关闭编辑"
       dialogLabel={`编辑消息 ${message.id}`}
@@ -3151,12 +3253,14 @@ function EditMessageDialog({
       onPreview={onPreview}
       onRemoveFile={onRemoveFile}
       onSubmit={onSubmit}
+      onSplit={onSplit}
       onTextAreaHeightCommit={onTextAreaHeightCommit}
       onTextChange={onTextChange}
       placeholder="编辑文字，或选择图片替换原图片"
       previewDelaySeconds={previewDelaySeconds}
       previewImages={previewImages}
       saving={saving}
+      splitting={splitting}
       textAreaHeight={textAreaHeight}
       textAreaId="edit-message-text"
       textDraft={textDraft}
@@ -3167,6 +3271,7 @@ function EditMessageDialog({
 
 function MessageComposerDialog({
   autoFocus = false,
+  canSplit = false,
   canSave,
   closeAriaLabel,
   dialogLabel,
@@ -3184,18 +3289,21 @@ function MessageComposerDialog({
   onPreview,
   onRemoveFile,
   onSubmit,
+  onSplit,
   onTextAreaHeightCommit,
   onTextChange,
   placeholder,
   previewDelaySeconds,
   previewImages,
   saving,
+  splitting = false,
   textAreaHeight,
   textAreaId,
   textDraft,
   title,
 }: {
   autoFocus?: boolean;
+  canSplit?: boolean;
   canSave: boolean;
   closeAriaLabel: string;
   dialogLabel: string;
@@ -3213,12 +3321,14 @@ function MessageComposerDialog({
   onPreview: (image: PreviewImage | null) => void;
   onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSplit?: () => void;
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
   placeholder: string;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
   saving: boolean;
+  splitting?: boolean;
   textAreaHeight: number;
   textAreaId: string;
   textDraft: string;
@@ -3295,6 +3405,16 @@ function MessageComposerDialog({
           </div>
           {isAndroid ? (
             <div className="composer-mobile-actions">
+              {onSplit && (
+                <button
+                  type="button"
+                  className="split-action"
+                  disabled={!canSplit || saving || splitting}
+                  onClick={onSplit}
+                >
+                  {splitting ? "拆分中" : "拆分"}
+                </button>
+              )}
               <label className="composer-file-action" htmlFor={fileInputId} aria-label="选择图片" title="选择图片">
                 图片
               </label>
@@ -3306,9 +3426,21 @@ function MessageComposerDialog({
               </button>
             </div>
           ) : (
-            <button type="button" className="preview-close" onClick={handleClose} aria-label={closeAriaLabel}>
-              ×
-            </button>
+            <div className="composer-header-actions">
+              {onSplit && (
+                <button
+                  type="button"
+                  className="split-action"
+                  disabled={!canSplit || saving || splitting}
+                  onClick={onSplit}
+                >
+                  {splitting ? "拆分中" : "拆分"}
+                </button>
+              )}
+              <button type="button" className="preview-close" onClick={handleClose} aria-label={closeAriaLabel}>
+                ×
+              </button>
+            </div>
           )}
         </header>
 
@@ -4032,6 +4164,13 @@ function appendTextBlock(currentText: string, textBlock: string) {
   if (!currentText) return textBlock;
   const separator = currentText.endsWith("\n") ? "" : "\n";
   return `${currentText}${separator}${textBlock}`;
+}
+
+function splitMessageLines(text: string) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function insertTextBlock(

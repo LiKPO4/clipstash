@@ -113,6 +113,8 @@ describe("android shell", () => {
   let appSettings = { ...defaultAppSettings };
   let listedPage = normalPage;
   let androidCheckForUpdatesMock: ReturnType<typeof vi.fn>;
+  let androidConsumePendingUpdateMock: ReturnType<typeof vi.fn>;
+  let androidCopyTextMock: ReturnType<typeof vi.fn>;
   let androidDownloadAndInstallApkMock: ReturnType<typeof vi.fn>;
   let androidRefreshWidgetsMock: ReturnType<typeof vi.fn>;
   let androidShareZipMock: ReturnType<typeof vi.fn> | null = null;
@@ -122,11 +124,15 @@ describe("android shell", () => {
     appSettings = { ...defaultAppSettings };
     listedPage = normalPage;
     androidCheckForUpdatesMock = vi.fn().mockReturnValue(true);
+    androidConsumePendingUpdateMock = vi.fn().mockReturnValue("");
+    androidCopyTextMock = vi.fn().mockReturnValue(true);
     androidDownloadAndInstallApkMock = vi.fn().mockReturnValue(true);
     androidRefreshWidgetsMock = vi.fn();
     androidShareZipMock = null;
     window.ClipStashAndroid = {
       checkForUpdates: androidCheckForUpdatesMock,
+      consumePendingUpdate: androidConsumePendingUpdateMock,
+      copyText: androidCopyTextMock,
       downloadAndInstallApk: androidDownloadAndInstallApkMock,
       refreshWidgets: androidRefreshWidgetsMock,
     };
@@ -167,6 +173,15 @@ describe("android shell", () => {
         return Promise.resolve({
           ...createResult,
           message: { ...createdMessage, images: [{ id: 20, filename: "share.png", path: "/images/share.png", exists: true }] },
+        });
+      }
+      if (command === "split_legacy_message") {
+        return Promise.resolve({
+          original_message_id: args?.messageId,
+          messages: [
+            { ...normalPage.messages[0], id: 3, text_content: "第一行" },
+            { ...normalPage.messages[0], id: 4, text_content: "第二行" },
+          ],
         });
       }
       if (command === "export_normal_data_zip_bytes") {
@@ -260,23 +275,23 @@ describe("android shell", () => {
           status: "checked",
           message: "检查完成",
           release: {
-            tag_name: "v2.1.14",
-            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.14",
+            tag_name: "v2.1.15",
+            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15",
             assets: [
               {
-                name: "ClipStash.Next_2.1.14_android-universal-release-signed.apk",
-                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.14/ClipStash.Next_2.1.14_android-universal-release-signed.apk",
+                name: "ClipStash.Next_2.1.15_android-universal-release-signed.apk",
+                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_android-universal-release-signed.apk",
               },
             ],
           },
         },
       }));
     });
-    expect(await within(dialog).findByText("发现新版本 2.1.14")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.15")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "下载并安装" }));
     expect(androidDownloadAndInstallApkMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.14/ClipStash.Next_2.1.14_android-universal-release-signed.apk",
-      "ClipStash.Next_2.1.14_android-universal-release-signed.apk",
+      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_android-universal-release-signed.apk",
+      "ClipStash.Next_2.1.15_android-universal-release-signed.apk",
     );
 
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
@@ -470,6 +485,77 @@ describe("android shell", () => {
     });
     expect(invokeMock).not.toHaveBeenCalledWith("update_legacy_message_text", expect.anything());
     expect(invokeMock).not.toHaveBeenCalledWith("replace_legacy_message_images", expect.anything());
+  });
+
+  it("copies message text through the Android system clipboard", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "手机记录" }));
+
+    await waitFor(() => {
+      expect(androidCopyTextMock).toHaveBeenCalledWith("手机记录");
+    });
+    expect(await screen.findByText("4 个字符")).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_message_text_to_clipboard", {
+      messageId: 1,
+    });
+  });
+
+  it("places split before image and save in the Android edit header", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const card = (await screen.findByText("#1")).closest("article") as HTMLElement;
+    await user.click(within(card).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 1" });
+    const actions = dialog.querySelector(".composer-mobile-actions");
+    expect(actions).toBeTruthy();
+    expect(Array.from(actions!.querySelectorAll(":scope > :is(button, label)")).map((item) => item.textContent)).toEqual([
+      "拆分",
+      "图片",
+      "保存",
+      "×",
+    ]);
+
+    const textarea = within(dialog).getByLabelText("消息内容");
+    await user.clear(textarea);
+    await user.type(textarea, "第一行{enter}第二行");
+    await user.click(within(dialog).getByRole("button", { name: "拆分" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("split_legacy_message", {
+        messageId: 1,
+        textContent: "第一行\n第二行",
+        imagesData: [],
+      });
+    });
+  });
+
+  it("consumes a pending native update result when the WebView event is missed", async () => {
+    androidConsumePendingUpdateMock
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce(JSON.stringify({
+        status: "checked",
+        message: "检查完成",
+        release: {
+          tag_name: "v2.1.15",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15",
+          assets: [],
+        },
+      }));
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
+
+    expect(await within(dialog).findByText("发现新版本 2.1.15")).toBeTruthy();
+    expect((within(dialog).getByRole("button", { name: "检查更新" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("opens message image previews instead of copying images on android", async () => {

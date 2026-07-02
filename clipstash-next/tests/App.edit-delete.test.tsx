@@ -359,6 +359,15 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve(updateResult);
       }
       if (command === "replace_legacy_message_images") return Promise.resolve(replaceResult);
+      if (command === "split_legacy_message") {
+        return Promise.resolve({
+          original_message_id: args?.messageId,
+          messages: [
+            { ...message, id: 21, text_content: "a", images: [message.images[0]] },
+            { ...message, id: 22, text_content: "b", images: [] },
+          ],
+        });
+      }
       if (command === "read_legacy_image_bytes") return Promise.resolve(tinyPngBytes);
       if (command === "delete_legacy_message") {
         if (failNextDelete) {
@@ -573,6 +582,47 @@ describe("edit and delete guarded actions", () => {
     expect(screen.queryByText("已保存 #10")).toBeNull();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
+  });
+
+  it("splits non-empty lines and sends editor images in order", async () => {
+    listedMessages = [
+      {
+        ...message,
+        text_content: "a\nb\nc\nd",
+        images: [
+          message.images[0],
+          { ...message.images[0], id: 21, filename: "second.png", path: "C:\\images\\second.png" },
+          { ...message.images[0], id: 22, filename: "third.png", path: "C:\\images\\third.png" },
+        ],
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    const headerActions = dialog.querySelector(".composer-header-actions");
+    expect(headerActions).toBeTruthy();
+    expect(Array.from(headerActions!.querySelectorAll("button")).map((button) => button.textContent)).toEqual([
+      "拆分",
+      "×",
+    ]);
+
+    await user.click(within(dialog).getByRole("button", { name: "拆分" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("split_legacy_message", {
+        messageId: 10,
+        textContent: "a\nb\nc\nd",
+        imagesData: [tinyPngBytes, tinyPngBytes, tinyPngBytes],
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
   });
 
   it("does not allow clearing the only content from a text-only message", async () => {

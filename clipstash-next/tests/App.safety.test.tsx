@@ -213,6 +213,32 @@ let latestReleaseResponse: unknown = null;
     expect(invokeMock).not.toHaveBeenCalledWith("get_legacy_safety_report");
   });
 
+  it("hides Windows extended path prefixes without changing storage actions", async () => {
+    const user = userEvent.setup();
+    migratedStats = {
+      ...stats,
+      data_dir: "\\\\?\\D:\\ClipStashNext",
+      db_path: "\\\\?\\D:\\ClipStashNext\\clipstash.db",
+      images_dir: "\\\\?\\D:\\ClipStashNext\\images",
+    };
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const panel = within(await screen.findByRole("dialog", { name: "设置" })).getByRole("region", {
+      name: "本地存储",
+    });
+
+    expect(within(panel).getByText("D:\\ClipStashNext")).toBeTruthy();
+    expect(within(panel).getByText("D:\\ClipStashNext\\clipstash.db")).toBeTruthy();
+    expect(within(panel).getByText("D:\\ClipStashNext\\images")).toBeTruthy();
+    expect(within(panel).queryByText("\\\\?\\D:\\ClipStashNext")).toBeNull();
+
+    await user.click(within(panel).getByRole("button", { name: "打开数据目录" }));
+    expect(invokeMock).toHaveBeenCalledWith("open_app_path", {
+      path: "\\\\?\\D:\\ClipStashNext",
+    });
+  });
+
   it("runs manual migration and reports skipped duplicates", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -352,31 +378,31 @@ let latestReleaseResponse: unknown = null;
     expect(await within(dialog).findByText("导入剪切板快捷键已应用")).toBeTruthy();
 
     latestReleaseResponse = {
-      tag_name: "v2.1.14",
-      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.14",
+      tag_name: "v2.1.15",
+      html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15",
       body: "更新说明",
       assets: [
         {
-          name: "ClipStash Next_2.1.14_x64_en-US.msi",
+          name: "ClipStash Next_2.1.15_x64_en-US.msi",
           browser_download_url:
-            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.14/ClipStash.Next_2.1.14_x64_en-US.msi",
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_x64_en-US.msi",
         },
         {
-          name: "ClipStash Next_2.1.14_x64-setup.exe",
+          name: "ClipStash Next_2.1.15_x64-setup.exe",
           browser_download_url:
-            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.14/ClipStash.Next_2.1.14_x64-setup.exe",
+            "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_x64-setup.exe",
         },
       ],
     };
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
-    expect(await within(dialog).findByText("发现新版本 2.1.14")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.15")).toBeTruthy();
     expect(within(dialog).queryByText("更新说明")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "下载更新" }));
     expect(invokeMock).toHaveBeenCalledWith("download_and_open_update_installer", {
       downloadUrl:
-        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.14/ClipStash.Next_2.1.14_x64-setup.exe",
-      filename: "ClipStash Next_2.1.14_x64-setup.exe",
+        "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_x64-setup.exe",
+      filename: "ClipStash Next_2.1.15_x64-setup.exe",
     });
     expect(await within(dialog).findByText("安装包已打开，请按安装向导完成更新")).toBeTruthy();
   });

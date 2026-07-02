@@ -20,6 +20,14 @@
 
 ## 已完成
 
+- 本轮新增消息拆分功能：编辑已有消息时可按非空行拆成多条消息，图片按当前顺序一对一分配给各行，图片多于文字行时剩余图片保留为独立纯图片消息；拆分继承原消息归档状态和时间位置，数据库事务失败时整体回滚并清理新图片。桌面按钮位于编辑弹窗右上关闭按钮左侧，Android 按钮位于顶部图片/保存按钮左侧。
+- 本轮修复 Android 检查更新永久停在“检查中”：原生端缓存最后一次检查结果，前端除事件监听外增加主动轮询领取，解决 WebView 偶发漏事件；同时增加 40 秒总超时，网络或原生线程异常时会恢复按钮并显示错误，不再无限等待。
+- 本轮定位并修复 Android 小组件消息文字锯齿：列表绑定普通行时曾用 `setPaintFlags(0)` 清除删除线，同时误清除了 `TextView` 默认抗锯齿；现为普通行保留 `ANTI_ALIAS_FLAG | SUBPIXEL_TEXT_FLAG`，归档反馈只额外叠加 `STRIKE_THRU_TEXT_FLAG`，并新增原生回归测试。
+- 本轮修复 Windows 更新后开机自启动丢失：应用内打开 NSIS 安装包时增加 Tauri `/UPDATE` 升级参数，避免按普通重装流程处理；同时在 Rust 应用启动阶段依据持久化的 `launch_on_startup` 用户意图主动恢复系统启动项，不再等前端设置页加载后才修复。
+- 本轮修复 Windows 桌面窗口横向扩展无效：移除主容器 `372px` 固定宽度及宽屏媒体查询锁定，桌面主栏、工具栏和消息卡片现在随窗口可用宽度展开；默认窄窗口和 Android 全宽布局保持一致。
+- 本轮修复 Android 纯文字消息复制：点击消息文字时改由原生 `ClipboardManager` 写入系统剪贴板，不再误调用仅支持 Windows 的 Rust 剪贴板命令；图片点击行为保持预览不变。
+- 本轮修正 Windows 设置页本地存储路径展示：界面隐藏系统内部扩展路径前缀 `\\?\`，并将 `\\?\UNC\...` 还原为常见 UNC 形式；打开目录等后端操作继续使用原始路径，避免影响长路径读写。
+- 本轮按 Android 官方小组件与字体建议检查文字清晰度：现有布局已使用 `sp`、原生 `TextView` 和 Android 12 目标网格尺寸；进一步将标题、数量、空状态和消息正文统一为系统 `sans-serif-medium`，并取消标题额外合成粗体，改善部分厂商启动器上默认细字重边缘发虚的问题，字号和布局不变。
 - 已发布 `v2.1.13`：发布提交 `ce97f13`，Windows NSIS/MSI 与正式签名 Android universal APK 已上传至 GitHub Release。Android 检查更新彻底与 Windows 分流，改由 Kotlin 后台线程请求 GitHub 并回传页面；小组件消息行高收紧至 `30dp` 并隐藏可见滚动条。发布前验证通过：前端 `77 passed | 9 skipped`、Rust `36 passed | 20 ignored`、Android 单测、真实旧库只读审计和双平台构建；APK 为 `2.1.13`、versionCode `2001013`，正式证书指纹保持不变。
 - 本轮修复 Android 点击“检查更新”闪退：Android 检查链路不再调用 Rust `fetch_latest_github_release` 阻塞请求，改由 `MainActivity` 在 Kotlin 后台线程请求 GitHub API，并通过 `clipstash-android-update` 事件回传成功或错误；Windows 继续使用原有 WebView/Rust 回退逻辑。同步收紧小组件消息行高 `40dp -> 30dp`，隐藏可见滚动条但保留手势滑动。前端 `77 passed | 9 skipped`、Android 单测、Kotlin/资源编译和完整 Android release APK 构建通过。
 - 已发布 `v2.1.12`：发布提交 `2413bd9`，Windows NSIS/MSI 与正式签名 Android universal APK 已上传至 GitHub Release。Android 小组件支持全部消息上下滑动、按消息 ID 归档反馈、正确显示图文/多图数量；Android 设置页可从 GitHub Release 下载正式 APK 并唤起系统安装器。发布前验证通过：前端 `77 passed | 9 skipped`、Rust 全测、Android 小组件单测、真实旧库只读审计、双平台构建；APK 为 `2.1.12`、versionCode `2001012`，正式证书指纹保持不变。
@@ -382,6 +390,8 @@
 - 已按用户反馈继续调整图片与编辑弹窗体验并准备 `2.1.7` release：主列表内点击图片改为直接打开预览，不再复制图片；桌面和 Android 均不会再调用 `copy_legacy_image_to_clipboard`；Android 新建/编辑统一弹窗顶部恢复右上角关闭叉。发布前验证已通过：`npm test -- --run` 通过 `71 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.1.7_x64_en-US.msi` 与 `ClipStash Next_2.1.7_x64-setup.exe`；`npm run tauri -- android build --apk` 通过，签名后 `ClipStash.Next_2.1.7_android-universal-release-signed.apk` 通过 `apksigner verify`，`v2=true`、`v3=true`，版本号 `2.1.7`、versionCode `2001007`。注意：本次 APK 使用本地预览签名证书，已安装旧测试包的手机可能需要先卸载再安装。
 - 已准备 `2.1.8` 正式 Android 签名 release：Android Gradle release 构建改为读取本机 `keystore.properties`，使用固定正式证书 `.signing/clipstash-next-release.jks` 签名；`keystore.properties` 和 `.signing/` 已加入 Android `.gitignore`，不会提交密钥或密码。正式证书 SHA-256 指纹为 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。发布前验证已通过：`npm test -- --run` 通过 `71 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri -- android build --apk` 通过并直接生成 Gradle 签名 APK，复制为 `ClipStash.Next_2.1.8_android-universal-release-signed.apk` 后 `apksigner verify` 通过，`v2=true`，版本号 `2.1.8`、versionCode `2001008`；`npm run tauri build` 通过并生成 `ClipStash Next_2.1.8_x64_en-US.msi` 与 `ClipStash Next_2.1.8_x64-setup.exe`。注意：从预览签名切换到正式签名时，手机上已安装旧测试包可能仍需最后卸载一次；从 `2.1.8` 起后续 Android 包使用同一正式证书，可覆盖升级并保留数据。
 
+- 已准备 `2.1.14` release：新增消息按行拆分并按顺序分配图片；修复 Android 检查更新卡住与文字复制；优化 Android 小组件文字渲染、间距和交互；桌面窗口内容可随窗口横向扩展，界面隐藏 Windows 扩展路径前缀；更新安装后恢复用户原有开机自启动设置。发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build`、`cargo fmt -- --check`、`cargo test` 均通过；旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；Windows 与 Android release 均构建成功，Android APK 为 `2.1.14`、versionCode `2001014`，正式证书 v2 签名验证通过。
+
 ## 未完成
 
 - 阶段 2 已完成前端纯图片、图文新增、编辑文字和替换图片入口真实点击写入验收，并均通过 UI 删除清理。
@@ -443,4 +453,4 @@
 
 ## 下一步
 
-- 下一步最小行动：真机重新添加小组件，验证 4 条以上消息可上下滑动且归档只影响目标消息；再从设置检查更新，验证 APK 下载、首次安装来源授权和系统覆盖安装流程。如需发布，先迭代版本号到下一补丁版再跑完整发布流程。
+- 下一步最小行动：构建 Android 验收包并在反馈机型上重新添加小组件，对比系统中等字重调整前后的文字边缘；若仍有颗粒感，再采集该启动器的显示缩放、字体缩放和小组件实际尺寸，针对厂商缩放做第二轮适配。

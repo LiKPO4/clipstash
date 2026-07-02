@@ -2,6 +2,8 @@ package com.clipstash.next
 
 import android.content.ActivityNotFoundException
 import android.app.DownloadManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -26,6 +28,7 @@ class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
   private var pendingShareJson: String? = null
   private var pendingWidgetAction: String? = null
+  private var pendingUpdateJson: String? = null
   private var pendingUpdateApk: File? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,9 +114,30 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
+    fun consumePendingUpdate(): String = synchronized(this@MainActivity) {
+      val payload = pendingUpdateJson ?: return@synchronized ""
+      pendingUpdateJson = null
+      payload
+    }
+
+    @JavascriptInterface
     fun refreshWidgets() {
       runOnUiThread {
         ClipStashWidgetProvider.refreshAll(this@MainActivity)
+      }
+    }
+
+    @JavascriptInterface
+    fun copyText(text: String): Boolean {
+      val value = text.trim()
+      if (value.isEmpty()) return false
+
+      return try {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("ClipStash", value))
+        true
+      } catch (_: Exception) {
+        false
       }
     }
 
@@ -301,6 +325,9 @@ class MainActivity : TauriActivity() {
     val payload = JSONObject().put("status", status).put("message", message).apply {
       if (release != null) put("release", release)
     }.toString()
+    synchronized(this) {
+      pendingUpdateJson = payload
+    }
     appWebView?.post {
       appWebView?.evaluateJavascript(
         "window.dispatchEvent(new CustomEvent('clipstash-android-update', { detail: $payload }))",

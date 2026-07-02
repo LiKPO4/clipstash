@@ -18,6 +18,7 @@ import {
   previewLegacyMessageImportQueue,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  splitLegacyMessage,
   stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
   validateExternalWindowTarget,
@@ -179,6 +180,18 @@ describe("legacy api command contracts", () => {
     expect(invokeMock).toHaveBeenCalledWith("replace_legacy_message_images", {
       messageId: 114,
       imagesData: [[1, 2, 3]],
+    });
+  });
+
+  it("maps split message arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ original_message_id: 114, messages: [] });
+
+    await splitLegacyMessage(114, "a\nb", [[1], [2]]);
+
+    expect(invokeMock).toHaveBeenCalledWith("split_legacy_message", {
+      messageId: 114,
+      textContent: "a\nb",
+      imagesData: [[1], [2]],
     });
   });
 

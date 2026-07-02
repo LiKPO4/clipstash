@@ -54,7 +54,7 @@ private class ClipStashWidgetFactory(
       setInt(
         R.id.widget_row_text,
         "setPaintFlags",
-        if (archivedFeedback) Paint.STRIKE_THRU_TEXT_FLAG else 0,
+        widgetTextPaintFlags(archivedFeedback),
       )
       setTextColor(
         R.id.widget_row_text,
@@ -87,4 +87,9 @@ private class ClipStashWidgetFactory(
       putExtra(ClipStashWidgetProvider.EXTRA_MESSAGE_TEXT, item.text)
     }
   }
+}
+
+internal fun widgetTextPaintFlags(archived: Boolean): Int {
+  val baseFlags = Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG
+  return if (archived) baseFlags or Paint.STRIKE_THRU_TEXT_FLAG else baseFlags
 }

@@ -235,13 +235,25 @@ fn download_and_open_update_installer(
 
     fs::write(&installer_path, &bytes)
         .map_err(|err| format!("写入安装包失败：{}：{err}", installer_path.display()))?;
-    Command::new(&installer_path)
+    update_installer_command(&installer_path)
         .spawn()
         .map_err(|err| format!("启动安装包失败：{}：{err}", installer_path.display()))?;
 
     Ok(DownloadUpdateResult {
         installer_path: installer_path.display().to_string(),
     })
+}
+
+fn update_installer_command(installer_path: &std::path::Path) -> Command {
+    let mut command = Command::new(installer_path);
+    if installer_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        command.arg("/UPDATE");
+    }
+    command
 }
 
 fn sanitize_installer_filename(filename: &str) -> Result<String, String> {
@@ -289,21 +301,26 @@ fn get_launch_on_startup(app: AppHandle) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let autostart = app.autolaunch();
-        let enabled = autostart
-            .is_enabled()
-            .map_err(|err| format!("读取开机自启动状态失败：{err}"))?;
-        let settings = app_settings::read_settings()?;
-        if settings.launch_on_startup && !enabled {
-            autostart
-                .enable()
-                .map_err(|err| format!("恢复开机自启动失败：{err}"))?;
-            return autostart
-                .is_enabled()
-                .map_err(|err| format!("读取开机自启动状态失败：{err}"));
-        }
-        Ok(enabled)
+        restore_launch_on_startup_if_requested(&app)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn restore_launch_on_startup_if_requested(app: &AppHandle) -> Result<bool, String> {
+    let autostart = app.autolaunch();
+    let enabled = autostart
+        .is_enabled()
+        .map_err(|err| format!("读取开机自启动状态失败：{err}"))?;
+    let settings = app_settings::read_settings()?;
+    if settings.launch_on_startup && !enabled {
+        autostart
+            .enable()
+            .map_err(|err| format!("恢复开机自启动失败：{err}"))?;
+        return autostart
+            .is_enabled()
+            .map_err(|err| format!("读取开机自启动状态失败：{err}"));
+    }
+    Ok(enabled)
 }
 
 #[tauri::command]
@@ -409,6 +426,15 @@ fn replace_legacy_message_images(
     images_data: Vec<Vec<u8>>,
 ) -> Result<legacy_data::LegacyReplaceImagesResult, String> {
     app_data::replace_message_images(message_id, images_data)
+}
+
+#[tauri::command]
+fn split_legacy_message(
+    message_id: i64,
+    text_content: String,
+    images_data: Vec<Vec<u8>>,
+) -> Result<legacy_data::LegacySplitMessageResult, String> {
+    app_data::split_message(message_id, text_content, images_data)
 }
 
 #[tauri::command]
@@ -1067,6 +1093,9 @@ pub fn run() {
             app_data::ensure_app_data_ready()?;
             #[cfg(target_os = "windows")]
             {
+                if let Err(err) = restore_launch_on_startup_if_requested(app.handle()) {
+                    eprintln!("{err}");
+                }
                 window_targets::start_foreground_tracker();
                 if let Some(window) = app.get_webview_window("main") {
                     restore_main_window_state(&window);
@@ -1150,6 +1179,7 @@ pub fn run() {
             replace_legacy_message_images,
             set_legacy_message_archived,
             set_launch_on_startup,
+            split_legacy_message,
             stage_legacy_message_import_to_clipboard,
             update_legacy_message_text,
             update_app_settings,
@@ -1161,18 +1191,25 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn downloaded_installers_open_without_special_update_args() {
-        let exe = std::path::Path::new("ClipStash Next_2.0.7_x64-setup.exe");
-        let msi = std::path::Path::new("ClipStash Next_2.0.7_x64_en-US.msi");
+    use super::update_installer_command;
 
-        assert_eq!(
-            exe.extension().and_then(|value| value.to_str()),
-            Some("exe")
-        );
-        assert_eq!(
-            msi.extension().and_then(|value| value.to_str()),
-            Some("msi")
-        );
+    #[test]
+    fn downloaded_nsis_installer_opens_in_update_mode() {
+        let exe = std::path::Path::new("ClipStash Next_2.0.7_x64-setup.exe");
+        let command = update_installer_command(exe);
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args, vec!["/UPDATE"]);
+    }
+
+    #[test]
+    fn downloaded_msi_does_not_receive_nsis_update_argument() {
+        let msi = std::path::Path::new("ClipStash Next_2.0.7_x64_en-US.msi");
+        let command = update_installer_command(msi);
+
+        assert_eq!(command.get_args().count(), 0);
     }
 }

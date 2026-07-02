@@ -36,6 +36,121 @@ pub(crate) fn create_text_message_for_path(
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
+pub(crate) fn split_message_for_path(
+    db_path: &Path,
+    message_id: i64,
+    text_content: String,
+    images_data: Vec<Vec<u8>>,
+) -> Result<Vec<LegacyMessage>, String> {
+    if message_id <= 0 {
+        return Err("拆分消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("拆分消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let lines = text_content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return Err("拆分消息失败，至少需要两行非空文字".to_string());
+    }
+    if images_data.iter().any(|image| image.is_empty()) {
+        return Err("拆分消息失败，图片数据不能为空".to_string());
+    }
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("拆分消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+    fs::create_dir_all(&images_dir).map_err(|err| format!("创建图片目录失败：{err}"))?;
+
+    let mut conn =
+        Connection::open(db_path).map_err(|err| format!("打开数据库准备拆分失败：{err}"))?;
+    ensure_legacy_schema(&conn)?;
+    let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
+
+    let mut saved_images = Vec::new();
+    for (index, image_data) in images_data.iter().enumerate() {
+        let filename = next_image_filename(&images_dir, index);
+        let path = images_dir.join(&filename);
+        if let Err(err) = save_image_file(&path, image_data) {
+            for (_, saved_path) in &saved_images {
+                let _ = fs::remove_file(saved_path);
+            }
+            return Err(err);
+        }
+        saved_images.push((filename, path));
+    }
+
+    let output_count = lines.len().max(saved_images.len());
+    let split_result = (|| {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启消息拆分事务失败：{err}"))?;
+        let mut message_ids = Vec::with_capacity(output_count);
+
+        for output_index in (0..output_count).rev() {
+            let text = lines.get(output_index).map(String::as_str);
+            tx.execute(
+                "INSERT INTO messages (text_content, created_at, archived, archived_at) VALUES (?, ?, ?, ?)",
+                params![
+                    text,
+                    old_message.created_at,
+                    if old_message.archived { 1 } else { 0 },
+                    old_message.archived_at,
+                ],
+            )
+            .map_err(|err| format!("写入拆分消息失败：{err}"))?;
+            let new_message_id = tx.last_insert_rowid();
+            if let Some((filename, _)) = saved_images.get(output_index) {
+                tx.execute(
+                    "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
+                    params![new_message_id, filename],
+                )
+                .map_err(|err| format!("关联拆分消息图片失败：{err}"))?;
+            }
+            message_ids.push(new_message_id);
+        }
+
+        tx.execute(
+            "DELETE FROM message_images WHERE message_id = ?",
+            params![message_id],
+        )
+        .map_err(|err| format!("删除原消息图片关联失败：{err}"))?;
+        let deleted = tx
+            .execute("DELETE FROM messages WHERE id = ?", params![message_id])
+            .map_err(|err| format!("删除原消息失败：{err}"))?;
+        if deleted == 0 {
+            return Err(format!("拆分消息失败，原消息不存在：{message_id}"));
+        }
+
+        tx.commit()
+            .map_err(|err| format!("提交消息拆分事务失败：{err}"))?;
+        message_ids.reverse();
+        Ok::<Vec<i64>, String>(message_ids)
+    })();
+
+    let message_ids = match split_result {
+        Ok(ids) => ids,
+        Err(err) => {
+            for (_, path) in saved_images {
+                let _ = fs::remove_file(path);
+            }
+            return Err(err);
+        }
+    };
+
+    remove_old_message_image_files(&old_message.images);
+    message_ids
+        .into_iter()
+        .map(|id| read_legacy_message_by_id(&conn, &images_dir, id))
+        .collect()
+}
+
 pub(crate) fn replace_message_images_for_path(
     db_path: &Path,
     message_id: i64,

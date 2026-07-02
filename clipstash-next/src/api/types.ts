@@ -209,6 +209,11 @@ export type LegacyDeleteMessageResult = LegacyReplaceImagesResult;
 
 export type LegacyArchiveMessageResult = LegacyCreateTextMessageResult;
 
+export type LegacySplitMessageResult = {
+  original_message_id: number;
+  messages: LegacyMessage[];
+};
+
 export type LegacyCopyImageResult = {
   filename: string;
   path: string;

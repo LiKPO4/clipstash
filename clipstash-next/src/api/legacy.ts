@@ -28,6 +28,7 @@ import type {
   LegacyImportStageResult,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
+  LegacySplitMessageResult,
   LegacyStats,
   LegacyUpdateMessageResult,
   MessageView,
@@ -188,6 +189,18 @@ export function updateLegacyMessageText(messageId: number, textContent: string |
 export function replaceLegacyMessageImages(messageId: number, imagesData: number[][]) {
   return invoke<LegacyReplaceImagesResult>("replace_legacy_message_images", {
     messageId,
+    imagesData,
+  });
+}
+
+export function splitLegacyMessage(
+  messageId: number,
+  textContent: string,
+  imagesData: number[][],
+) {
+  return invoke<LegacySplitMessageResult>("split_legacy_message", {
+    messageId,
+    textContent,
     imagesData,
   });
 }

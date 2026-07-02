@@ -11,7 +11,7 @@ use crate::{
     legacy_data::{
         LegacyArchiveMessageResult, LegacyCreateTextMessageResult, LegacyDbBackup,
         LegacyDeleteMessageResult, LegacyImageFilesBackup, LegacyReplaceImagesResult,
-        LegacyUpdateMessageResult, LegacyWriteAudit,
+        LegacySplitMessageResult, LegacyUpdateMessageResult, LegacyWriteAudit,
     },
     legacy_image_files::resolve_legacy_image_path,
     legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder},
@@ -24,7 +24,7 @@ use crate::{
     legacy_write_exec::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
         delete_message_for_path, replace_message_images_for_path, set_message_archived_for_path,
-        update_text_message_for_path,
+        split_message_for_path, update_text_message_for_path,
     },
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
 };
@@ -292,6 +292,19 @@ pub fn replace_message_images(
         audit: audit("replace_message_images", message.id),
         image_backup: None::<LegacyImageFilesBackup>,
         message,
+    })
+}
+
+pub fn split_message(
+    message_id: i64,
+    text_content: String,
+    images_data: Vec<Vec<u8>>,
+) -> Result<LegacySplitMessageResult, String> {
+    let paths = ready_paths()?;
+    let messages = split_message_for_path(&paths.db_path, message_id, text_content, images_data)?;
+    Ok(LegacySplitMessageResult {
+        original_message_id: message_id,
+        messages,
     })
 }
 
