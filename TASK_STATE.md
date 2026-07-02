@@ -390,7 +390,7 @@
 - 已按用户反馈继续调整图片与编辑弹窗体验并准备 `2.1.7` release：主列表内点击图片改为直接打开预览，不再复制图片；桌面和 Android 均不会再调用 `copy_legacy_image_to_clipboard`；Android 新建/编辑统一弹窗顶部恢复右上角关闭叉。发布前验证已通过：`npm test -- --run` 通过 `71 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.1.7_x64_en-US.msi` 与 `ClipStash Next_2.1.7_x64-setup.exe`；`npm run tauri -- android build --apk` 通过，签名后 `ClipStash.Next_2.1.7_android-universal-release-signed.apk` 通过 `apksigner verify`，`v2=true`、`v3=true`，版本号 `2.1.7`、versionCode `2001007`。注意：本次 APK 使用本地预览签名证书，已安装旧测试包的手机可能需要先卸载再安装。
 - 已准备 `2.1.8` 正式 Android 签名 release：Android Gradle release 构建改为读取本机 `keystore.properties`，使用固定正式证书 `.signing/clipstash-next-release.jks` 签名；`keystore.properties` 和 `.signing/` 已加入 Android `.gitignore`，不会提交密钥或密码。正式证书 SHA-256 指纹为 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。发布前验证已通过：`npm test -- --run` 通过 `71 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 通过 `33 passed | 20 ignored`；`npm run verify:legacy-readonly` 通过，真实旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri -- android build --apk` 通过并直接生成 Gradle 签名 APK，复制为 `ClipStash.Next_2.1.8_android-universal-release-signed.apk` 后 `apksigner verify` 通过，`v2=true`，版本号 `2.1.8`、versionCode `2001008`；`npm run tauri build` 通过并生成 `ClipStash Next_2.1.8_x64_en-US.msi` 与 `ClipStash Next_2.1.8_x64-setup.exe`。注意：从预览签名切换到正式签名时，手机上已安装旧测试包可能仍需最后卸载一次；从 `2.1.8` 起后续 Android 包使用同一正式证书，可覆盖升级并保留数据。
 
-- 已准备 `2.1.14` release：新增消息按行拆分并按顺序分配图片；修复 Android 检查更新卡住与文字复制；优化 Android 小组件文字渲染、间距和交互；桌面窗口内容可随窗口横向扩展，界面隐藏 Windows 扩展路径前缀；更新安装后恢复用户原有开机自启动设置。发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build`、`cargo fmt -- --check`、`cargo test` 均通过；旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；Windows 与 Android release 均构建成功，Android APK 为 `2.1.14`、versionCode `2001014`，正式证书 v2 签名验证通过。
+- 已发布 `v2.1.14`：新增消息按行拆分并按顺序分配图片；修复 Android 检查更新卡住与文字复制；优化 Android 小组件文字渲染、间距和交互；桌面窗口内容可随窗口横向扩展，界面隐藏 Windows 扩展路径前缀；更新安装后恢复用户原有开机自启动设置。发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build`、`cargo fmt -- --check`、`cargo test` 均通过；旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；Windows 与 Android release 均构建成功，Android APK 为 `2.1.14`、versionCode `2001014`，正式证书 v2 签名验证通过。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.14`，Windows EXE、MSI 和 Android 正式签名 APK 均已上传。
 
 ## 未完成
 
@@ -453,4 +453,4 @@
 
 ## 下一步
 
-- 下一步最小行动：构建 Android 验收包并在反馈机型上重新添加小组件，对比系统中等字重调整前后的文字边缘；若仍有颗粒感，再采集该启动器的显示缩放、字体缩放和小组件实际尺寸，针对厂商缩放做第二轮适配。
+- 下一步最小行动：安装 `v2.1.14` 做真机验收，重点检查消息拆分、Android 检查更新、小组件文字显示和更新后开机自启动保持；下一次发布先将版本号提升到 `2.1.15` 或更高。
