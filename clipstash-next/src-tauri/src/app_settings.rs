@@ -1,6 +1,10 @@
 use crate::{app_data, legacy_paths};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
@@ -86,6 +90,13 @@ struct LegacySettings {
 }
 
 pub fn read_settings() -> Result<AppSettings, String> {
+    let _guard = settings_lock()
+        .lock()
+        .map_err(|_| "设置读写锁已损坏".to_string())?;
+    read_settings_unlocked()
+}
+
+fn read_settings_unlocked() -> Result<AppSettings, String> {
     let path = settings_path()?;
     if !path.exists() {
         let settings = read_legacy_settings()
@@ -104,7 +115,10 @@ pub fn read_settings() -> Result<AppSettings, String> {
 }
 
 pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
-    let mut settings = read_settings()?;
+    let _guard = settings_lock()
+        .lock()
+        .map_err(|_| "设置读写锁已损坏".to_string())?;
+    let mut settings = read_settings_unlocked()?;
     if let Some(value) = patch.always_on_top {
         settings.always_on_top = value;
     }
@@ -154,6 +168,11 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     let settings = normalize_settings(settings);
     write_settings(&settings)?;
     Ok(settings)
+}
+
+fn settings_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn write_settings(settings: &AppSettings) -> Result<(), String> {

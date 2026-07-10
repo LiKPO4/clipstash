@@ -3459,7 +3459,7 @@ function MessageComposerDialog({
               placeholder={placeholder}
               rows={9}
               style={{
-                fontSize: isAndroid ? "1.5em" : undefined,
+                fontSize: isAndroid ? "1.3em" : undefined,
                 height: `${textAreaHeight}px`,
               }}
             />

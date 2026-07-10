@@ -392,6 +392,12 @@
 
 - 已发布 `v2.1.14`：新增消息按行拆分并按顺序分配图片；修复 Android 检查更新卡住与文字复制；优化 Android 小组件文字渲染、间距和交互；桌面窗口内容可随窗口横向扩展，界面隐藏 Windows 扩展路径前缀；更新安装后恢复用户原有开机自启动设置。发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build`、`cargo fmt -- --check`、`cargo test` 均通过；旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；Windows 与 Android release 均构建成功，Android APK 为 `2.1.14`、versionCode `2001014`，正式证书 v2 签名验证通过。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.14`，Windows EXE、MSI 和 Android 正式签名 APK 均已上传。
 
+- 已将 Android 新建/编辑消息输入框默认字号从 `1.5em` 下调为 `1.3em`，桌面端保持不变；`tests/App.android.test.tsx` 的 Android 字号断言已同步。已验证 Android 测试 `13 passed`，`npm run build` 通过。
+
+- 已修复 Windows 主窗口位置与尺寸持久化链路：保存和恢复统一使用物理像素，位置取外框坐标、尺寸取内容区尺寸，避免 DPI 缩放导致偏移以及外框/内容区混用造成每次启动尺寸漂移；移动/缩放保存增加 250ms 防抖，关闭和隐藏仍立即落盘；设置文件进程内读改写增加互斥，避免窗口事件与前端设置同时保存时互相覆盖。已验证 `cargo fmt -- --check` 通过，`cargo test` 为 `38 passed | 20 ignored`。
+
+- 已修复旧版 Python 编辑器缩略图悬浮预览的临时文件泄漏：`MessageEditorDialog` 在关闭和清空缩略图时调用 `_cleanup_thumbnail_temps()` 删除 `tempfile` 生成的临时 PNG；同时保留 `self._thumbnail_images` 引用避免 Tk PhotoImage 被 GC。已验证 `python -m py_compile main.py` 通过。
+
 ## 未完成
 
 - 阶段 2 已完成前端纯图片、图文新增、编辑文字和替换图片入口真实点击写入验收，并均通过 UI 删除清理。
@@ -453,4 +459,4 @@
 
 ## 下一步
 
-- 下一步最小行动：安装 `v2.1.14` 做真机验收，重点检查消息拆分、Android 检查更新、小组件文字显示和更新后开机自启动保持；下一次发布先将版本号提升到 `2.1.15` 或更高。
+- 下一步最小行动：构建 Windows 验收包，分别验证移动、缩放、关闭到托盘、完全退出和重启电脑后的窗口位置与尺寸恢复；下一次发布先将版本号提升到 `2.1.15` 或更高。

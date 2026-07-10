@@ -302,7 +302,7 @@ describe("android shell", () => {
     expect(within(composer).getByLabelText("选择图片")).toBeTruthy();
     expect(within(composer).queryByRole("button", { name: "关闭" })).toBeNull();
     expect(within(composer).getByRole("button", { name: "保存" })).toBeTruthy();
-    expect((within(composer).getByLabelText("消息内容") as HTMLTextAreaElement).style.fontSize).toBe("1.5em");
+    expect((within(composer).getByLabelText("消息内容") as HTMLTextAreaElement).style.fontSize).toBe("1.3em");
 
     await user.upload(
       within(composer).getByLabelText("选择图片"),

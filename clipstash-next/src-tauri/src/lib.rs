@@ -26,13 +26,11 @@ mod window_targets;
 use std::fs;
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use std::time::Duration;
-use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
-};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
@@ -48,6 +46,8 @@ use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WINDOW_STATE_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 const TRAY_SHOW_HIDE_ID: &str = "tray_show_hide";
 const TRAY_OPEN_DATA_DIR_ID: &str = "tray_open_data_dir";
 const TRAY_QUIT_ID: &str = "tray_quit";
@@ -618,37 +618,56 @@ fn restore_main_window_state(window: &tauri::WebviewWindow) {
         return;
     }
 
-    let _ = window.set_size(LogicalSize::new(state.width as f64, state.height as f64));
-    let _ = window.set_position(LogicalPosition::new(state.x as f64, state.y as f64));
+    let _ = window.set_size(PhysicalSize::new(state.width, state.height));
+    let _ = window.set_position(PhysicalPosition::new(state.x, state.y));
 }
 
 #[cfg(target_os = "windows")]
 fn save_main_window_state(window: &tauri::Window) {
-    if window.label() != "main" {
+    WINDOW_STATE_SAVE_GENERATION.fetch_add(1, Ordering::SeqCst);
+    let Some(state) = read_main_window_state(window) else {
         return;
+    };
+    persist_main_window_state(state);
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_main_window_state_save(window: &tauri::Window) {
+    let Some(state) = read_main_window_state(window) else {
+        return;
+    };
+    let generation = WINDOW_STATE_SAVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        if WINDOW_STATE_SAVE_GENERATION.load(Ordering::SeqCst) == generation {
+            persist_main_window_state(state);
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn read_main_window_state(window: &tauri::Window) -> Option<app_settings::MainWindowState> {
+    if window.label() != "main" {
+        return None;
     }
     if window.is_minimized().unwrap_or(false) {
-        return;
+        return None;
     }
     let Ok(position) = window.outer_position() else {
-        return;
+        return None;
     };
-    let Ok(size) = window.outer_size() else {
-        return;
+    let Ok(size) = window.inner_size() else {
+        return None;
     };
     if size.width < 360 || size.height < 600 {
-        return;
+        return None;
     }
-
-    let _ = app_settings::update_settings(app_settings::AppSettingsPatch {
-        main_window_state: Some(Some(app_settings::MainWindowState {
-            x: position.x,
-            y: position.y,
-            width: size.width,
-            height: size.height,
-        })),
-        ..Default::default()
-    });
+    Some(app_settings::MainWindowState {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -662,20 +681,26 @@ fn save_main_webview_window_state(window: &tauri::WebviewWindow) {
     let Ok(position) = window.outer_position() else {
         return;
     };
-    let Ok(size) = window.outer_size() else {
+    let Ok(size) = window.inner_size() else {
         return;
     };
     if size.width < 360 || size.height < 600 {
         return;
     }
 
+    WINDOW_STATE_SAVE_GENERATION.fetch_add(1, Ordering::SeqCst);
+    persist_main_window_state(app_settings::MainWindowState {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn persist_main_window_state(state: app_settings::MainWindowState) {
     let _ = app_settings::update_settings(app_settings::AppSettingsPatch {
-        main_window_state: Some(Some(app_settings::MainWindowState {
-            x: position.x,
-            y: position.y,
-            width: size.width,
-            height: size.height,
-        })),
+        main_window_state: Some(Some(state)),
         ..Default::default()
     });
 }
@@ -1111,7 +1136,7 @@ pub fn run() {
                 if window.label() == "main" {
                     match event {
                         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                            save_main_window_state(window);
+                            schedule_main_window_state_save(window);
                         }
                         WindowEvent::CloseRequested { api, .. } => {
                             save_main_window_state(window);

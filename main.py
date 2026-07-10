@@ -1484,11 +1484,33 @@ class SettingsDialog(ctk.CTkToplevel):
             self._set_update_status("正在检查更新...", checking=True)
             self._parent._check_for_updates(parent=self, status_callback=self._set_update_status)
 
-    def _set_update_status(self, message, checking=False):
+    def _open_release_page(self, event=None):
+        try:
+            import webbrowser
+            webbrowser.open(f"https://github.com/{APP_REPOSITORY}/releases")
+        except Exception as e:
+            self._set_update_status(f"无法打开 Release 页面: {e}")
+        return "break"
+
+    def _set_update_status(self, message, checking=False, release_url=None):
         try:
             if not self.winfo_exists():
                 return
-            self.update_status_label.configure(text=message or "")
+            self.update_status_label.unbind("<Button-1>")
+            if release_url:
+                text = message or "检查更新失败"
+                self.update_status_label.configure(
+                    text=f"{text}，点击打开 Release 页面",
+                    text_color=COLORS["primary"],
+                    cursor="hand2",
+                )
+                self.update_status_label.bind("<Button-1>", self._open_release_page)
+            else:
+                self.update_status_label.configure(
+                    text=message or "",
+                    text_color=COLORS["text_hint"],
+                    cursor="arrow",
+                )
             self.update_button.configure(
                 text="正在检查..." if checking else "检查更新",
                 state="disabled" if checking else "normal"
@@ -1694,6 +1716,8 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         self.configure(fg_color=COLORS["bg"])
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._saving = False
+        self._thumbnail_images = []
+        self._thumbnail_temp_paths = []
 
         self.images = []
         if images:
@@ -1776,6 +1800,7 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
 
     def _on_close(self):
         self._hide_preview()
+        self._cleanup_thumbnail_temps()
         try:
             self.withdraw()
         except Exception:
@@ -1797,6 +1822,15 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
                 self.tk.call("destroy", self._w)
             except Exception:
                 logging.exception("[MessageEditorDialog._on_close] tcl destroy failed")
+
+    def _cleanup_thumbnail_temps(self):
+        """清理悬浮预览生成的临时图片文件。"""
+        for path in getattr(self, "_thumbnail_temp_paths", []):
+            try:
+                if path and os.path.exists(path):
+                    os.unlink(path)
+            except Exception:
+                pass
 
     def _place_centered(self):
         """隐藏→计算位置→显示，彻底避免闪烁"""
@@ -1829,6 +1863,9 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
         return COPY
 
     def _clear_thumbnail_widgets(self):
+        self._cleanup_thumbnail_temps()
+        self._thumbnail_images = []
+        self._thumbnail_temp_paths = []
         for w in list(self.img_frame.winfo_children()):
             w.destroy()
         self.img_frame.update_idletasks()
@@ -1885,17 +1922,19 @@ class MessageEditorDialog(ctk.CTkToplevel, HoverPreviewMixin):
             item.grid(row=idx // 4, column=idx % 4, padx=6, pady=6, sticky="w")
             item.pack_propagate(False)
 
-            # 图片标签
-            ctk_img = _pil_to_ctk_canvas(pil_img, 70, 70)
-            lbl = ctk.CTkLabel(item, image=ctk_img, text="")
+            # 图片标签使用 Tk 原生 PhotoImage，避免 CTkImage 在滚动/重绘时偶发空白。
+            tk_img = _pil_to_tk_canvas(pil_img, 70, 70)
+            self._thumbnail_images.append(tk_img)
+            lbl = tk.Label(item, image=tk_img, text="", bg=COLORS["tag_bg"], bd=0, highlightthickness=0)
             lbl.place(relx=0.5, rely=0.5, anchor="center")
-            lbl.image = ctk_img
+            lbl.image = tk_img
 
             # 悬浮预览
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 f.write(img_bytes)
                 temp_path = f.name
+            self._thumbnail_temp_paths.append(temp_path)
             self.bind_hover_preview(lbl, temp_path)
 
             # 删除按钮 —— 黑色正圆，放在右上角内侧
@@ -2852,7 +2891,10 @@ class DemandStashApp(ctk.CTk):
         if message:
             self._show_status(message)
             if status_callback:
-                status_callback(message, checking=False)
+                try:
+                    status_callback(message, checking=False, release_url=f"https://github.com/{APP_REPOSITORY}/releases")
+                except TypeError:
+                    status_callback(message, checking=False)
             return
         if has_update:
             latest_version = release.get("tag_name", "")
