@@ -398,7 +398,7 @@
 
 - 已修复旧版 Python 编辑器缩略图悬浮预览的临时文件泄漏：`MessageEditorDialog` 在关闭和清空缩略图时调用 `_cleanup_thumbnail_temps()` 删除 `tempfile` 生成的临时 PNG；同时保留 `self._thumbnail_images` 引用避免 Tk PhotoImage 被 GC。已验证 `python -m py_compile main.py` 通过。
 
-- 已准备 `2.1.15` Windows 验收包：版本号在 `package.json`、`Cargo.toml`、`tauri.conf.json` 和 Android `tauri.properties` 同步升级到 `2.1.15` / versionCode `2001015`；发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 为 `38 passed | 20 ignored`；本地旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 `ClipStash Next_2.1.15_x64_en-US.msi` 与 `ClipStash Next_2.1.15_x64-setup.exe`。Windows 安装后窗口位置/尺寸恢复仍需人工真机验收。
+- 已发布 `v2.1.15`：修复 Windows 主窗口位置与尺寸持久化漂移、增加设置文件读写锁、修复旧版 Python 编辑器临时文件泄漏、下调 Android 输入框字号。版本号在 `package.json`、`Cargo.toml`、`tauri.conf.json` 和 Android `tauri.properties` 同步升级到 `2.1.15` / versionCode `2001015`。发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 为 `38 passed | 20 ignored`；本地旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 Windows MSI/NSIS 安装包；Android release build 通过并产出正式签名 universal APK。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15`，Windows EXE/MSI 与 Android 正式签名 APK 均已上传。
 
 ## 未完成
 
