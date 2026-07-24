@@ -400,6 +400,10 @@
 
 - 已发布 `v2.1.15`：修复 Windows 主窗口位置与尺寸持久化漂移、增加设置文件读写锁、修复旧版 Python 编辑器临时文件泄漏、下调 Android 输入框字号。版本号在 `package.json`、`Cargo.toml`、`tauri.conf.json` 和 Android `tauri.properties` 同步升级到 `2.1.15` / versionCode `2001015`。发布前验证已通过：`npm test -- --run` 为 `83 passed | 9 skipped`；`npm run build` 通过；`cargo fmt -- --check` 通过；`cargo test` 为 `38 passed | 20 ignored`；本地旧库只读审计为 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；`npm run tauri build` 通过并生成 Windows MSI/NSIS 安装包；Android release build 通过并产出正式签名 universal APK。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15`，Windows EXE/MSI 与 Android 正式签名 APK 均已上传。
 
+- 本轮修复 Android 点击消息文字复制仍失败：`ClipStashAndroid.copyText` 不再从 JavaBridge 后台线程直接写系统剪贴板，改为投递到 Android 主线程执行；bridge 返回值从布尔改为字符串状态 `"ok"`，前端同时兼容旧 `true` 和新 `"ok"`。已验证 `npm test -- --run tests/App.android.test.tsx` 为 `13 passed`，`npm run build` 通过，Android `:app:compileUniversalReleaseKotlin :app:processUniversalReleaseResources -x :app:rustBuildUniversalRelease` 通过。
+
+- 本轮新增 Android 桌面小组件消息直达编辑：点击某条消息正文时，小组件将消息 ID 以 `edit:<id>` 动作传入应用；前端通过新增只读 `get_legacy_message` command 按 ID 读取完整消息并直接打开既有编辑弹窗，归档圆点点击行为保持不变。已验证前端测试 `85 passed | 9 skipped`、`npm run build`、`cargo fmt -- --check`、Rust 测试 `38 passed | 20 ignored`，Android Kotlin/资源 release 编译通过。
+
 ## 未完成
 
 - 阶段 2 已完成前端纯图片、图文新增、编辑文字和替换图片入口真实点击写入验收，并均通过 UI 删除清理。
@@ -461,4 +465,4 @@
 
 ## 下一步
 
-- 下一步最小行动：构建 Windows 验收包，分别验证移动、缩放、关闭到托盘、完全退出和重启电脑后的窗口位置与尺寸恢复；下一次发布先将版本号提升到 `2.1.15` 或更高。
+- 下一步最小行动：构建 Android APK，真机验证桌面小组件点击消息正文可直接打开对应编辑弹窗，并回归圆点归档；如需发版，先将版本号提升到 `2.1.16` 或更高。

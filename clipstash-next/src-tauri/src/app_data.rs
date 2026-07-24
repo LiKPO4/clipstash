@@ -26,6 +26,7 @@ use crate::{
         delete_message_for_path, replace_message_images_for_path, set_message_archived_for_path,
         split_message_for_path, update_text_message_for_path,
     },
+    legacy_write_precheck::read_message_for_update_precheck,
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
 };
 use chrono::Utc;
@@ -240,6 +241,11 @@ pub fn list_messages(
 ) -> Result<LegacyMessagePage, String> {
     let paths = ready_paths()?;
     list_legacy_messages_from_dir_filtered(paths.data_dir, view, sort, offset, limit, search)
+}
+
+pub fn get_message(message_id: i64) -> Result<LegacyMessage, String> {
+    let paths = ready_paths()?;
+    read_message_for_update_precheck(&paths.db_path, message_id)
 }
 
 pub fn create_text_message(text_content: String) -> Result<LegacyCreateTextMessageResult, String> {

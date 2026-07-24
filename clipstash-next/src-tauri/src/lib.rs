@@ -184,7 +184,11 @@ fn repair_app_data_dir() -> Result<app_data::AppDataRepairResult, String> {
 
 #[tauri::command]
 fn fetch_latest_github_release() -> Result<GithubReleaseInfo, String> {
-    let response = reqwest::blocking::Client::new()
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|err| format!("创建 HTTP 客户端失败：{err}"))?;
+    let response = client
         .get("https://api.github.com/repos/LiKPO4/clipstash/releases/latest")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header(reqwest::header::USER_AGENT, "ClipStash-Next-Update-Checker")
@@ -217,7 +221,12 @@ fn download_and_open_update_installer(
     fs::create_dir_all(&update_dir).map_err(|err| format!("创建更新临时目录失败：{err}"))?;
     let installer_path = update_dir.join(&safe_filename);
 
-    let response = reqwest::blocking::Client::new()
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|err| format!("创建 HTTP 客户端失败：{err}"))?;
+    let response = client
         .get(&download_url)
         .header(reqwest::header::USER_AGENT, "ClipStash-Next-Updater")
         .send()
@@ -576,6 +585,11 @@ fn list_legacy_messages(
     search: Option<String>,
 ) -> Result<legacy_data::LegacyMessagePage, String> {
     app_data::list_messages(view, sort, offset, limit, search)
+}
+
+#[tauri::command]
+fn get_legacy_message(message_id: i64) -> Result<legacy_data::LegacyMessage, String> {
+    app_data::get_message(message_id)
 }
 
 #[cfg(target_os = "windows")]
@@ -1182,6 +1196,7 @@ pub fn run() {
             get_global_shortcut_errors,
             get_app_settings,
             get_launch_on_startup,
+            get_legacy_message,
             get_legacy_stats,
             import_data_zip,
             import_data_zip_bytes,

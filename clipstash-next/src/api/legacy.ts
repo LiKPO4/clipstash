@@ -26,6 +26,7 @@ import type {
   LegacyImportQueuePasteArchiveResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
+  LegacyMessage,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
   LegacySplitMessageResult,
@@ -158,6 +159,10 @@ export function listLegacyMessages({
     args.search = normalizedSearch;
   }
   return invoke<LegacyMessagePage>("list_legacy_messages", args);
+}
+
+export function getLegacyMessage(messageId: number) {
+  return invoke<LegacyMessage>("get_legacy_message", { messageId });
 }
 
 export function createLegacyTextMessage(textContent: string) {

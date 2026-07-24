@@ -32,6 +32,7 @@ import {
   fetchLatestGithubRelease,
   getAppSettings,
   getGlobalShortcutErrors,
+  getLegacyMessage,
   getLegacyStats,
   getLaunchOnStartup,
   importDataZipBytes,
@@ -78,7 +79,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.14";
+const CURRENT_VERSION = "2.1.16";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -92,7 +93,7 @@ const ANDROID_SHARE_EVENT = "clipstash-android-share-ready";
 const ANDROID_WIDGET_ACTION_EVENT = "clipstash-android-widget-action-ready";
 const ANDROID_UPDATE_EVENT = "clipstash-android-update";
 const ANDROID_UPDATE_POLL_MS = 250;
-const ANDROID_UPDATE_TIMEOUT_MS = 40_000;
+const ANDROID_UPDATE_TIMEOUT_MS = 20_000;
 
 declare global {
   interface Window {
@@ -101,7 +102,7 @@ declare global {
       consumePendingWidgetAction?: () => string;
       consumePendingUpdate?: () => string;
       checkForUpdates?: () => boolean;
-      copyText?: (text: string) => boolean;
+      copyText?: (text: string) => boolean | string;
       downloadAndInstallApk?: (downloadUrl: string, filename: string) => boolean;
       refreshWidgets?: () => void;
       shareZip?: (path: string) => void;
@@ -383,7 +384,7 @@ function App() {
   useEffect(() => {
     if (!IS_ANDROID) return;
 
-    function consumeWidgetAction() {
+    async function consumeWidgetAction() {
       if (!appSettingsReady) return;
       const action = window.ClipStashAndroid?.consumePendingWidgetAction?.();
       if (!action) return;
@@ -394,6 +395,17 @@ function App() {
       setPreviewImage(null);
       if (action === "export") {
         exportDataPackage().catch(() => undefined);
+        return;
+      }
+      if (action.startsWith("edit:")) {
+        const messageId = Number(action.slice("edit:".length));
+        if (!Number.isSafeInteger(messageId) || messageId <= 0) return;
+        try {
+          const message = await getLegacyMessage(messageId);
+          openEditMessage(message);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
         return;
       }
       if (action !== "create") return;
@@ -965,9 +977,18 @@ function App() {
         return;
       }
       window.ClipStashAndroid?.consumePendingUpdate?.();
-      if (!nativeCheck()) {
-        setReleaseCheckError("无法启动 Android 更新检查");
-        setCheckingUpdate(false);
+      let started = false;
+      try {
+        started = nativeCheck();
+        if (!started) {
+          setReleaseCheckError("无法启动 Android 更新检查");
+        }
+      } catch (err: unknown) {
+        setReleaseCheckError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!started) {
+          setCheckingUpdate(false);
+        }
       }
       return;
     }
@@ -1634,8 +1655,15 @@ function App() {
     try {
       if (IS_ANDROID) {
         const nativeCopyText = window.ClipStashAndroid?.copyText;
-        if (!nativeCopyText || !nativeCopyText(text)) {
+        if (!nativeCopyText) {
           throw new Error("写入 Android 系统剪贴板失败");
+        }
+        const copyStatus = nativeCopyText(text);
+        if (copyStatus !== true && copyStatus !== "ok") {
+          const detail = typeof copyStatus === "string" && copyStatus.startsWith("error:")
+            ? `：${copyStatus.slice("error:".length)}`
+            : "";
+          throw new Error(`写入 Android 系统剪贴板失败${detail}`);
         }
         setCopyResult({
           messageId: message.id,

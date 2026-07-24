@@ -23,6 +23,11 @@ import java.net.URL
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
@@ -128,17 +133,29 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
-    fun copyText(text: String): Boolean {
+    fun copyText(text: String): String {
       val value = text.trim()
-      if (value.isEmpty()) return false
+      if (value.isEmpty()) return "empty"
 
-      return try {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("ClipStash", value))
-        true
-      } catch (_: Exception) {
-        false
+      val latch = CountDownLatch(1)
+      var result = "ok"
+      runOnUiThread {
+        try {
+          val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+          clipboard.setPrimaryClip(ClipData.newPlainText("ClipStash", value))
+          result = "ok"
+        } catch (err: Exception) {
+          result = "error:${err.message ?: "写入系统剪贴板失败"}"
+          Toast.makeText(
+            this@MainActivity,
+            err.message ?: "写入系统剪贴板失败",
+            Toast.LENGTH_SHORT,
+          ).show()
+        } finally {
+          latch.countDown()
+        }
       }
+      return if (latch.await(3, TimeUnit.SECONDS)) result else "error:timeout"
     }
 
     @JavascriptInterface
@@ -171,30 +188,53 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun checkForUpdates(): Boolean {
       return try {
-        Thread {
+        val executor = Executors.newSingleThreadExecutor()
+        val future: Future<String> = executor.submit(Callable<String> {
+          var connection: HttpURLConnection? = null
           try {
-            val connection = URL(GITHUB_RELEASE_API_URL).openConnection() as HttpURLConnection
+            connection = URL(GITHUB_RELEASE_API_URL).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 15_000
             connection.readTimeout = 20_000
             connection.setRequestProperty("Accept", "application/vnd.github+json")
             connection.setRequestProperty("User-Agent", "ClipStash-Next-Android-Updater")
-            try {
-              val statusCode = connection.responseCode
-              if (statusCode !in 200..299) {
-                throw IllegalStateException("GitHub Release 检查失败：HTTP $statusCode")
-              }
-              val release = connection.inputStream.bufferedReader().use { reader ->
-                JSONObject(reader.readText())
-              }
-              notifyAndroidUpdate("checked", "检查完成", release)
-            } finally {
-              connection.disconnect()
+            val statusCode = connection.responseCode
+            if (statusCode !in 200..299) {
+              throw IllegalStateException("GitHub Release 检查失败：HTTP $statusCode")
             }
+            val release = connection.inputStream.bufferedReader().use { reader ->
+              JSONObject(reader.readText())
+            }
+            JSONObject()
+              .put("status", "checked")
+              .put("message", "检查完成")
+              .put("release", release)
+              .toString()
           } catch (err: Exception) {
-            notifyAndroidUpdate("error", err.message ?: "Android 更新检查失败")
+            JSONObject()
+              .put("status", "error")
+              .put("message", err.message ?: "Android 更新检查失败")
+              .toString()
+          } finally {
+            connection?.disconnect()
           }
-        }.start()
+        })
+        val payload = try {
+          future.get(20, TimeUnit.SECONDS)
+        } catch (err: Exception) {
+          future.cancel(true)
+          JSONObject()
+            .put("status", "error")
+            .put("message", err.message ?: "Android 更新检查超时")
+            .toString()
+        }
+        executor.shutdown()
+        val result = JSONObject(payload ?: "")
+        notifyAndroidUpdate(
+          result.getString("status"),
+          result.getString("message"),
+          result.optJSONObject("release"),
+        )
         true
       } catch (err: Exception) {
         notifyAndroidUpdate("error", err.message ?: "无法启动 Android 更新检查")
@@ -359,12 +399,22 @@ class MainActivity : TauriActivity() {
 
   private fun captureWidgetAction(intent: Intent?): Boolean {
     val action = intent?.getStringExtra(ClipStashWidgetProvider.EXTRA_WIDGET_ACTION) ?: return false
-    if (action != ClipStashWidgetProvider.ACTION_CREATE && action != ClipStashWidgetProvider.ACTION_EXPORT) return false
+    val isEditAction = action.startsWith(ClipStashWidgetProvider.ACTION_EDIT_PREFIX) &&
+      action.removePrefix(ClipStashWidgetProvider.ACTION_EDIT_PREFIX).toLongOrNull()?.let { it > 0 } == true
+    if (
+      action != ClipStashWidgetProvider.ACTION_CREATE &&
+      action != ClipStashWidgetProvider.ACTION_EXPORT &&
+      !isEditAction
+    ) return false
     pendingWidgetAction = action
     intent.removeExtra(ClipStashWidgetProvider.EXTRA_WIDGET_ACTION)
     Toast.makeText(
       this,
-      if (action == ClipStashWidgetProvider.ACTION_CREATE) "正在新建需求" else "正在准备分享",
+      when (action) {
+        ClipStashWidgetProvider.ACTION_CREATE -> "正在新建需求"
+        ClipStashWidgetProvider.ACTION_EXPORT -> "正在准备分享"
+        else -> "正在编辑需求"
+      },
       Toast.LENGTH_SHORT,
     ).show()
     return true

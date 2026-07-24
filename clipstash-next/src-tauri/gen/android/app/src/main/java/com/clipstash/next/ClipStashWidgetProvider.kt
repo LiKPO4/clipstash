@@ -24,7 +24,11 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
       AppWidgetManager.INVALID_APPWIDGET_ID,
     )
     when (intent.getStringExtra(EXTRA_ITEM_ACTION)) {
-      ITEM_ACTION_OPEN -> openApp(context, appWidgetId)
+      ITEM_ACTION_OPEN -> openApp(
+        context,
+        appWidgetId,
+        intent.getLongExtra(EXTRA_MESSAGE_ID, 0),
+      )
       ITEM_ACTION_ARCHIVE -> archiveMessage(context, intent, appWidgetId)
     }
   }
@@ -43,6 +47,7 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
     const val EXTRA_WIDGET_ACTION = "clipstash_widget_action"
     const val ACTION_CREATE = "create"
     const val ACTION_EXPORT = "export"
+    const val ACTION_EDIT_PREFIX = "edit:"
     const val ACTION_ITEM_CLICK = "com.clipstash.next.widget.ITEM_CLICK"
     const val EXTRA_ITEM_ACTION = "clipstash_widget_item_action"
     const val EXTRA_MESSAGE_ID = "clipstash_widget_message_id"
@@ -139,11 +144,13 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
       }, FEEDBACK_DURATION_MS)
     }
 
-    private fun openApp(context: Context, appWidgetId: Int) {
+    private fun openApp(context: Context, appWidgetId: Int, messageId: Long) {
+      if (messageId <= 0) return
       val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         ?: Intent(context, MainActivity::class.java)
       intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
       intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+      intent.putExtra(EXTRA_WIDGET_ACTION, "$ACTION_EDIT_PREFIX$messageId")
       context.startActivity(intent)
     }
 

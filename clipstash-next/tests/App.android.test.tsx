@@ -125,7 +125,7 @@ describe("android shell", () => {
     listedPage = normalPage;
     androidCheckForUpdatesMock = vi.fn().mockReturnValue(true);
     androidConsumePendingUpdateMock = vi.fn().mockReturnValue("");
-    androidCopyTextMock = vi.fn().mockReturnValue(true);
+    androidCopyTextMock = vi.fn().mockReturnValue("ok");
     androidDownloadAndInstallApkMock = vi.fn().mockReturnValue(true);
     androidRefreshWidgetsMock = vi.fn();
     androidShareZipMock = null;
@@ -160,6 +160,10 @@ describe("android shell", () => {
         return Promise.resolve(appSettings);
       }
       if (command === "get_legacy_stats") return Promise.resolve(stats);
+      if (command === "get_legacy_message") {
+        const messageId = args?.messageId as number;
+        return Promise.resolve(normalPage.messages.find((message) => message.id === messageId));
+      }
       if (command === "list_legacy_messages") return Promise.resolve(listedPage);
       if (command === "read_legacy_image_bytes") return Promise.resolve([]);
       if (command === "create_legacy_text_message") return Promise.resolve(createResult);
@@ -275,23 +279,23 @@ describe("android shell", () => {
           status: "checked",
           message: "检查完成",
           release: {
-            tag_name: "v2.1.15",
-            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15",
+            tag_name: "v2.1.17",
+            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.17",
             assets: [
               {
-                name: "ClipStash.Next_2.1.15_android-universal-release-signed.apk",
-                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_android-universal-release-signed.apk",
+                name: "ClipStash.Next_2.1.17_android-universal-release-signed.apk",
+                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.17/ClipStash.Next_2.1.17_android-universal-release-signed.apk",
               },
             ],
           },
         },
       }));
     });
-    expect(await within(dialog).findByText("发现新版本 2.1.15")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.17")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "下载并安装" }));
     expect(androidDownloadAndInstallApkMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.15/ClipStash.Next_2.1.15_android-universal-release-signed.apk",
-      "ClipStash.Next_2.1.15_android-universal-release-signed.apk",
+      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.17/ClipStash.Next_2.1.17_android-universal-release-signed.apk",
+      "ClipStash.Next_2.1.17_android-universal-release-signed.apk",
     );
 
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
@@ -420,6 +424,18 @@ describe("android shell", () => {
     expect(androidShareZipMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
   });
 
+  it("opens the selected widget message in the edit dialog", async () => {
+    const consumePendingWidgetAction = vi.fn().mockReturnValueOnce("edit:1").mockReturnValue("");
+    window.ClipStashAndroid = { consumePendingWidgetAction };
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    expect(await screen.findByRole("dialog", { name: "编辑消息 1" })).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("get_legacy_message", { messageId: 1 });
+    expect((screen.getByRole("textbox", { name: "消息内容" }) as HTMLTextAreaElement).value)
+      .toBe("手机记录");
+  });
+
   it("creates a message from android shared text", async () => {
     window.ClipStashAndroid = {
       consumePendingShare: vi.fn().mockReturnValue(JSON.stringify({ text: "  分享文字  ", images: [] })),
@@ -541,8 +557,8 @@ describe("android shell", () => {
         status: "checked",
         message: "检查完成",
         release: {
-          tag_name: "v2.1.15",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.15",
+          tag_name: "v2.1.17",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.17",
           assets: [],
         },
       }));
@@ -554,7 +570,7 @@ describe("android shell", () => {
     const dialog = await screen.findByRole("dialog", { name: "设置" });
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
 
-    expect(await within(dialog).findByText("发现新版本 2.1.15")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.17")).toBeTruthy();
     expect((within(dialog).getByRole("button", { name: "检查更新" }) as HTMLButtonElement).disabled).toBe(false);
   });
 

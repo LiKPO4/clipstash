@@ -8,6 +8,7 @@ import {
   copyLegacyMessageTextToClipboard,
   copyLegacyMessageImportQueueItemToClipboard,
   getLegacyStats,
+  getLegacyMessage,
   listExternalWindowTargets,
   listLegacyMessages,
   migrateLegacyData,
@@ -61,6 +62,14 @@ describe("legacy api command contracts", () => {
       offset: 20,
       limit: 10,
     });
+  });
+
+  it("maps a message detail request to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ id: 114 });
+
+    await getLegacyMessage(114);
+
+    expect(invokeMock).toHaveBeenCalledWith("get_legacy_message", { messageId: 114 });
   });
 
   it("maps manual migration requests to the backend command", async () => {
