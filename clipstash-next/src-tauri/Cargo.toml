@@ -1,6 +1,6 @@
 [package]
 name = "clipstash-next"
-version = "2.1.16"
+version = "2.1.17"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"

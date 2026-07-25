@@ -279,23 +279,23 @@ describe("android shell", () => {
           status: "checked",
           message: "检查完成",
           release: {
-            tag_name: "v2.1.17",
-            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.17",
+            tag_name: "v2.1.18",
+            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18",
             assets: [
               {
-                name: "ClipStash.Next_2.1.17_android-universal-release-signed.apk",
-                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.17/ClipStash.Next_2.1.17_android-universal-release-signed.apk",
+                name: "ClipStash.Next_2.1.18_android-universal-release-signed.apk",
+                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.18/ClipStash.Next_2.1.18_android-universal-release-signed.apk",
               },
             ],
           },
         },
       }));
     });
-    expect(await within(dialog).findByText("发现新版本 2.1.17")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.18")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "下载并安装" }));
     expect(androidDownloadAndInstallApkMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.17/ClipStash.Next_2.1.17_android-universal-release-signed.apk",
-      "ClipStash.Next_2.1.17_android-universal-release-signed.apk",
+      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.18/ClipStash.Next_2.1.18_android-universal-release-signed.apk",
+      "ClipStash.Next_2.1.18_android-universal-release-signed.apk",
     );
 
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
@@ -557,8 +557,8 @@ describe("android shell", () => {
         status: "checked",
         message: "检查完成",
         release: {
-          tag_name: "v2.1.17",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.17",
+          tag_name: "v2.1.18",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18",
           assets: [],
         },
       }));
@@ -570,7 +570,7 @@ describe("android shell", () => {
     const dialog = await screen.findByRole("dialog", { name: "设置" });
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
 
-    expect(await within(dialog).findByText("发现新版本 2.1.17")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.18")).toBeTruthy();
     expect((within(dialog).getByRole("button", { name: "检查更新" }) as HTMLButtonElement).disabled).toBe(false);
   });
 

@@ -79,7 +79,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.16";
+const CURRENT_VERSION = "2.1.17";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -970,16 +970,17 @@ function App() {
     setReleaseCheckResult(null);
 
     if (IS_ANDROID) {
-      const nativeCheck = window.ClipStashAndroid?.checkForUpdates;
-      if (!nativeCheck) {
+      const bridge = window.ClipStashAndroid;
+      if (!bridge?.checkForUpdates) {
         setReleaseCheckError("当前 Android 安装包不支持应用内检查更新");
         setCheckingUpdate(false);
         return;
       }
-      window.ClipStashAndroid?.consumePendingUpdate?.();
+      // 必须在注入对象上直接调用，解绑后调用会触发 WebView "non-injected object" 错误
+      bridge.consumePendingUpdate?.();
       let started = false;
       try {
-        started = nativeCheck();
+        started = bridge.checkForUpdates();
         if (!started) {
           setReleaseCheckError("无法启动 Android 更新检查");
         }
@@ -1042,9 +1043,10 @@ function App() {
     setReleaseCheckError(null);
     try {
       if (IS_ANDROID) {
-        const downloadAndInstallApk = window.ClipStashAndroid?.downloadAndInstallApk;
-        if (!downloadAndInstallApk) throw new Error("当前 Android 安装包不支持应用内更新");
-        const started = downloadAndInstallApk(
+        const bridge = window.ClipStashAndroid;
+        if (!bridge?.downloadAndInstallApk) throw new Error("当前 Android 安装包不支持应用内更新");
+        // 必须在注入对象上直接调用，解绑后调用会触发 WebView "non-injected object" 错误
+        const started = bridge.downloadAndInstallApk(
           releaseCheckResult.downloadAsset.downloadUrl,
           releaseCheckResult.downloadAsset.filename,
         );
@@ -1654,11 +1656,12 @@ function App() {
 
     try {
       if (IS_ANDROID) {
-        const nativeCopyText = window.ClipStashAndroid?.copyText;
-        if (!nativeCopyText) {
+        const bridge = window.ClipStashAndroid;
+        if (!bridge?.copyText) {
           throw new Error("写入 Android 系统剪贴板失败");
         }
-        const copyStatus = nativeCopyText(text);
+        // 必须在注入对象上直接调用，解绑后调用会触发 WebView "non-injected object" 错误
+        const copyStatus = bridge.copyText(text);
         if (copyStatus !== true && copyStatus !== "ok") {
           const detail = typeof copyStatus === "string" && copyStatus.startsWith("error:")
             ? `：${copyStatus.slice("error:".length)}`
