@@ -20,7 +20,7 @@
 
 ## 已完成
 
-- 已准备 `v2.1.18` 发布候选：版本号已同步到 npm、Cargo、Tauri、前端和 Android（`versionName=2.1.18`、`versionCode=2001018`）；包含 Windows 图片单击不再误触 Android 固定预览，以及 Android 不再注册桌面文件拖放、全局粘贴快捷键和悬浮预览清理。发布前验证通过：Vitest `87 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `38 passed | 20 ignored`、迁移隔离测试和本机旧库只读审计；Windows MSI/NSIS 与 Android universal APK 均已构建，APK 四 ABI 齐全、V2 签名有效，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。尚未推送和创建 GitHub Release。
+- 已发布 `v2.1.18`（发布提交 `5577899`）：版本号已同步到 npm、Cargo、Tauri、前端和 Android（`versionName=2.1.18`、`versionCode=2001018`）；包含 Windows 图片单击不再误触 Android 固定预览，以及 Android 不再注册桌面文件拖放、全局粘贴快捷键和悬浮预览清理。发布前验证通过：Vitest `87 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `38 passed | 20 ignored`、迁移隔离测试和本机旧库只读审计；Windows MSI/NSIS 与 Android universal APK 均已上传，APK 四 ABI 齐全、V2 签名有效，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18`。
 - 本轮修复 Windows 点击消息图片误走移动端固定预览：`MessageImageTile` 的单击 `openPreview` 只在 Android 绑定；Windows 单击图片不再打开移动端式常驻预览，仍保留桌面悬停/焦点预览和双击消息进入编辑，Android 单击全屏预览保持不变。已验证前端测试 `85 passed | 9 skipped`、`npm run build` 和 `git diff --check` 通过。
 - 本轮继续收紧 Windows/Android 交互边界：Android 不再注册桌面 Tauri 文件拖放监听，也不再注册会调用 Windows 专用 `read_current_clipboard` 的全局 `Ctrl+V`/`Shift+Insert` 快速新建监听；Android 消息图片点击、系统返回关闭预览和编辑器删除图片不再调用桌面悬浮预览窗口清理。新增 Android 否定断言覆盖上述桌面 API 不触发，已验证前端测试 `87 passed | 9 skipped`、`npm run build` 和 `git diff --check` 通过。
 - v2.1.17 已发布到 GitHub Release（APK + NSIS + MSI 三个资产，发布提交 `773ba23`）：纯热修复，Android 三处桥接调用（检查更新、下载安装更新、点击文字复制）从解构后调用改为在注入对象上直接调用，修复 WebView 报 "Java bridge method can't be invoked on a non-injected object"；桌面端无功能变化。发版验收为 vitest 85 通过 / cargo test 38 通过 / cargo fmt --check 通过，APK 已确认 versionName 2.1.17、versionCode 2001017 且签名有效（证书指纹与历史一致）。真机验收（检查更新、应用内下载安装更新、点击文字复制）仍待用户回传。
@@ -470,4 +470,4 @@
 
 ## 下一步
 
-- 下一步最小行动：提交并推送 `v2.1.18` 发布候选，上传 Windows MSI/NSIS 和 Android 正式签名 APK 到 GitHub Release；发布后真机回归 Android 图片预览、文字复制、检查更新和小组件编辑入口。
+- 下一步最小行动：真机回归 `v2.1.18` 的 Android 图片预览、文字复制、检查更新和小组件编辑入口；Windows 回归单击图片不弹固定预览、悬停预览与双击编辑仍正常。
