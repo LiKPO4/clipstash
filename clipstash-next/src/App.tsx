@@ -79,7 +79,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.17";
+const CURRENT_VERSION = "2.1.18";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -602,6 +602,8 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (IS_ANDROID) return;
+
     let alive = true;
     let cleanup: (() => void) | null = null;
     const currentWindow = getCurrentWindow();
@@ -683,6 +685,8 @@ function App() {
   }, [showSettings]);
 
   useEffect(() => {
+    if (IS_ANDROID) return;
+
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -732,7 +736,6 @@ function App() {
     const handleAndroidBack = (event: Event) => {
       if (previewImage) {
         event.preventDefault();
-        closeHoverPreviewWindow();
         setPreviewImage(null);
         return;
       }
@@ -3683,7 +3686,9 @@ function ComposerImageTile({
 
   function hidePreview() {
     clearPreviewTimer();
-    closeHoverPreviewWindow();
+    if (!isAndroid) {
+      closeHoverPreviewWindow();
+    }
     onPreview(null);
   }
 
@@ -3803,7 +3808,6 @@ function MessageImageTile({
     if (!imageSrc) return;
 
     clearPreviewTimer();
-    closeHoverPreviewWindow();
     const { preview } = readImagePreview(target);
     onPreview(preview);
   }
@@ -3820,7 +3824,7 @@ function MessageImageTile({
         <button
           type="button"
           className="image-preview-action"
-          onClick={(event) => openPreview(event.currentTarget)}
+          onClick={isAndroid ? (event) => openPreview(event.currentTarget) : undefined}
           onMouseEnter={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
           onMouseLeave={isAndroid ? undefined : hidePreview}
           onFocus={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}

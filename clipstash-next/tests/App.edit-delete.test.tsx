@@ -1060,14 +1060,14 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
 
-  it("opens a message image preview without refreshing legacy data", async () => {
-    const user = userEvent.setup();
+  it("does not open the mobile-style preview from a desktop image click", async () => {
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    await user.click(await within(imageGrid).findByRole("button", { name: "old.png" }));
+    fireEvent.click(await within(imageGrid).findByRole("button", { name: "old.png" }));
 
-    expect(await screen.findByRole("tooltip", { name: "old.png" })).toBeTruthy();
+    expect(screen.queryByRole("tooltip", { name: "old.png" })).toBeNull();
+    expect(previewWindowMock).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
       filename: "old.png",
     });
@@ -1153,14 +1153,13 @@ describe("edit and delete guarded actions", () => {
     });
   });
 
-  it("keeps image clicks on preview even when clipboard copy would be unavailable", async () => {
-    const user = userEvent.setup();
+  it("keeps desktop image clicks inert when clipboard copy would be unavailable", async () => {
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    await user.click(within(imageGrid).getByRole("button", { name: "old.png" }));
+    fireEvent.click(within(imageGrid).getByRole("button", { name: "old.png" }));
 
-    expect(await screen.findByRole("tooltip", { name: "old.png" })).toBeTruthy();
+    expect(screen.queryByRole("tooltip", { name: "old.png" })).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
       filename: "old.png",
     });

@@ -1,7 +1,7 @@
 {
   "name": "clipstash-next",
   "private": true,
-  "version": "2.1.17",
+  "version": "2.1.18",
   "type": "module",
   "scripts": {
     "dev": "vite",

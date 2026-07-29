@@ -2,13 +2,24 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { canShareMock, invokeMock, isAlwaysOnTopMock, openPathMock, setAlwaysOnTopMock, shareMock } = vi.hoisted(() => ({
+const {
+  canShareMock,
+  invokeMock,
+  isAlwaysOnTopMock,
+  onDragDropEventMock,
+  openPathMock,
+  setAlwaysOnTopMock,
+  shareMock,
+  webviewWindowGetByLabelMock,
+} = vi.hoisted(() => ({
   canShareMock: vi.fn(),
   invokeMock: vi.fn(),
   isAlwaysOnTopMock: vi.fn(),
+  onDragDropEventMock: vi.fn(),
   openPathMock: vi.fn(),
   setAlwaysOnTopMock: vi.fn(),
   shareMock: vi.fn(),
+  webviewWindowGetByLabelMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,14 +30,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     isAlwaysOnTop: isAlwaysOnTopMock,
-    onDragDropEvent: vi.fn().mockResolvedValue(vi.fn()),
+    onDragDropEvent: onDragDropEventMock,
     setAlwaysOnTop: setAlwaysOnTopMock,
   }),
 }));
 
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: class {
-    static getByLabel = vi.fn().mockResolvedValue(null);
+    static getByLabel = webviewWindowGetByLabelMock;
     close = vi.fn().mockResolvedValue(undefined);
     once = vi.fn().mockResolvedValue(vi.fn());
   },
@@ -152,7 +163,9 @@ describe("android shell", () => {
     openPathMock.mockResolvedValue(undefined);
     shareMock.mockResolvedValue(undefined);
     isAlwaysOnTopMock.mockResolvedValue(false);
+    onDragDropEventMock.mockResolvedValue(vi.fn());
     setAlwaysOnTopMock.mockResolvedValue(undefined);
+    webviewWindowGetByLabelMock.mockResolvedValue(null);
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_app_settings") return Promise.resolve(appSettings);
       if (command === "update_app_settings") {
@@ -227,10 +240,12 @@ describe("android shell", () => {
     vi.unstubAllGlobals();
     invokeMock.mockReset();
     isAlwaysOnTopMock.mockReset();
+    onDragDropEventMock.mockReset();
     setAlwaysOnTopMock.mockReset();
     canShareMock.mockReset();
     openPathMock.mockReset();
     shareMock.mockReset();
+    webviewWindowGetByLabelMock.mockReset();
     Reflect.deleteProperty(window, "ClipStashAndroid");
   });
 
@@ -267,6 +282,7 @@ describe("android shell", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("get_launch_on_startup");
     expect(invokeMock).not.toHaveBeenCalledWith("get_global_shortcut_errors");
     expect(isAlwaysOnTopMock).not.toHaveBeenCalled();
+    expect(onDragDropEventMock).not.toHaveBeenCalled();
     expect(setAlwaysOnTopMock).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
@@ -279,23 +295,23 @@ describe("android shell", () => {
           status: "checked",
           message: "检查完成",
           release: {
-            tag_name: "v2.1.18",
-            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18",
+            tag_name: "v2.1.19",
+            html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.19",
             assets: [
               {
-                name: "ClipStash.Next_2.1.18_android-universal-release-signed.apk",
-                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.18/ClipStash.Next_2.1.18_android-universal-release-signed.apk",
+                name: "ClipStash.Next_2.1.19_android-universal-release-signed.apk",
+                browser_download_url: "https://github.com/LiKPO4/clipstash/releases/download/v2.1.19/ClipStash.Next_2.1.19_android-universal-release-signed.apk",
               },
             ],
           },
         },
       }));
     });
-    expect(await within(dialog).findByText("发现新版本 2.1.18")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.19")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "下载并安装" }));
     expect(androidDownloadAndInstallApkMock).toHaveBeenCalledWith(
-      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.18/ClipStash.Next_2.1.18_android-universal-release-signed.apk",
-      "ClipStash.Next_2.1.18_android-universal-release-signed.apk",
+      "https://github.com/LiKPO4/clipstash/releases/download/v2.1.19/ClipStash.Next_2.1.19_android-universal-release-signed.apk",
+      "ClipStash.Next_2.1.19_android-universal-release-signed.apk",
     );
 
     await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
@@ -519,6 +535,17 @@ describe("android shell", () => {
     });
   });
 
+  it("does not invoke the Windows clipboard shortcut on Android", async () => {
+    const { default: App } = await import("../src/App");
+    render(<App />);
+    await screen.findByRole("button", { name: "手机记录" });
+
+    fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+
+    expect(invokeMock).not.toHaveBeenCalledWith("read_current_clipboard");
+    expect(screen.queryByRole("dialog", { name: "编辑新消息" })).toBeNull();
+  });
+
   it("places split before image and save in the Android edit header", async () => {
     const user = userEvent.setup();
     const { default: App } = await import("../src/App");
@@ -557,8 +584,8 @@ describe("android shell", () => {
         status: "checked",
         message: "检查完成",
         release: {
-          tag_name: "v2.1.18",
-          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18",
+          tag_name: "v2.1.19",
+          html_url: "https://github.com/LiKPO4/clipstash/releases/tag/v2.1.19",
           assets: [],
         },
       }));
@@ -570,7 +597,7 @@ describe("android shell", () => {
     const dialog = await screen.findByRole("dialog", { name: "设置" });
     await user.click(within(dialog).getByRole("button", { name: "检查更新" }));
 
-    expect(await within(dialog).findByText("发现新版本 2.1.18")).toBeTruthy();
+    expect(await within(dialog).findByText("发现新版本 2.1.19")).toBeTruthy();
     expect((within(dialog).getByRole("button", { name: "检查更新" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -600,13 +627,36 @@ describe("android shell", () => {
 
     const preview = await screen.findByRole("button", { name: "关闭图片预览 phone.png" });
     expect(within(preview).getByRole("img", { name: "phone.png" })).toBeTruthy();
+    expect(webviewWindowGetByLabelMock).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
       filename: "phone.png",
     });
 
-    await user.click(within(preview).getByRole("img", { name: "phone.png" }));
+    const backEvent = new Event("clipstash-android-back", { cancelable: true });
+    window.dispatchEvent(backEvent);
+    expect(backEvent.defaultPrevented).toBe(true);
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "关闭图片预览 phone.png" })).toBeNull();
     });
+    expect(webviewWindowGetByLabelMock).not.toHaveBeenCalled();
+  });
+
+  it("removes composer images without touching the desktop preview window on Android", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "+ 新建" }));
+    const composer = await screen.findByRole("dialog", { name: "编辑新消息" });
+    await user.upload(
+      within(composer).getByLabelText("选择图片"),
+      new File([new Uint8Array([1, 2, 3])], "remove.png", { type: "image/png" }),
+    );
+    expect(await within(composer).findByRole("img", { name: "remove.png" })).toBeTruthy();
+
+    await user.click(within(composer).getByRole("button", { name: "删除图片 remove.png" }));
+
+    expect(within(composer).queryByRole("img", { name: "remove.png" })).toBeNull();
+    expect(webviewWindowGetByLabelMock).not.toHaveBeenCalled();
   });
 });
