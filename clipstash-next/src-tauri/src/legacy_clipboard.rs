@@ -78,8 +78,13 @@ pub(crate) fn copy_legacy_image_to_clipboard_from_dir(
     #[cfg(target_os = "windows")]
     {
         let image_path = resolve_legacy_image_path(&data_dir, &filename)?;
-        let image = image::open(&image_path)
-            .map_err(|err| format!("读取旧图片准备复制失败：{}：{err}", image_path.display()))?
+        // 部分图片（如 Android 分享导入）是 JPEG 字节但以 .png 扩展名保存，
+        // image::open 会优先按扩展名选择解码器导致 InvalidSignature，
+        // 因此先读入内存，再按内容魔数猜测格式解码。
+        let image_bytes = std::fs::read(&image_path)
+            .map_err(|err| format!("读取旧图片准备复制失败：{}：{err}", image_path.display()))?;
+        let image = image::load_from_memory(&image_bytes)
+            .map_err(|err| format!("解码旧图片准备复制失败：{}：{err}", image_path.display()))?
             .to_rgba8();
         let (width, height) = image.dimensions();
         let bytes = image.into_raw();

@@ -1,5 +1,7 @@
 use crate::{
-    legacy_image_files::{next_image_filename, remove_old_message_image_files, save_image_file},
+    legacy_image_files::{
+        next_image_filename, remove_old_message_image_files, save_image_file, sniff_image_extension,
+    },
     legacy_model::LegacyMessage,
     legacy_query::read_legacy_message_by_id,
     legacy_schema::ensure_legacy_schema,
@@ -75,7 +77,7 @@ pub(crate) fn split_message_for_path(
 
     let mut saved_images = Vec::new();
     for (index, image_data) in images_data.iter().enumerate() {
-        let filename = next_image_filename(&images_dir, index);
+        let filename = next_image_filename(&images_dir, index, sniff_image_extension(image_data));
         let path = images_dir.join(&filename);
         if let Err(err) = save_image_file(&path, image_data) {
             for (_, saved_path) in &saved_images {
@@ -184,7 +186,8 @@ pub(crate) fn replace_message_images_for_path(
         .map_err(|err| format!("删除旧图片关联失败：{err}"))?;
 
         for (index, image_data) in images_data.iter().enumerate() {
-            let filename = next_image_filename(&images_dir, index);
+            let filename =
+                next_image_filename(&images_dir, index, sniff_image_extension(image_data));
             let path = images_dir.join(&filename);
             saved_paths.push(path.clone());
             save_image_file(&path, image_data)?;
@@ -380,7 +383,8 @@ pub(crate) fn create_mixed_message_for_path(
 
         let message_id = tx.last_insert_rowid();
         for (index, image_data) in images_data.iter().enumerate() {
-            let filename = next_image_filename(&images_dir, index);
+            let filename =
+                next_image_filename(&images_dir, index, sniff_image_extension(image_data));
             let path = images_dir.join(&filename);
             saved_paths.push(path.clone());
             save_image_file(&path, image_data)?;

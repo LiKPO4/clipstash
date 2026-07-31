@@ -1,5 +1,6 @@
 use crate::{
     app_data,
+    legacy_image_files::sniff_image_extension,
     legacy_model::{LegacyMessage, MessageView, SortOrder},
     legacy_paths::path_to_string,
     legacy_query::list_legacy_messages_from_dir,
@@ -150,7 +151,8 @@ fn build_normal_data_zip_from_dir(
             let bytes = fs::read(&image_path)
                 .map_err(|err| format!("读取导出图片失败：{}：{err}", image_path.display()))?;
             let sha256 = sha256_hex(&bytes);
-            let extension = safe_extension(&image.filename);
+            // 扩展名以图片内容魔数为准，避免把 JPEG 字节的图片以 .png 名写入数据包
+            let extension = sniff_image_extension(&bytes).to_string();
             let zip_path = format!(
                 "images/m{}-i{}-{}.{}",
                 message_index + 1,
@@ -326,11 +328,12 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
             inserted_messages += 1;
 
             for (index, entry) in image_entries.into_iter().enumerate() {
+                // 扩展名以图片内容魔数为准，修正旧数据包中 JPEG 字节使用 .png 扩展名的问题
                 let filename = unique_imported_image_filename(
                     &images_dir,
                     message_id,
                     index + 1,
-                    &entry.manifest.extension,
+                    sniff_image_extension(&entry.bytes),
                     &entry.manifest.sha256,
                 );
                 let path = images_dir.join(&filename);
