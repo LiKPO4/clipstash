@@ -20,6 +20,7 @@
 
 ## 已完成
 
+- 已发布 `v2.1.19`（发布提交 `bce65cd`）：修复移动端打包导入的图片无法复制/导入（JPEG 字节以 .png 扩展名保存，复制时按扩展名选错解码器报"读取旧图片准备复制失败"），复制图片改为按内容魔数解码，存量数据直接恢复；源头治理为所有图片写入路径（新建、替换、拆分、Android 分享导入）和数据包导出/导入统一按内容魔数确定扩展名（png/jpg/gif/bmp/webp），旧数据包再导入自动修正文件名。发布前验证通过：Vitest `87 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `41 passed | 20 ignored`（含新增 3 个魔数嗅探单测）、本机旧库只读审计 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；Windows MSI/NSIS 与 Android universal APK 均已上传，APK `versionName=2.1.19`、`versionCode=2001019`，V2 签名有效，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.19`。真机验收（导入消息 #380 含 JPEG 图片的队列粘贴、Android 分享 JPEG 落盘为 .jpg）仍待用户回传。
 - 已发布 `v2.1.18`（发布提交 `5577899`）：版本号已同步到 npm、Cargo、Tauri、前端和 Android（`versionName=2.1.18`、`versionCode=2001018`）；包含 Windows 图片单击不再误触 Android 固定预览，以及 Android 不再注册桌面文件拖放、全局粘贴快捷键和悬浮预览清理。发布前验证通过：Vitest `87 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `38 passed | 20 ignored`、迁移隔离测试和本机旧库只读审计；Windows MSI/NSIS 与 Android universal APK 均已上传，APK 四 ABI 齐全、V2 签名有效，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18`。
 - 本轮修复 Windows 点击消息图片误走移动端固定预览：`MessageImageTile` 的单击 `openPreview` 只在 Android 绑定；Windows 单击图片不再打开移动端式常驻预览，仍保留桌面悬停/焦点预览和双击消息进入编辑，Android 单击全屏预览保持不变。已验证前端测试 `85 passed | 9 skipped`、`npm run build` 和 `git diff --check` 通过。
 - 本轮继续收紧 Windows/Android 交互边界：Android 不再注册桌面 Tauri 文件拖放监听，也不再注册会调用 Windows 专用 `read_current_clipboard` 的全局 `Ctrl+V`/`Shift+Insert` 快速新建监听；Android 消息图片点击、系统返回关闭预览和编辑器删除图片不再调用桌面悬浮预览窗口清理。新增 Android 否定断言覆盖上述桌面 API 不触发，已验证前端测试 `87 passed | 9 skipped`、`npm run build` 和 `git diff --check` 通过。
@@ -470,4 +471,4 @@
 
 ## 下一步
 
-- 下一步最小行动：真机回归 `v2.1.18` 的 Android 图片预览、文字复制、检查更新和小组件编辑入口；Windows 回归单击图片不弹固定预览、悬停预览与双击编辑仍正常。
+- 下一步最小行动：真机回归 `v2.1.19`：Windows 导入消息 #380（含移动端 JPEG 图片）的队列粘贴不再报"读取旧图片准备复制失败"，复制图片到剪贴板正常；Android 分享 JPEG 新建消息后落盘文件名为 `.jpg`；存量 13 张 `imported-*.png`（实为 JPEG）功能已不受影响，如需原地改名+更新 DB 记录需用户确认后再做。
