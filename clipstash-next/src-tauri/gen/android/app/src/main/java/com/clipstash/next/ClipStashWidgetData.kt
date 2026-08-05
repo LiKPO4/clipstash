@@ -27,6 +27,9 @@ object ClipStashWidgetData {
   private const val APP_DATA_DIR_NAME = "ClipStash Next"
   private const val DATA_LOCATION_FILE_NAME = "data-location.json"
   private const val DB_NAME = "clipstash.db"
+  // 小组件每次刷新最多加载的未归档消息数：小组件列表实际只需展示少量行，
+  // 200 条足以覆盖滚动查看需求，同时避免消息量大时全量查询拖慢每次刷新。
+  private const val WIDGET_ITEM_LIMIT = 200
 
   fun load(context: Context): ClipStashWidgetState {
     val dbFile = resolveDatabaseFile(context)
@@ -44,6 +47,7 @@ object ClipStashWidgetData {
         null,
         SQLiteDatabase.OPEN_READONLY,
       ).use { db ->
+        db.execSQL("PRAGMA busy_timeout=3000")
         val count = queryNormalCount(db)
         if (count <= 0) {
           return ClipStashWidgetState(
@@ -78,6 +82,7 @@ object ClipStashWidgetData {
         null,
         SQLiteDatabase.OPEN_READWRITE,
       ).use { db ->
+        db.execSQL("PRAGMA busy_timeout=3000")
         val updated = db.execArchiveMessage(messageId)
         updated > 0
       }
@@ -135,6 +140,7 @@ object ClipStashWidgetData {
         WHERE m.archived = 0 OR m.archived IS NULL
         GROUP BY m.id
         ORDER BY m.created_at DESC, m.id DESC
+        LIMIT $WIDGET_ITEM_LIMIT
       """.trimIndent(),
       emptyArray(),
     ).use { cursor ->

@@ -4,7 +4,7 @@ use crate::{
     },
     legacy_model::LegacyMessage,
     legacy_query::read_legacy_message_by_id,
-    legacy_schema::ensure_legacy_schema,
+    legacy_schema::{configure_connection, ensure_legacy_schema},
     legacy_write_precheck::validate_replace_images_request,
     legacy_write_validation::validate_images_data,
 };
@@ -26,6 +26,7 @@ pub(crate) fn create_text_message_for_path(
     let images_dir = data_dir.join("images");
     let conn =
         Connection::open(db_path).map_err(|err| format!("打开旧数据库准备写入失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     conn.execute(
@@ -72,6 +73,7 @@ pub(crate) fn split_message_for_path(
 
     let mut conn =
         Connection::open(db_path).map_err(|err| format!("打开数据库准备拆分失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
     let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
 
@@ -171,6 +173,7 @@ pub(crate) fn replace_message_images_for_path(
 
     let mut conn =
         Connection::open(db_path).map_err(|err| format!("打开旧数据库准备替换图片失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
     let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
 
@@ -230,6 +233,7 @@ pub(crate) fn delete_message_for_path(
     let images_dir = data_dir.join("images");
     let mut conn =
         Connection::open(db_path).map_err(|err| format!("打开旧数据库准备删除失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
     let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
 
@@ -280,6 +284,7 @@ pub(crate) fn set_message_archived_for_path(
     let images_dir = data_dir.join("images");
     let conn =
         Connection::open(db_path).map_err(|err| format!("打开旧数据库准备更新归档失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     let archived_value = if archived { 1 } else { 0 };
@@ -320,6 +325,7 @@ pub(crate) fn update_text_message_for_path(
     let images_dir = data_dir.join("images");
     let conn =
         Connection::open(db_path).map_err(|err| format!("打开旧数据库准备更新失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     let updated = conn
@@ -368,6 +374,7 @@ pub(crate) fn create_mixed_message_for_path(
 
     let mut conn =
         Connection::open(db_path).map_err(|err| format!("打开旧数据库准备写入失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     let mut saved_paths = Vec::new();

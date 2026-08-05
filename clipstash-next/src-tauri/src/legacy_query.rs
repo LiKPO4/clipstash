@@ -1,7 +1,7 @@
 use crate::{
     legacy_model::{LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessageView, SortOrder},
     legacy_paths::path_to_string,
-    legacy_schema::ensure_legacy_schema,
+    legacy_schema::{configure_connection, ensure_legacy_schema},
 };
 use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
@@ -34,6 +34,7 @@ pub(crate) fn read_legacy_stats_from_dir(data_dir: PathBuf) -> Result<LegacyStat
 
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|err| format!("只读打开旧数据库失败：{err}"))?;
+    configure_connection(&conn)?;
 
     ensure_legacy_schema(&conn)?;
 
@@ -88,6 +89,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
 
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|err| format!("只读打开旧数据库失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     let offset = offset.unwrap_or(0).max(0);
@@ -99,11 +101,11 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         .filter(|value| !value.is_empty());
     let search_pattern = normalized_search
         .as_ref()
-        .map(|value| format!("%{}%", value));
+        .map(|value| format!("%{}%", escape_like_pattern(value)));
     let total_count = if let Some(pattern) = search_pattern.as_deref() {
         conn.query_row(
             &format!(
-                "SELECT COUNT(*) FROM messages WHERE ({}) AND text_content LIKE ?",
+                "SELECT COUNT(*) FROM messages WHERE ({}) AND text_content LIKE ? ESCAPE '\\'",
                 view_where_sql(view)
             ),
             params![pattern],
@@ -122,7 +124,10 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         MessageView::Archived => "COALESCE(archived_at, created_at)",
     };
     let where_sql = if search_pattern.is_some() {
-        format!("({}) AND text_content LIKE ?", view_where_sql(view))
+        format!(
+            "({}) AND text_content LIKE ? ESCAPE '\\'",
+            view_where_sql(view)
+        )
     } else {
         view_where_sql(view).to_string()
     };
@@ -210,6 +215,20 @@ fn sort_key(sort: SortOrder) -> &'static str {
         SortOrder::Newest => "newest",
         SortOrder::Oldest => "oldest",
     }
+}
+
+/// 转义 LIKE 通配符，使搜索按字面量匹配 `\`、`%`、`_`。
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '%' => escaped.push_str("\\%"),
+            '_' => escaped.push_str("\\_"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 #[allow(dead_code)]

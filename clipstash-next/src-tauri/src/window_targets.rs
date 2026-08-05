@@ -39,6 +39,28 @@ pub fn last_external_window_target() -> Option<ExternalWindowTarget> {
     last_external_window_store().lock().ok()?.clone()
 }
 
+fn verify_target_identity(
+    target: &ExternalWindowTarget,
+    expected_process_id: u32,
+    expected_title: &str,
+) -> Result<(), String> {
+    if target.process_id != expected_process_id {
+        return Err(format!(
+            "目标窗口已变化，请重新切换到目标窗口后再试（期望 pid={expected_process_id}，实际 pid={}）：hwnd={}",
+            target.process_id, target.hwnd
+        ));
+    }
+    if target.title.trim() != expected_title.trim() {
+        return Err(format!(
+            "目标窗口已变化，请重新切换到目标窗口后再试（期望标题“{}”，实际标题“{}”）：hwnd={}",
+            expected_title.trim(),
+            target.title.trim(),
+            target.hwnd
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 pub fn start_foreground_tracker() {
     TRACKER_STARTED.get_or_init(|| {
@@ -75,6 +97,24 @@ pub fn validate_external_window_target(_hwnd: isize) -> Result<ExternalWindowVal
 }
 
 #[cfg(target_os = "windows")]
+pub fn validate_recent_external_window_target(
+    hwnd: isize,
+    expected_process_id: u32,
+    expected_title: &str,
+) -> Result<ExternalWindowValidation, String> {
+    windows_impl::validate_recent_external_window_target(hwnd, expected_process_id, expected_title)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn validate_recent_external_window_target(
+    _hwnd: isize,
+    _expected_process_id: u32,
+    _expected_title: &str,
+) -> Result<ExternalWindowValidation, String> {
+    Err("目标窗口校验仅支持 Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
 #[allow(dead_code)]
 pub fn focus_external_window_target(hwnd: isize) -> Result<ExternalWindowFocus, String> {
     windows_impl::focus_external_window_target(hwnd)
@@ -89,6 +129,7 @@ pub fn focus_external_window_target(_hwnd: isize) -> Result<ExternalWindowFocus,
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::remember_external_window;
+    use super::verify_target_identity;
     use super::{ExternalWindowFocus, ExternalWindowTarget, ExternalWindowValidation};
     use std::thread;
     use std::time::Duration;
@@ -143,6 +184,39 @@ mod windows_impl {
         if target.title.trim().is_empty() {
             return Err(format!("目标窗口标题为空：hwnd={hwnd_value}"));
         }
+        remember_external_window(target.clone());
+
+        Ok(ExternalWindowValidation {
+            valid: true,
+            target: Some(target),
+        })
+    }
+
+    pub fn validate_recent_external_window_target(
+        hwnd_value: isize,
+        expected_process_id: u32,
+        expected_title: &str,
+    ) -> Result<ExternalWindowValidation, String> {
+        if hwnd_value == 0 {
+            return Err("目标窗口校验失败，hwnd 不能为空".to_string());
+        }
+
+        let hwnd = hwnd_value as HWND;
+        let current_process_id = unsafe { GetCurrentProcessId() };
+        if unsafe { IsWindow(hwnd) == 0 } {
+            return Err(format!(
+                "目标窗口已关闭，请重新切换到目标窗口后再试：hwnd={hwnd_value}"
+            ));
+        }
+        if unsafe { !is_candidate_window(hwnd, current_process_id) } {
+            return Err(format!("目标窗口不可用或属于当前进程：hwnd={hwnd_value}"));
+        }
+
+        let target = unsafe { target_from_hwnd(hwnd) }?;
+        if target.title.trim().is_empty() {
+            return Err(format!("目标窗口标题为空：hwnd={hwnd_value}"));
+        }
+        verify_target_identity(&target, expected_process_id, expected_title)?;
         remember_external_window(target.clone());
 
         Ok(ExternalWindowValidation {
@@ -314,6 +388,28 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verify_target_identity_rejects_changed_pid_or_title() {
+        let target = ExternalWindowTarget {
+            hwnd: 123,
+            process_id: 456,
+            title: "记事本 - 笔记.txt".to_string(),
+        };
+
+        verify_target_identity(&target, 456, "记事本 - 笔记.txt")
+            .expect("identical pid and title must pass");
+        verify_target_identity(&target, 456, "  记事本 - 笔记.txt  ")
+            .expect("title is compared after trim");
+
+        let pid_changed = verify_target_identity(&target, 999, "记事本 - 笔记.txt")
+            .expect_err("changed pid must be rejected");
+        assert!(pid_changed.contains("目标窗口已变化"));
+
+        let title_changed = verify_target_identity(&target, 456, "其他窗口")
+            .expect_err("changed title must be rejected");
+        assert!(title_changed.contains("目标窗口已变化"));
+    }
 
     #[test]
     #[ignore = "reads local desktop windows; set CLIPSTASH_NEXT_LIST_WINDOWS"]

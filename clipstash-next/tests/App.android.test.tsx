@@ -178,7 +178,7 @@ describe("android shell", () => {
         return Promise.resolve(normalPage.messages.find((message) => message.id === messageId));
       }
       if (command === "list_legacy_messages") return Promise.resolve(listedPage);
-      if (command === "read_legacy_image_bytes") return Promise.resolve([]);
+      if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array(0));
       if (command === "create_legacy_text_message") return Promise.resolve(createResult);
       if (command === "create_legacy_image_message") {
         return Promise.resolve({
@@ -454,7 +454,11 @@ describe("android shell", () => {
 
   it("creates a message from android shared text", async () => {
     window.ClipStashAndroid = {
-      consumePendingShare: vi.fn().mockReturnValue(JSON.stringify({ text: "  分享文字  ", images: [] })),
+      // 队列契约：消费一次后返回空串，模拟原生桥逐条消费直到队列为空
+      consumePendingShare: vi
+        .fn()
+        .mockReturnValueOnce(JSON.stringify({ text: "  分享文字  ", images: [] }))
+        .mockReturnValue(""),
       refreshWidgets: androidRefreshWidgetsMock,
     };
     const { default: App } = await import("../src/App");
@@ -474,7 +478,10 @@ describe("android shell", () => {
     window.ClipStashAndroid = {
       consumePendingShare: vi
         .fn()
-        .mockReturnValue(JSON.stringify({ text: "", images: [{ mimeType: "image/png", data: "AQID" }] })),
+        .mockReturnValueOnce(
+          JSON.stringify({ text: "", images: [{ mimeType: "image/png", data: "AQID" }] }),
+        )
+        .mockReturnValue(""),
       refreshWidgets: androidRefreshWidgetsMock,
     };
     const { default: App } = await import("../src/App");

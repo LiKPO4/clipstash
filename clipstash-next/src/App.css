@@ -1235,7 +1235,7 @@ textarea:focus,
   grid-template-rows: 72px;
   border: 0;
   color: inherit;
-  cursor: copy;
+  cursor: zoom-in;
 }
 
 .image-tile img {

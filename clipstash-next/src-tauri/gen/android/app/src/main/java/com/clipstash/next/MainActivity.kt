@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,24 +24,28 @@ import java.net.URL
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
-import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
-  private var pendingShareJson: String? = null
+  // 分享载荷队列：连续多次分享不会互相覆盖（前端每次消费一条，直到队列为空）
+  private val pendingShareQueue = ArrayDeque<String>()
   private var pendingWidgetAction: String? = null
   private var pendingUpdateJson: String? = null
   private var pendingUpdateApk: File? = null
+  // 本次下载流程是否已拉起过「安装未知应用」授权页，避免用户拒绝后 onResume 死循环
+  private var installPermissionPromptShown = false
+  // 当前正在监控的下载任务 id，用于幂等恢复与防重复监控
+  private var activeUpdateDownloadId: Long? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     captureSharedIntent(intent)
     captureWidgetAction(intent)
+    restorePendingUpdateDownload()
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         val webView = appWebView
@@ -96,19 +101,34 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    restorePendingUpdateDownload()
     val apk = pendingUpdateApk ?: return
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
       pendingUpdateApk = null
+      installPermissionPromptShown = false
       openApkInstaller(apk)
+      return
     }
+    if (installPermissionPromptShown) {
+      // 本次下载流程已提示过且用户未授权：只提示结果，不再自动拉起设置页，避免死循环
+      notifyAndroidUpdate("permission", "未获得安装权限，请在系统设置中允许「安装未知应用」后再试")
+      return
+    }
+    installPermissionPromptShown = true
+    notifyAndroidUpdate("permission", "请允许 ClipStash 安装未知应用")
+    startActivity(
+      Intent(
+        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+        Uri.parse("package:$packageName"),
+      ),
+    )
   }
 
   inner class ClipStashAndroidBridge {
     @JavascriptInterface
-    fun consumePendingShare(): String {
-      val payload = pendingShareJson ?: return ""
-      pendingShareJson = null
-      return payload
+    fun consumePendingShare(): String = synchronized(pendingShareQueue) {
+      if (pendingShareQueue.isEmpty()) return@synchronized ""
+      pendingShareQueue.removeFirst()
     }
 
     @JavascriptInterface
@@ -189,7 +209,7 @@ class MainActivity : TauriActivity() {
     fun checkForUpdates(): Boolean {
       return try {
         val executor = Executors.newSingleThreadExecutor()
-        val future: Future<String> = executor.submit(Callable<String> {
+        executor.execute {
           var connection: HttpURLConnection? = null
           try {
             connection = URL(GITHUB_RELEASE_API_URL).openConnection() as HttpURLConnection
@@ -205,36 +225,14 @@ class MainActivity : TauriActivity() {
             val release = connection.inputStream.bufferedReader().use { reader ->
               JSONObject(reader.readText())
             }
-            JSONObject()
-              .put("status", "checked")
-              .put("message", "检查完成")
-              .put("release", release)
-              .toString()
+            notifyAndroidUpdate("checked", "检查完成", release)
           } catch (err: Exception) {
-            JSONObject()
-              .put("status", "error")
-              .put("message", err.message ?: "Android 更新检查失败")
-              .toString()
+            notifyAndroidUpdate("error", err.message ?: "Android 更新检查失败")
           } finally {
             connection?.disconnect()
           }
-        })
-        val payload = try {
-          future.get(20, TimeUnit.SECONDS)
-        } catch (err: Exception) {
-          future.cancel(true)
-          JSONObject()
-            .put("status", "error")
-            .put("message", err.message ?: "Android 更新检查超时")
-            .toString()
         }
         executor.shutdown()
-        val result = JSONObject(payload ?: "")
-        notifyAndroidUpdate(
-          result.getString("status"),
-          result.getString("message"),
-          result.optJSONObject("release"),
-        )
         true
       } catch (err: Exception) {
         notifyAndroidUpdate("error", err.message ?: "无法启动 Android 更新检查")
@@ -268,6 +266,7 @@ class MainActivity : TauriActivity() {
         }
         val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = manager.enqueue(request)
+        installPermissionPromptShown = false
         notifyAndroidUpdate("downloading", "正在下载更新安装包")
         watchUpdateDownload(manager, downloadId, apk)
         true
@@ -299,30 +298,80 @@ class MainActivity : TauriActivity() {
   }
 
   private fun watchUpdateDownload(manager: DownloadManager, downloadId: Long, apk: File) {
+    if (activeUpdateDownloadId == downloadId) return
+    activeUpdateDownloadId = downloadId
+    // 持久化下载任务，进程被杀后 onCreate/onResume 可恢复监控
+    savePendingUpdateDownload(downloadId, apk)
     Thread {
-      while (true) {
-        Thread.sleep(500)
-        val query = DownloadManager.Query().setFilterById(downloadId)
-        manager.query(query)?.use { cursor ->
-          if (!cursor.moveToFirst()) return@use
-          val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-          when (status) {
-            DownloadManager.STATUS_SUCCESSFUL -> {
-              runOnUiThread {
-                notifyAndroidUpdate("installing", "下载完成，正在打开系统安装界面")
-                installDownloadedApk(apk)
-              }
+      try {
+        while (true) {
+          if (activeUpdateDownloadId != downloadId) return@Thread
+          Thread.sleep(500)
+          val query = DownloadManager.Query().setFilterById(downloadId)
+          manager.query(query)?.use { cursor ->
+            if (!cursor.moveToFirst()) {
+              // 下载任务已不存在（用户取消或系统清理），按终止状态处理，避免空转
+              if (activeUpdateDownloadId != downloadId) return@Thread
+              clearPendingUpdateDownload()
+              notifyAndroidUpdate("error", "更新下载任务已失效，请重新下载")
               return@Thread
             }
-            DownloadManager.STATUS_FAILED -> {
-              val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-              notifyAndroidUpdate("error", "更新安装包下载失败（$reason）")
-              return@Thread
+            val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            when (status) {
+              DownloadManager.STATUS_SUCCESSFUL -> {
+                // 先清持久化状态再安装：进程在此后被杀死时，由下载完成通知兜底安装
+                clearPendingUpdateDownload()
+                runOnUiThread {
+                  notifyAndroidUpdate("installing", "下载完成，正在打开系统安装界面")
+                  installDownloadedApk(apk)
+                }
+                return@Thread
+              }
+              DownloadManager.STATUS_FAILED -> {
+                val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                if (activeUpdateDownloadId != downloadId) return@Thread
+                clearPendingUpdateDownload()
+                notifyAndroidUpdate("error", "更新安装包下载失败（$reason）")
+                return@Thread
+              }
+              // 其余状态（RUNNING/PAUSED/PENDING）继续轮询
+              else -> Unit
             }
           }
         }
+      } finally {
+        if (activeUpdateDownloadId == downloadId) {
+          activeUpdateDownloadId = null
+        }
       }
     }.start()
+  }
+
+  private fun updatePrefs(): SharedPreferences =
+    getSharedPreferences(PREFS_UPDATE, Context.MODE_PRIVATE)
+
+  private fun savePendingUpdateDownload(downloadId: Long, apk: File) {
+    updatePrefs().edit()
+      .putLong(KEY_DOWNLOAD_ID, downloadId)
+      .putString(KEY_DOWNLOAD_APK_PATH, apk.absolutePath)
+      .apply()
+  }
+
+  private fun clearPendingUpdateDownload() {
+    updatePrefs().edit()
+      .remove(KEY_DOWNLOAD_ID)
+      .remove(KEY_DOWNLOAD_APK_PATH)
+      .apply()
+  }
+
+  /** 进程被杀后恢复未完成的下载监控（onCreate/onResume 调用，幂等）。 */
+  private fun restorePendingUpdateDownload() {
+    val prefs = updatePrefs()
+    val downloadId = prefs.getLong(KEY_DOWNLOAD_ID, 0)
+    val apkPath = prefs.getString(KEY_DOWNLOAD_APK_PATH, null) ?: return
+    if (downloadId <= 0 || apkPath.isEmpty()) return
+    val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+    watchUpdateDownload(manager, downloadId, File(apkPath))
   }
 
   private fun installDownloadedApk(apk: File) {
@@ -332,6 +381,7 @@ class MainActivity : TauriActivity() {
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
       pendingUpdateApk = apk
+      installPermissionPromptShown = true
       notifyAndroidUpdate("permission", "请允许 ClipStash 安装未知应用")
       startActivity(
         Intent(
@@ -429,10 +479,14 @@ class MainActivity : TauriActivity() {
     val images = readSharedImages(intent)
     if (text.isEmpty() && images.length() == 0) return false
 
-    pendingShareJson = JSONObject()
-      .put("text", text)
-      .put("images", images)
-      .toString()
+    synchronized(pendingShareQueue) {
+      pendingShareQueue.addLast(
+        JSONObject()
+          .put("text", text)
+          .put("images", images)
+          .toString(),
+      )
+    }
     return true
   }
 
@@ -468,5 +522,8 @@ class MainActivity : TauriActivity() {
     private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
     private const val GITHUB_RELEASE_API_URL =
       "https://api.github.com/repos/LiKPO4/clipstash/releases/latest"
+    private const val PREFS_UPDATE = "clipstash_android_update"
+    private const val KEY_DOWNLOAD_ID = "download_id"
+    private const val KEY_DOWNLOAD_APK_PATH = "download_apk_path"
   }
 }

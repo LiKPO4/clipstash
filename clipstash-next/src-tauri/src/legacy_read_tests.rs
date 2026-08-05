@@ -42,6 +42,11 @@ fn reads_counts_from_legacy_messages_table() {
             archived INTEGER DEFAULT 0,
             archived_at TIMESTAMP
         );
+        CREATE TABLE message_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL,
+            image_filename TEXT NOT NULL
+        );
         INSERT INTO messages (text_content, archived) VALUES ('normal', 0);
         INSERT INTO messages (text_content, archived) VALUES ('archived', 1);
         INSERT INTO messages (text_content, archived) VALUES ('legacy-null', NULL);
@@ -141,6 +146,78 @@ fn lists_messages_with_ordered_image_status() {
     assert_eq!(search_page.total_count, 1);
     assert!(!search_page.has_more);
     assert_eq!(search_page.messages[0].id, 1);
+
+    fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+}
+
+#[test]
+fn search_like_wildcards_match_literals_only() {
+    let data_dir = env::temp_dir().join(format!(
+        "clipstash-next-legacy-like-escape-test-{}",
+        process::id()
+    ));
+    let _ = fs::remove_dir_all(&data_dir);
+    fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+
+    let db_path = data_dir.join("clipstash.db");
+    let conn = Connection::open(&db_path).expect("create sqlite fixture");
+    conn.execute_batch(
+        "
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            archived INTEGER DEFAULT 0,
+            archived_at TIMESTAMP
+        );
+        CREATE TABLE message_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL,
+            image_filename TEXT NOT NULL
+        );
+        INSERT INTO messages (id, text_content, created_at, archived) VALUES
+            (1, 'discount 100% off', '2024-01-01 00:00:00', 0),
+            (2, 'score is 100x better', '2024-02-01 00:00:00', 0),
+            (3, 'has_underscore text', '2024-03-01 00:00:00', 0),
+            (4, 'hasXunderscore text', '2024-04-01 00:00:00', 0);
+        ",
+    )
+    .expect("seed fixture");
+    drop(conn);
+
+    let percent_page = list_legacy_messages_from_dir_filtered(
+        data_dir.clone(),
+        MessageView::Normal,
+        SortOrder::Newest,
+        Some(0),
+        Some(10),
+        Some("100%".to_string()),
+    )
+    .expect("search literal percent");
+
+    assert_eq!(percent_page.total_count, 1);
+    assert_eq!(percent_page.messages[0].id, 1);
+    assert_eq!(
+        percent_page.messages[0].text_content.as_deref(),
+        Some("discount 100% off")
+    );
+
+    let underscore_page = list_legacy_messages_from_dir_filtered(
+        data_dir.clone(),
+        MessageView::Normal,
+        SortOrder::Newest,
+        Some(0),
+        Some(10),
+        Some("has_underscore".to_string()),
+    )
+    .expect("search literal underscore");
+
+    assert_eq!(underscore_page.total_count, 1);
+    assert_eq!(underscore_page.messages[0].id, 3);
+    assert_eq!(
+        underscore_page.messages[0].text_content.as_deref(),
+        Some("has_underscore text")
+    );
 
     fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
 }

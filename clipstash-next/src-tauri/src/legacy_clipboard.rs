@@ -12,6 +12,33 @@ use arboard::{Clipboard, ImageData};
 #[cfg(target_os = "windows")]
 use std::borrow::Cow;
 
+/// 打开系统剪贴板并执行写入，被其他进程瞬时占用时轻量重试
+/// （5 次、每次间隔 50ms），仍失败则返回最后一次错误。
+#[cfg(target_os = "windows")]
+fn clipboard_write_with_retry<T>(
+    label: &str,
+    mut action: impl FnMut() -> Result<T, arboard::Error>,
+) -> Result<T, String> {
+    let mut last_error: Option<arboard::Error> = None;
+    for attempt in 0..5 {
+        match action() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                last_error = Some(err);
+                if attempt < 4 {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "{label}失败：{}",
+        last_error
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| "未知剪贴板错误".to_string())
+    ))
+}
+
 #[derive(Debug, Serialize)]
 pub struct LegacyCopyImageResult {
     pub filename: String,
@@ -89,15 +116,15 @@ pub(crate) fn copy_legacy_image_to_clipboard_from_dir(
         let (width, height) = image.dimensions();
         let bytes = image.into_raw();
 
-        let mut clipboard =
-            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制图片失败：{err}"))?;
-        clipboard
-            .set_image(ImageData {
-                width: width as usize,
-                height: height as usize,
-                bytes: Cow::Owned(bytes),
-            })
-            .map_err(|err| format!("写入图片到系统剪贴板失败：{err}"))?;
+        let image_data = ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(bytes),
+        };
+        clipboard_write_with_retry("写入图片到系统剪贴板", || {
+            let mut clipboard = Clipboard::new()?;
+            clipboard.set_image(image_data.clone())
+        })?;
 
         Ok(LegacyCopyImageResult {
             filename,
@@ -129,11 +156,10 @@ pub(crate) fn copy_legacy_message_text_to_clipboard_from_dir(
 
     #[cfg(target_os = "windows")]
     {
-        let mut clipboard =
-            Clipboard::new().map_err(|err| format!("打开系统剪贴板准备复制文字失败：{err}"))?;
-        clipboard
-            .set_text(text.to_string())
-            .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+        clipboard_write_with_retry("写入文字到系统剪贴板", || {
+            let mut clipboard = Clipboard::new()?;
+            clipboard.set_text(text.to_string())
+        })?;
 
         Ok(LegacyCopyTextResult {
             message_id,
@@ -167,11 +193,10 @@ pub(crate) fn stage_legacy_message_import_to_clipboard_from_dir(
 
         #[cfg(target_os = "windows")]
         {
-            let mut clipboard =
-                Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
-            clipboard
-                .set_text(text.to_string())
-                .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+            clipboard_write_with_retry("写入文字到系统剪贴板", || {
+                let mut clipboard = Clipboard::new()?;
+                clipboard.set_text(text.to_string())
+            })?;
 
             return Ok(LegacyImportStageResult {
                 message_id,
@@ -289,11 +314,10 @@ pub(crate) fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
 
         #[cfg(target_os = "windows")]
         {
-            let mut clipboard =
-                Clipboard::new().map_err(|err| format!("打开系统剪贴板准备导入文字失败：{err}"))?;
-            clipboard
-                .set_text(text.to_string())
-                .map_err(|err| format!("写入文字到系统剪贴板失败：{err}"))?;
+            clipboard_write_with_retry("写入文字到系统剪贴板", || {
+                let mut clipboard = Clipboard::new()?;
+                clipboard.set_text(text.to_string())
+            })?;
 
             return Ok(LegacyImportQueueCopyResult {
                 message_id,
@@ -325,4 +349,43 @@ pub(crate) fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
     }
 
     Err(format!("复制导入队列项失败，未知队列项类型：{}", item.kind))
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::clipboard_write_with_retry;
+    use arboard::Error;
+
+    #[test]
+    fn clipboard_write_retries_then_succeeds() {
+        let mut attempts = 0;
+        let result = clipboard_write_with_retry("测试写入", || -> Result<(), Error> {
+            attempts += 1;
+            if attempts < 3 {
+                Err(Error::Unknown {
+                    description: "剪贴板被占用".to_string(),
+                })
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn clipboard_write_retries_five_times_then_returns_last_error() {
+        let mut attempts = 0;
+        let result = clipboard_write_with_retry("测试写入", || -> Result<(), Error> {
+            attempts += 1;
+            Err(Error::Unknown {
+                description: format!("占用{attempts}"),
+            })
+        });
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 5);
+        assert!(result.unwrap_err().contains("占用5"));
+    }
 }

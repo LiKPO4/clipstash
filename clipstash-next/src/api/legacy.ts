@@ -229,10 +229,11 @@ export function copyLegacyImageToClipboard(filename: string) {
   });
 }
 
-export function readLegacyImageBytes(filename: string) {
-  return invoke<number[]>("read_legacy_image_bytes", {
+export async function readLegacyImageBytes(filename: string): Promise<Uint8Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array>("read_legacy_image_bytes", {
     filename,
   });
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 }
 
 export function readDroppedFileBytes(path: string) {

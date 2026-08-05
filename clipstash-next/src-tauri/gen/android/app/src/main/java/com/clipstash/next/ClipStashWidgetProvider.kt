@@ -15,24 +15,6 @@ import android.widget.RemoteViews
 import android.widget.Toast
 
 class ClipStashWidgetProvider : AppWidgetProvider() {
-  override fun onReceive(context: Context, intent: Intent) {
-    super.onReceive(context, intent)
-    if (intent.action != ACTION_ITEM_CLICK) return
-
-    val appWidgetId = intent.getIntExtra(
-      AppWidgetManager.EXTRA_APPWIDGET_ID,
-      AppWidgetManager.INVALID_APPWIDGET_ID,
-    )
-    when (intent.getStringExtra(EXTRA_ITEM_ACTION)) {
-      ITEM_ACTION_OPEN -> openApp(
-        context,
-        appWidgetId,
-        intent.getLongExtra(EXTRA_MESSAGE_ID, 0),
-      )
-      ITEM_ACTION_ARCHIVE -> archiveMessage(context, intent, appWidgetId)
-    }
-  }
-
   override fun onUpdate(
     context: Context,
     appWidgetManager: AppWidgetManager,
@@ -114,6 +96,21 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
       }
     }
 
+    /**
+     * 由内部接收器 [ClipStashWidgetActionsReceiver] 调用的点击/归档分发入口。
+     * Provider 本身不处理自定义 action，避免导出的 Provider 收到伪造广播。
+     */
+    internal fun handleItemClick(context: Context, intent: Intent, appWidgetId: Int) {
+      when (intent.getStringExtra(EXTRA_ITEM_ACTION)) {
+        ITEM_ACTION_OPEN -> openApp(
+          context,
+          appWidgetId,
+          intent.getLongExtra(EXTRA_MESSAGE_ID, 0),
+        )
+        ITEM_ACTION_ARCHIVE -> archiveMessage(context, intent, appWidgetId)
+      }
+    }
+
     private fun archiveMessage(context: Context, intent: Intent, appWidgetId: Int) {
       val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, 0)
       val rowIndex = intent.getIntExtra(EXTRA_ROW_INDEX, 0)
@@ -155,7 +152,8 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
     }
 
     private fun itemClickTemplate(context: Context, appWidgetId: Int): PendingIntent {
-      val intent = Intent(context, ClipStashWidgetProvider::class.java).apply {
+      // 指向内部接收器（exported=false），而不是导出的 Provider，防止伪造广播
+      val intent = Intent(context, ClipStashWidgetActionsReceiver::class.java).apply {
         action = ACTION_ITEM_CLICK
         putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
       }

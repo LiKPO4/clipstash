@@ -368,7 +368,7 @@ describe("edit and delete guarded actions", () => {
           ],
         });
       }
-      if (command === "read_legacy_image_bytes") return Promise.resolve(tinyPngBytes);
+      if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array(tinyPngBytes));
       if (command === "delete_legacy_message") {
         if (failNextDelete) {
           failNextDelete = false;

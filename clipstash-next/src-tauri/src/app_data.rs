@@ -1,4 +1,5 @@
 use crate::{
+    legacy_backup::create_legacy_db_backup_for_path,
     legacy_clipboard::{
         copy_legacy_image_to_clipboard_from_dir,
         copy_legacy_message_import_queue_item_to_clipboard_from_dir,
@@ -20,13 +21,13 @@ use crate::{
         list_legacy_messages_from_dir, list_legacy_messages_from_dir_filtered, query_count,
         read_legacy_stats_from_dir,
     },
-    legacy_schema::ensure_legacy_schema,
+    legacy_schema::{configure_connection, ensure_legacy_schema},
     legacy_write_exec::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
         delete_message_for_path, replace_message_images_for_path, set_message_archived_for_path,
         split_message_for_path, update_text_message_for_path,
     },
-    legacy_write_precheck::read_message_for_update_precheck,
+    legacy_write_precheck::{read_message_for_update_precheck, validate_replace_images_request},
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
 };
 use chrono::Utc;
@@ -292,10 +293,12 @@ pub fn replace_message_images(
     images_data: Vec<Vec<u8>>,
 ) -> Result<LegacyReplaceImagesResult, String> {
     let paths = ready_paths()?;
+    validate_replace_images_request(&paths.db_path, message_id, &images_data)?;
+    let backup = create_legacy_db_backup_for_path(&paths.db_path)?;
     let message = replace_message_images_for_path(&paths.db_path, message_id, images_data)?;
     Ok(LegacyReplaceImagesResult {
-        backup: empty_backup(&paths.db_path),
-        audit: audit("replace_message_images", message.id),
+        audit: audit_for_backup("replace_message_images", message.id, &backup),
+        backup,
         image_backup: None::<LegacyImageFilesBackup>,
         message,
     })
@@ -307,6 +310,8 @@ pub fn split_message(
     images_data: Vec<Vec<u8>>,
 ) -> Result<LegacySplitMessageResult, String> {
     let paths = ready_paths()?;
+    let _ = read_message_for_update_precheck(&paths.db_path, message_id)?;
+    let _backup = create_legacy_db_backup_for_path(&paths.db_path)?;
     let messages = split_message_for_path(&paths.db_path, message_id, text_content, images_data)?;
     Ok(LegacySplitMessageResult {
         original_message_id: message_id,
@@ -316,10 +321,12 @@ pub fn split_message(
 
 pub fn delete_message(message_id: i64) -> Result<LegacyDeleteMessageResult, String> {
     let paths = ready_paths()?;
+    let _ = read_message_for_update_precheck(&paths.db_path, message_id)?;
+    let backup = create_legacy_db_backup_for_path(&paths.db_path)?;
     let message = delete_message_for_path(&paths.db_path, message_id)?;
     Ok(LegacyDeleteMessageResult {
-        backup: empty_backup(&paths.db_path),
-        audit: audit("delete_message", message.id),
+        audit: audit_for_backup("delete_message", message.id, &backup),
+        backup,
         image_backup: None::<LegacyImageFilesBackup>,
         message,
     })
@@ -349,7 +356,9 @@ pub fn archive_messages(message_ids: &[i64]) -> Result<AppStats, String> {
 }
 
 fn archive_messages_for_path(db_path: &Path, message_ids: &[i64]) -> Result<usize, String> {
-    let mut conn = Connection::open(db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
+    let conn = Connection::open(db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
+    configure_connection(&conn)?;
+    let mut conn = conn;
     let transaction = conn
         .transaction()
         .map_err(|err| format!("开始批量归档事务失败：{err}"))?;
@@ -547,8 +556,10 @@ fn copy_dir_contents(source: &Path, target: &Path) -> Result<(), String> {
 }
 
 fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
+    configure_connection(conn)?;
     conn.execute_batch(
         "
+        PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             text_content TEXT,
@@ -569,6 +580,10 @@ fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
             legacy_message_count INTEGER NOT NULL,
             legacy_image_count INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_messages_archived_created
+            ON messages(archived, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_message_images_message_id
+            ON message_images(message_id);
         ",
     )
     .map_err(|err| format!("初始化应用数据库结构失败：{err}"))?;
@@ -875,6 +890,15 @@ fn copy_legacy_image_if_present(
     image_id: i64,
     filename: &str,
 ) -> Result<ImageCopyResult, String> {
+    // 与读路径 resolve_legacy_image_path 防护对齐：文件名含路径分隔符或 `..` 时
+    // 视为缺失跳过，避免把旧库中的恶意 filename 复制到目录之外。
+    let trimmed = filename.trim();
+    if trimmed.is_empty() || Path::new(trimmed).components().count() != 1 {
+        return Ok(ImageCopyResult {
+            filename: filename.to_string(),
+            copied: false,
+        });
+    }
     let source = legacy_images_dir.join(filename);
     if !source.is_file() {
         return Ok(ImageCopyResult {
@@ -1008,6 +1032,7 @@ fn collect_legacy_messages(
 fn read_app_stats_from_paths(paths: &AppPaths) -> Result<AppStats, String> {
     let conn =
         Connection::open(&paths.db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
+    configure_connection(&conn)?;
     let normal_count = query_count(
         &conn,
         "SELECT COUNT(*) FROM messages WHERE archived = 0 OR archived IS NULL",
@@ -1048,6 +1073,15 @@ fn audit(operation: &str, message_id: i64) -> LegacyWriteAudit {
         operation: operation.to_string(),
         message_id,
         db_backup_path: String::new(),
+        image_backup_dir: None,
+    }
+}
+
+fn audit_for_backup(operation: &str, message_id: i64, backup: &LegacyDbBackup) -> LegacyWriteAudit {
+    LegacyWriteAudit {
+        operation: operation.to_string(),
+        message_id,
+        db_backup_path: backup.backup_path.clone(),
         image_backup_dir: None,
     }
 }
@@ -1106,6 +1140,40 @@ mod tests {
         )
         .unwrap();
         legacy_dir
+    }
+
+    #[test]
+    fn skips_migrating_images_with_unsafe_filenames() {
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-migrate-unsafe-image-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let legacy_images = base.join("legacy-images");
+        let app_images = base.join("app-images");
+        fs::create_dir_all(&legacy_images).unwrap();
+        fs::create_dir_all(&app_images).unwrap();
+        fs::write(legacy_images.join("outside.png"), b"outside").unwrap();
+
+        let traversal =
+            copy_legacy_image_if_present(&legacy_images, &app_images, 1, 1, "../outside.png")
+                .unwrap();
+        assert!(!traversal.copied);
+        assert!(!base.join("outside.png").exists());
+
+        let subdir =
+            copy_legacy_image_if_present(&legacy_images, &app_images, 1, 2, "sub/one.png").unwrap();
+        assert!(!subdir.copied);
+
+        let empty = copy_legacy_image_if_present(&legacy_images, &app_images, 1, 3, "  ").unwrap();
+        assert!(!empty.copied);
+
+        let normal =
+            copy_legacy_image_if_present(&legacy_images, &app_images, 1, 4, "outside.png").unwrap();
+        assert!(normal.copied);
+        assert!(app_images.join("outside.png").is_file());
+
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

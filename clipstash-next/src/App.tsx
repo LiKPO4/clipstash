@@ -9,7 +9,6 @@ import {
   type ReactNode,
   type TouchEvent,
   type RefObject,
-  type WheelEvent,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -19,6 +18,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
+import { formatLocalTime } from "./formatTime";
 import {
   archiveExportedMessages,
   copyLegacyMessageTextToClipboard,
@@ -79,7 +79,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.1.19";
+const CURRENT_VERSION = "2.2.0";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -197,6 +197,9 @@ type ReleaseDownloadAsset = {
 
 let hoverPreviewWindow: WebviewWindow | null = null;
 let hoverPreviewStorageKey: string | null = null;
+// 预览窗口创建代次：close 时递增；show 的异步流程每次 await 后校验，代次过期则放弃创建，
+// 避免鼠标已移开（或已按 Escape）后异步流程仍把窗口创建出来造成残留。
+let hoverPreviewSeq = 0;
 const MESSAGE_DOUBLE_CLICK_DELAY_MS = 220;
 
 function App() {
@@ -289,8 +292,11 @@ function App() {
   const [dataImportPreview, setDataImportPreview] = useState<DataImportPreview | null>(null);
   const [dataTransferError, setDataTransferError] = useState<string | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
+  // 上次实际调用 setAlwaysOnTop IPC 时的值，用于跳过无变化的重复调用（null 表示尚未调用过）。
+  const lastAlwaysOnTopValueRef = useRef<boolean | null>(null);
   const dataPackageInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMessageListScrollTopRef = useRef<number | null>(null);
+  const requestEpochRef = useRef(0);
   const [dataPackageInputKey, setDataPackageInputKey] = useState(0);
 
   useEffect(() => {
@@ -301,18 +307,20 @@ function App() {
     if (!IS_ANDROID) return;
 
     function consumeAndroidShare() {
-      const rawPayload = window.ClipStashAndroid?.consumePendingShare?.();
-      if (!rawPayload) return;
-
-      try {
-        const payload = JSON.parse(rawPayload) as AndroidSharedPayload;
-        createMessageFromAndroidShare(payload).catch((err: unknown) => {
+      // 队列式消费：连续多次分享时每次消费一条，直到队列为空，避免丢分享
+      let rawPayload = window.ClipStashAndroid?.consumePendingShare?.();
+      while (rawPayload) {
+        try {
+          const payload = JSON.parse(rawPayload) as AndroidSharedPayload;
+          createMessageFromAndroidShare(payload).catch((err: unknown) => {
+            setAndroidShareError(err instanceof Error ? err.message : String(err));
+            setAndroidShareResult(null);
+          });
+        } catch (err) {
           setAndroidShareError(err instanceof Error ? err.message : String(err));
           setAndroidShareResult(null);
-        });
-      } catch (err) {
-        setAndroidShareError(err instanceof Error ? err.message : String(err));
-        setAndroidShareResult(null);
+        }
+        rawPayload = window.ClipStashAndroid?.consumePendingShare?.();
       }
     }
 
@@ -420,19 +428,21 @@ function App() {
 
   useEffect(() => {
     let alive = true;
+    const requestEpoch = ++requestEpochRef.current;
 
     setError(null);
+    setLoadingMore(false);
 
     loadAppDataWithImages(view, sort, imageSources, searchQuery)
       .then(({ imageSources: nextImageSources, page: nextPage, stats: nextStats }) => {
-        if (!alive) return;
+        if (!alive || requestEpochRef.current !== requestEpoch) return;
         setImageSources(nextImageSources);
         setStats(nextStats);
         setPage(nextPage);
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!alive) return;
+        if (!alive || requestEpochRef.current !== requestEpoch) return;
         setError(err instanceof Error ? err.message : String(err));
         setPage(null);
       })
@@ -456,6 +466,7 @@ function App() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        closeHoverPreviewWindow();
         setPreviewImage(null);
       } else if (event.key === "ArrowLeft") {
         setPreviewImage((current) => shiftPreviewImage(current, -1));
@@ -812,7 +823,8 @@ function App() {
     setCaptureHotkey(settings.capture_hotkey);
     setSort(settings.sort);
     setMessageDoubleClickAction(settings.message_double_click_action ?? "edit");
-    if (!IS_ANDROID) {
+    if (!IS_ANDROID && settings.always_on_top !== lastAlwaysOnTopValueRef.current) {
+      lastAlwaysOnTopValueRef.current = settings.always_on_top;
       getCurrentWindow()
         .setAlwaysOnTop(settings.always_on_top)
         .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
@@ -892,6 +904,7 @@ function App() {
 
   async function loadMore() {
     if (!page || loadingMore) return;
+    const requestEpoch = ++requestEpochRef.current;
 
     setLoadingMore(true);
     setError(null);
@@ -904,10 +917,12 @@ function App() {
         limit: PAGE_LIMIT,
         search: searchQuery,
       });
+      if (requestEpochRef.current !== requestEpoch) return;
       const nextImageSources = await preloadMessageImageSources(
         nextPage.messages,
         imageSources,
       );
+      if (requestEpochRef.current !== requestEpoch) return;
       setImageSources(nextImageSources);
       setPage({
         ...nextPage,
@@ -915,6 +930,7 @@ function App() {
         messages: [...page.messages, ...nextPage.messages],
       });
     } catch (err) {
+      if (requestEpochRef.current !== requestEpoch) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingMore(false);
@@ -922,11 +938,13 @@ function App() {
   }
 
   async function refreshAppData({ preserveListScroll = true } = {}) {
+    const requestEpoch = ++requestEpochRef.current;
     if (preserveListScroll) {
       pendingMessageListScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
     }
     const { imageSources: nextImageSources, page: nextPage, stats: nextStats } =
       await loadAppDataWithImages(view, sort, imageSources, searchQuery);
+    if (requestEpochRef.current !== requestEpoch) return;
     setImageSources(nextImageSources);
     setStats(nextStats);
     setPage(nextPage);
@@ -1072,6 +1090,7 @@ function App() {
 
   async function runLegacyMigration() {
     if (migratingLegacyData) return;
+    const requestEpoch = ++requestEpochRef.current;
 
     setMigratingLegacyData(true);
     setMigrationError(null);
@@ -1079,6 +1098,7 @@ function App() {
 
     try {
       const result = await migrateLegacyData();
+      if (requestEpochRef.current !== requestEpoch) return;
       setMigrationResult(result);
       setStats(result.stats);
       const nextPage = await listLegacyMessages({
@@ -1088,6 +1108,7 @@ function App() {
         limit: PAGE_LIMIT,
       });
       const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+      if (requestEpochRef.current !== requestEpoch) return;
       setImageSources(nextImageSources);
       setPage(nextPage);
       setSettingsNotice(
@@ -1104,6 +1125,7 @@ function App() {
   }
 
   async function refreshPageAfterDataChange(nextStats: LegacyStats) {
+    const requestEpoch = ++requestEpochRef.current;
     setStats(nextStats);
     const nextPage = await listLegacyMessages({
       view,
@@ -1112,6 +1134,7 @@ function App() {
       limit: PAGE_LIMIT,
     });
     const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+    if (requestEpochRef.current !== requestEpoch) return;
     setImageSources(nextImageSources);
     setPage(nextPage);
   }
@@ -1281,6 +1304,7 @@ function App() {
 
   async function moveAppDataDir() {
     if (movingAppData) return;
+    const requestEpoch = ++requestEpochRef.current;
 
     setMovingAppData(true);
     setOpenPathError(null);
@@ -1288,6 +1312,7 @@ function App() {
 
     try {
       const result = await moveAppDataToSelectedDir();
+      if (requestEpochRef.current !== requestEpoch) return;
       setStats(result.stats);
       const nextPage = await listLegacyMessages({
         view,
@@ -1296,6 +1321,7 @@ function App() {
         limit: PAGE_LIMIT,
       });
       const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+      if (requestEpochRef.current !== requestEpoch) return;
       setImageSources(nextImageSources);
       setPage(nextPage);
       setSettingsNotice("数据目录已迁移，原目录已保留");
@@ -1312,6 +1338,7 @@ function App() {
 
   async function repairAppData() {
     if (repairingAppData) return;
+    const requestEpoch = ++requestEpochRef.current;
 
     setRepairingAppData(true);
     setOpenPathError(null);
@@ -1319,6 +1346,7 @@ function App() {
 
     try {
       const result = await repairAppDataDir();
+      if (requestEpochRef.current !== requestEpoch) return;
       setStats(result.stats);
       const nextPage = await listLegacyMessages({
         view,
@@ -1327,6 +1355,7 @@ function App() {
         limit: PAGE_LIMIT,
       });
       const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
+      if (requestEpochRef.current !== requestEpoch) return;
       setImageSources(nextImageSources);
       setPage(nextPage);
       setSettingsNotice(
@@ -1412,6 +1441,7 @@ function App() {
       throw new Error("分享内容为空");
     }
 
+    const requestEpoch = ++requestEpochRef.current;
     setAndroidShareError(null);
     setAndroidShareResult(null);
     setShowComposer(false);
@@ -1428,10 +1458,12 @@ function App() {
 
     const [nextStats, nextPage] = await loadAppData("normal", sort, "");
     const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
-    setView("normal");
-    setStats(nextStats);
-    setImageSources(nextImageSources);
-    setPage(nextPage);
+    if (requestEpochRef.current === requestEpoch) {
+      setView("normal");
+      setStats(nextStats);
+      setImageSources(nextImageSources);
+      setPage(nextPage);
+    }
     setAndroidShareResult(result.message);
     refreshAndroidWidgets();
   }
@@ -3076,19 +3108,31 @@ function MessageList({
     }
   }
 
-  function handleWheel(event: WheelEvent<HTMLElement>) {
-    if (!listRef.current) return;
-    if (scrollLines === 1) {
-      window.setTimeout(() => {
-        if (listRef.current) requestMoreIfNearBottom(listRef.current);
-      }, 0);
-      return;
-    }
+  // React 19 在 root 上以 passive:true 绑定合成 wheel 事件，preventDefault() 会被忽略，
+  // 导致 scrollLines>1 时原生滚动与手动滚动叠加；改为在列表容器上用非 passive 原生监听，
+  // scrollLines===1 时不做拦截、保持原生滚动语义。
+  useEffect(() => {
+    const element = listRef.current;
+    if (!element) return;
 
-    event.preventDefault();
-    listRef.current.scrollTop += event.deltaY * scrollLines;
-    requestMoreIfNearBottom(listRef.current);
-  }
+    const handleNativeWheel = (event: globalThis.WheelEvent) => {
+      if (scrollLines === 1) {
+        window.setTimeout(() => {
+          if (listRef.current) requestMoreIfNearBottom(listRef.current);
+        }, 0);
+        return;
+      }
+
+      event.preventDefault();
+      if (listRef.current) {
+        listRef.current.scrollTop += event.deltaY * scrollLines;
+        requestMoreIfNearBottom(listRef.current);
+      }
+    };
+
+    element.addEventListener("wheel", handleNativeWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleNativeWheel);
+  }, [scrollLines]);
 
   return (
     <section
@@ -3096,7 +3140,6 @@ function MessageList({
       aria-label="消息列表"
       ref={listRef}
       onScroll={(event) => requestMoreIfNearBottom(event.currentTarget)}
-      onWheel={handleWheel}
       onDoubleClick={(event) => {
         if (event.target === event.currentTarget) {
           onBlankDoubleClick();
@@ -3125,11 +3168,11 @@ function MessageList({
               <div className="message-meta-text">
                 <div className="message-time-line">
                   <strong>#{message.id}</strong>
-                  <span>{message.created_at}</span>
+                  <span>{formatLocalTime(message.created_at)}</span>
                 </div>
                 {message.archived && (
                   <span className="archived-at">
-                    归档于 {message.archived_at ?? "未知时间"}
+                    归档于 {message.archived_at ? formatLocalTime(message.archived_at) : "未知时间"}
                   </span>
                 )}
               </div>
@@ -3579,7 +3622,7 @@ function DeleteMessageDialog({
       >
         <header className="edit-header">
           <div>
-            <p className="eyebrow">Phase 2 / Delete Guard</p>
+            <p className="eyebrow">删除确认</p>
             <h2>删除 #{message.id}</h2>
           </div>
           <button type="button" className="preview-close" onClick={onClose} aria-label="关闭删除">
@@ -3894,7 +3937,10 @@ function AndroidImagePreview({
 }
 
 async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
+  const seq = ++hoverPreviewSeq;
   const dimensions = await loadImageDimensions(image.src);
+  if (seq !== hoverPreviewSeq) return;
+
   const position = calculateScreenPreviewPosition(anchor, dimensions.width, dimensions.height);
   const key = `clipstash.preview.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   localStorage.setItem(
@@ -3905,7 +3951,11 @@ async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
     }),
   );
 
-  await closeHoverPreviewWindow();
+  await closeHoverPreviewWindowInternal();
+  if (seq !== hoverPreviewSeq) {
+    localStorage.removeItem(key);
+    return;
+  }
   hoverPreviewStorageKey = key;
 
   const previewWindow = new WebviewWindow("image-preview", {
@@ -3937,6 +3987,11 @@ async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
 }
 
 async function closeHoverPreviewWindow() {
+  hoverPreviewSeq += 1;
+  await closeHoverPreviewWindowInternal();
+}
+
+async function closeHoverPreviewWindowInternal() {
   const existingWindow = hoverPreviewWindow ?? (await WebviewWindow.getByLabel("image-preview"));
   const existingKey = hoverPreviewStorageKey;
   hoverPreviewWindow = null;
@@ -4255,7 +4310,7 @@ async function legacyImageToDataUrl(image: LegacyMessageImage) {
   return bytesToDataUrl(bytes, mimeTypeFromImagePath(image.filename));
 }
 
-function bytesToDataUrl(bytes: number[], mimeType: string) {
+function bytesToDataUrl(bytes: Uint8Array, mimeType: string) {
   let binary = "";
   const chunkSize = 8192;
   for (let index = 0; index < bytes.length; index += chunkSize) {
@@ -4274,26 +4329,39 @@ function base64ToNumberArray(value: string) {
   return bytes;
 }
 
+const MAX_IMAGE_SOURCE_ENTRIES = 300;
+
 async function preloadMessageImageSources(
   messages: LegacyMessage[],
   currentSources: Record<string, string>,
 ) {
-  const nextSources = { ...currentSources };
+  const nextSources = new Map(Object.entries(currentSources));
   const missingImages = messages
     .flatMap((message) => message.images)
-    .filter((image) => image.exists && !nextSources[image.path]);
+    .filter((image) => image.exists && !nextSources.has(image.path));
 
-  await Promise.all(
-    missingImages.map(async (image) => {
-      try {
-        nextSources[image.path] = await legacyImageToDataUrl(image);
-      } catch {
-        // Keep missing entries absent so genuinely broken files still show a stable placeholder.
-      }
-    }),
-  );
+  const decodeImage = async (image: LegacyMessageImage) => {
+    try {
+      nextSources.set(image.path, await legacyImageToDataUrl(image));
+    } catch {
+      // Keep missing entries absent so genuinely broken files still show a stable placeholder.
+    }
+  };
 
-  return nextSources;
+  const decodeConcurrency = 4;
+  for (let offset = 0; offset < missingImages.length; offset += decodeConcurrency) {
+    await Promise.all(missingImages.slice(offset, offset + decodeConcurrency).map(decodeImage));
+  }
+
+  // Cap the decoded-image cache so browsing a huge archive cannot grow memory without bound.
+  // Map preserves insertion order, so evict the oldest keys first.
+  while (nextSources.size > MAX_IMAGE_SOURCE_ENTRIES) {
+    const oldestKey = nextSources.keys().next().value;
+    if (oldestKey === undefined) break;
+    nextSources.delete(oldestKey);
+  }
+
+  return Object.fromEntries(nextSources);
 }
 
 async function loadAppDataWithImages(
@@ -4479,7 +4547,7 @@ async function existingImageToNumberArray(image: LegacyMessageImage) {
   if (!image.exists) {
     throw new Error(`图片文件不存在，不能保存：${image.filename}`);
   }
-  return readLegacyImageBytes(image.filename);
+  return Array.from(await readLegacyImageBytes(image.filename));
 }
 
 function fileToDataUrl(file: File) {

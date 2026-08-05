@@ -1,7 +1,7 @@
 use crate::{
     legacy_paths::{legacy_data_dir, path_to_string},
     legacy_query::{query_count, read_legacy_stats_from_dir, LegacyStats},
-    legacy_schema::ensure_legacy_schema,
+    legacy_schema::{configure_connection, ensure_legacy_schema},
 };
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
@@ -34,6 +34,7 @@ pub fn read_legacy_safety_report() -> Result<LegacySafetyReport, String> {
     let stats = read_legacy_stats_from_dir(data_dir.clone())?;
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|err| format!("只读打开旧数据库准备安全审计失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     let joined_image_count = query_count(

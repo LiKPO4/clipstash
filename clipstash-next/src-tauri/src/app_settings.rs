@@ -1,8 +1,9 @@
 use crate::{app_data, legacy_paths};
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
 
@@ -108,10 +109,19 @@ fn read_settings_unlocked() -> Result<AppSettings, String> {
 
     let text = fs::read_to_string(&path)
         .map_err(|err| format!("读取设置文件失败：{}：{err}", path.display()))?;
-    let settings = serde_json::from_str::<AppSettings>(&text)
-        .map(normalize_settings)
-        .map_err(|err| format!("解析设置文件失败：{}：{err}", path.display()))?;
-    Ok(settings)
+    match serde_json::from_str::<AppSettings>(&text) {
+        Ok(settings) => Ok(normalize_settings(settings)),
+        Err(err) => {
+            let backup_path = corrupt_settings_backup_path(&path);
+            let _ = fs::rename(&path, &backup_path);
+            eprintln!(
+                "设置文件损坏，已备份后回退默认设置：{} -> {}：{err}",
+                path.display(),
+                backup_path.display()
+            );
+            Ok(AppSettings::default())
+        }
+    }
 }
 
 pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
@@ -166,6 +176,9 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     }
 
     let settings = normalize_settings(settings);
+    if settings.show_hotkey == settings.capture_hotkey {
+        return Err("显示窗口快捷键与导入剪贴板快捷键不能相同".to_string());
+    }
     write_settings(&settings)?;
     Ok(settings)
 }
@@ -182,7 +195,19 @@ fn write_settings(settings: &AppSettings) -> Result<(), String> {
     }
     let text = serde_json::to_string_pretty(settings)
         .map_err(|err| format!("序列化设置文件失败：{err}"))?;
-    fs::write(&path, text).map_err(|err| format!("写入设置文件失败：{}：{err}", path.display()))
+    // 先写临时文件再原子改名替换，避免写入中途崩溃留下半截 JSON。
+    let temp_path = path.with_extension("json.tmp");
+    fs::write(&temp_path, &text)
+        .map_err(|err| format!("写入设置临时文件失败：{}：{err}", temp_path.display()))?;
+    fs::rename(&temp_path, &path).map_err(|err| {
+        let _ = fs::remove_file(&temp_path);
+        format!("替换设置文件失败：{}：{err}", path.display())
+    })
+}
+
+fn corrupt_settings_backup_path(path: &Path) -> PathBuf {
+    let timestamp = Local::now().format("%Y%m%d%H%M%S%3f");
+    path.with_file_name(format!("{SETTINGS_FILE_NAME}.corrupt-{timestamp}"))
 }
 
 fn settings_path() -> Result<PathBuf, String> {
@@ -472,5 +497,49 @@ mod tests {
             .join("ClipStash Next")
             .join(SETTINGS_FILE_NAME)
             .is_file());
+    }
+
+    #[test]
+    fn recovers_from_corrupt_settings_file_with_backup() {
+        let _guard = env_lock().lock().unwrap();
+        let appdata = isolated_appdata("corrupt-settings");
+        reset_dir(&appdata);
+        let settings_dir = appdata.join("ClipStash Next");
+        fs::create_dir_all(&settings_dir).unwrap();
+        fs::write(settings_dir.join(SETTINGS_FILE_NAME), b"{ not valid json !").unwrap();
+        env::set_var("APPDATA", &appdata);
+
+        let settings = read_settings().unwrap();
+
+        assert_eq!(settings.show_hotkey, AppSettings::default().show_hotkey);
+        assert!(!settings_dir.join(SETTINGS_FILE_NAME).exists());
+        let backup = fs::read_dir(&settings_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with("settings.json.corrupt-"))
+            .expect("损坏设置应被备份改名");
+        assert!(backup.contains("corrupt-"));
+
+        fs::remove_dir_all(appdata).unwrap();
+    }
+
+    #[test]
+    fn rejects_saving_when_global_hotkeys_are_identical() {
+        let _guard = env_lock().lock().unwrap();
+        let appdata = isolated_appdata("duplicate-hotkey");
+        reset_dir(&appdata);
+        env::set_var("APPDATA", &appdata);
+
+        let err = update_settings(AppSettingsPatch {
+            show_hotkey: Some("Ctrl+Shift+V".to_string()),
+            capture_hotkey: Some("ctrl+shift+v".to_string()),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(err.contains("不能相同"));
+        let persisted = read_settings().unwrap();
+        assert_eq!(persisted.show_hotkey, "Ctrl+Shift+V");
+        assert_eq!(persisted.capture_hotkey, "Ctrl+Alt+V");
     }
 }

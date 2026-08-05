@@ -1,6 +1,7 @@
 use crate::{
-    legacy_model::LegacyMessage, legacy_query::read_legacy_message_by_id,
-    legacy_schema::ensure_legacy_schema,
+    legacy_model::LegacyMessage,
+    legacy_query::read_legacy_message_by_id,
+    legacy_schema::{configure_connection, ensure_legacy_schema},
 };
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
@@ -49,6 +50,7 @@ pub(crate) fn ensure_message_exists_for_path(
 
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
     let exists: i64 = conn
         .query_row(
@@ -82,6 +84,7 @@ pub(crate) fn read_message_for_update_precheck(
     let images_dir = data_dir.join("images");
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|err| format!("只读打开旧数据库检查消息失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }

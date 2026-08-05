@@ -4,13 +4,14 @@ use crate::{
     legacy_model::{LegacyMessage, MessageView, SortOrder},
     legacy_paths::path_to_string,
     legacy_query::list_legacy_messages_from_dir,
-    legacy_schema::ensure_legacy_schema,
+    legacy_schema::{configure_connection, ensure_legacy_schema},
 };
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -20,6 +21,16 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 const EXPORT_SCHEMA_VERSION: u32 = 1;
 const EXPORT_MANIFEST_NAME: &str = "clipstash-export.json";
 const EXPORT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// 导入防护上限：恶意或损坏的数据包可能在 manifest 里声明极小尺寸，实际解压出
+// 巨量数据（zip 炸弹），若不设限会先耗尽内存再报错。以下上限均远高于正常使用
+// 场景（单条消息图片极少超过数 MB、整包总量极少超过数 GB、消息数极少超过十万），
+// 仅用于拒绝异常数据包，不影响正常导入。
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024; // manifest 文本读取上限：64MB
+const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024; // 单张图片解压上限：256MB
+const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 全包图片解压总量上限：4GB
+const MAX_IMPORT_MESSAGES: usize = 100_000; // 消息数量上限：10 万条
+const IMAGE_READ_CHUNK_SIZE: usize = 64 * 1024; // 图片分块读取的块大小：64KB
 
 #[derive(Debug, Serialize)]
 pub struct DataExportResult {
@@ -93,6 +104,10 @@ pub fn export_normal_data_zip_to_temp_bytes() -> Result<DataExportBytesResult, S
     let temp_dir = std::env::temp_dir().join("ClipStash Next Exports");
     fs::create_dir_all(&temp_dir)
         .map_err(|err| format!("创建导出临时目录失败：{}：{err}", temp_dir.display()))?;
+    // 清理上次导出遗留的临时 zip（保留本次即将生成的文件：Android 端
+    // 分享流程仍依赖导出返回的 path 指向的文件存在，旧文件在下一次
+    // 导出前不再被任何流程引用）
+    remove_stale_export_temp_files(&temp_dir, &filename);
     let output_path = temp_dir.join(&filename);
     let stats = app_data::ensure_app_data_ready()?;
     let data_dir = app_data::app_data_dir_path()?;
@@ -271,9 +286,9 @@ pub fn import_data_zip_from_bytes(
         .map_err(|err| format!("写入导入临时数据包失败：{}：{err}", temp_path.display()))?;
 
     let result = import_data_zip_from_path(temp_path.clone());
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
+    // 无论导入成功还是失败，都清理本次写入的临时数据包，
+    // 避免 %TEMP%\ClipStash Next Imports 目录持续累积旧文件
+    let _ = fs::remove_file(&temp_path);
     result
 }
 
@@ -288,6 +303,7 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
 
     let mut conn =
         Connection::open(&db_path).map_err(|err| format!("打开应用数据库准备导入失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
     let mut saved_paths = Vec::new();
@@ -295,25 +311,30 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
         let tx = conn
             .transaction()
             .map_err(|err| format!("开启数据导入事务失败：{err}"))?;
+        // 去重基准：只统计本次导入前库内已存在的消息签名，本次循环中
+        // 新插入的消息不加入基准，因此包内重复消息也能全部导入；
+        // 重复导入同一个包仍会命中首次导入已落库的签名，保持幂等
+        let existing_signatures = load_existing_message_signatures(&tx, &images_dir)?;
+        let mut total_uncompressed_bytes = 0_u64;
         let mut inserted_messages = 0_i64;
         let mut skipped_messages = 0_i64;
         let mut imported_images = 0_i64;
 
         for message in &manifest.messages {
             validate_import_message(message)?;
-            let image_entries = read_message_images(&mut archive, message)?;
+            let image_entries =
+                read_message_images(&mut archive, message, &mut total_uncompressed_bytes)?;
             let image_hashes: Vec<String> = image_entries
                 .iter()
                 .map(|entry| entry.manifest.sha256.clone())
                 .collect();
 
             if message_exists_by_signature(
-                &tx,
-                &images_dir,
+                &existing_signatures,
                 message.text_content.as_deref(),
                 &message.created_at,
                 &image_hashes,
-            )? {
+            ) {
                 skipped_messages += 1;
                 continue;
             }
@@ -381,15 +402,20 @@ fn preview_data_zip_against_dir(
 
     let conn = Connection::open(&db_path)
         .map_err(|err| format!("打开应用数据库准备预览导入失败：{err}"))?;
+    configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
 
+    // 与导入相同的去重基准语义，保证预览结果与真实导入一致
+    let existing_signatures = load_existing_message_signatures(&conn, &images_dir)?;
+    let mut total_uncompressed_bytes = 0_u64;
     let mut inserted_messages = 0_i64;
     let mut skipped_messages = 0_i64;
     let mut image_count = 0_i64;
 
     for message in &manifest.messages {
         validate_import_message(message)?;
-        let image_entries = read_message_images(&mut archive, message)?;
+        let image_entries =
+            read_message_images(&mut archive, message, &mut total_uncompressed_bytes)?;
         image_count += image_entries.len() as i64;
         let image_hashes: Vec<String> = image_entries
             .iter()
@@ -397,12 +423,11 @@ fn preview_data_zip_against_dir(
             .collect();
 
         if message_exists_by_signature(
-            &conn,
-            &images_dir,
+            &existing_signatures,
             message.text_content.as_deref(),
             &message.created_at,
             &image_hashes,
-        )? {
+        ) {
             skipped_messages += 1;
         } else {
             inserted_messages += 1;
@@ -470,14 +495,20 @@ fn read_manifest(archive: &mut ZipArchive<File>) -> Result<ExportManifest, Strin
         .map_err(|_| format!("导入 zip 缺少 {EXPORT_MANIFEST_NAME}"))?;
     let mut text = String::new();
     manifest_file
+        // 截断读取，防止声明极小实际巨量的 manifest 拖垮内存
+        .take(MAX_MANIFEST_BYTES + 1)
         .read_to_string(&mut text)
         .map_err(|err| format!("读取导入清单失败：{err}"))?;
+    if text.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(format!("导入清单超过大小上限：{} 字节", MAX_MANIFEST_BYTES));
+    }
     serde_json::from_str(&text).map_err(|err| format!("解析导入清单失败：{err}"))
 }
 
 fn read_message_images(
     archive: &mut ZipArchive<File>,
     message: &ExportMessage,
+    total_uncompressed_bytes: &mut u64,
 ) -> Result<Vec<ImportImageEntry>, String> {
     let mut entries = Vec::new();
     for image in &message.images {
@@ -485,10 +516,36 @@ fn read_message_images(
         let mut image_file = archive
             .by_name(&image.path)
             .map_err(|_| format!("导入 zip 缺少图片：{}", image.path))?;
-        let mut bytes = Vec::new();
-        image_file
-            .read_to_end(&mut bytes)
-            .map_err(|err| format!("读取导入图片失败：{}：{err}", image.path))?;
+        // 先用 zip 条目声明的解压大小与 manifest 声明比对，不一致直接拒绝，
+        // 避免解压出与清单不符的巨量数据
+        if image_file.size() != image.size {
+            return Err(format!("导入图片大小不匹配：{}", image.path));
+        }
+        if image.size > MAX_IMAGE_BYTES {
+            return Err(format!(
+                "导入图片超过单张大小上限：{}（{} 字节，上限 {} 字节）",
+                image.path, image.size, MAX_IMAGE_BYTES
+            ));
+        }
+        let mut bytes = Vec::with_capacity(image.size as usize);
+        let mut chunk = [0_u8; IMAGE_READ_CHUNK_SIZE];
+        loop {
+            let read = image_file
+                .read(&mut chunk)
+                .map_err(|err| format!("读取导入图片失败：{}：{err}", image.path))?;
+            if read == 0 {
+                break;
+            }
+            *total_uncompressed_bytes += read as u64;
+            if *total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES {
+                return Err(format!(
+                    "导入数据包图片解压总量超过上限：{} 字节",
+                    MAX_TOTAL_UNCOMPRESSED_BYTES
+                ));
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        // 与 zip 条目声明大小一致前提下的兜底校验
         if bytes.len() as u64 != image.size {
             return Err(format!("导入图片大小不匹配：{}", image.path));
         }
@@ -512,6 +569,13 @@ struct ImportImageEntry {
 fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
     if manifest.schema_version != EXPORT_SCHEMA_VERSION {
         return Err(format!("不支持的数据包版本：{}", manifest.schema_version));
+    }
+    if manifest.messages.len() > MAX_IMPORT_MESSAGES {
+        return Err(format!(
+            "导入清单消息数量超过上限：{} 条（上限 {} 条）",
+            manifest.messages.len(),
+            MAX_IMPORT_MESSAGES
+        ));
     }
     Ok(())
 }
@@ -597,6 +661,22 @@ fn default_export_filename() -> String {
     )
 }
 
+/// 清理导出临时目录中上一次遗留的 clipstash 导出 zip（含写入中断残留的
+/// .zip.tmp），保留本次即将生成的文件：Android 端分享流程仍依赖导出
+/// 返回的 path 指向的文件存在，因此只清理旧文件。
+fn remove_stale_export_temp_files(temp_dir: &Path, keep_filename: &str) {
+    let Ok(entries) = fs::read_dir(temp_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == keep_filename || !name.starts_with("clipstash-export-") {
+            continue;
+        }
+        let _ = fs::remove_file(entry.path());
+    }
+}
+
 fn validate_import_zip_filename(filename: &str) -> Result<(), String> {
     let name = filename.trim();
     if name.is_empty() {
@@ -653,33 +733,46 @@ fn collect_messages(
     Ok(())
 }
 
-fn message_exists_by_signature(
+fn load_existing_message_signatures(
     conn: &Connection,
     images_dir: &Path,
+) -> Result<HashMap<(Option<String>, String), Vec<String>>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, text_content, created_at FROM messages")
+        .map_err(|err| format!("准备导入去重基准查询失败：{err}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|err| format!("查询导入去重基准失败：{err}"))?;
+    let mut signatures = HashMap::new();
+    for row in rows {
+        let (message_id, text_content, created_at) =
+            row.map_err(|err| format!("读取导入去重基准失败：{err}"))?;
+        let hashes = read_message_image_hashes(conn, images_dir, message_id)?;
+        signatures.insert((text_content, created_at), hashes);
+    }
+    Ok(signatures)
+}
+
+fn message_exists_by_signature(
+    existing_signatures: &HashMap<(Option<String>, String), Vec<String>>,
     text_content: Option<&str>,
     created_at: &str,
     image_hashes: &[String],
-) -> Result<bool, String> {
-    let mut stmt = conn
-        .prepare("SELECT id FROM messages WHERE text_content IS ? AND created_at = ?")
-        .map_err(|err| format!("准备导入去重查询失败：{err}"))?;
-    let rows = stmt
-        .query_map(params![text_content, created_at], |row| {
-            row.get::<_, i64>(0)
-        })
-        .map_err(|err| format!("查询导入重复消息失败：{err}"))?;
-    let mut candidate_ids = Vec::new();
-    for row in rows {
-        candidate_ids.push(row.map_err(|err| format!("读取导入重复消息失败：{err}"))?);
-    }
-    drop(stmt);
-
-    for message_id in candidate_ids {
-        if read_message_image_hashes(conn, images_dir, message_id)? == image_hashes {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+) -> bool {
+    let key = (
+        text_content.map(|text| text.to_string()),
+        created_at.to_string(),
+    );
+    existing_signatures
+        .get(&key)
+        .map(|hashes| hashes == image_hashes)
+        .unwrap_or(false)
 }
 
 fn read_message_image_hashes(
@@ -933,5 +1026,150 @@ mod tests {
 
         assert!(result.unwrap_err().contains("路径非法"));
         let _ = fs::remove_dir_all(data_dir);
+    }
+
+    fn seed_empty_import_dir(name: &str) -> PathBuf {
+        let data_dir = isolated_dir(name);
+        fs::create_dir_all(data_dir.join("images")).unwrap();
+        let conn = Connection::open(data_dir.join("clipstash.db")).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            ",
+        )
+        .unwrap();
+        data_dir
+    }
+
+    fn duplicate_text_same_second_manifest() -> ExportManifest {
+        ExportManifest {
+            schema_version: 1,
+            app_version: "test".to_string(),
+            exported_at: "2026-01-01 00:00:00".to_string(),
+            source_platform: "test".to_string(),
+            messages: vec![
+                ExportMessage {
+                    text_content: Some("same text".to_string()),
+                    created_at: "2026-01-01 00:00:00".to_string(),
+                    images: Vec::new(),
+                },
+                ExportMessage {
+                    text_content: Some("same text".to_string()),
+                    created_at: "2026-01-01 00:00:00".to_string(),
+                    images: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn rejects_zip_entry_size_mismatch_with_manifest() {
+        let data_dir = seed_empty_import_dir("size-mismatch");
+        let zip_path = data_dir.join("bad-size.zip");
+        let manifest = ExportManifest {
+            schema_version: 1,
+            app_version: "test".to_string(),
+            exported_at: "2026-01-01 00:00:00".to_string(),
+            source_platform: "test".to_string(),
+            messages: vec![ExportMessage {
+                text_content: Some("size mismatch".to_string()),
+                created_at: "2026-01-01 00:00:00".to_string(),
+                images: vec![ExportImage {
+                    path: "images/size-mismatch.png".to_string(),
+                    sha256: sha256_hex(b"abc"),
+                    extension: "png".to_string(),
+                    size: 4, // manifest 谎报大小，zip 条目实际只有 3 字节
+                }],
+            }],
+        };
+        write_export_zip(
+            &zip_path,
+            &manifest,
+            vec![("images/size-mismatch.png".to_string(), b"abc".to_vec())],
+        )
+        .unwrap();
+
+        let result = import_data_zip_into_dir(&zip_path, &data_dir);
+
+        assert!(result.unwrap_err().contains("大小不匹配"));
+        let stats = read_legacy_stats_from_dir(data_dir.clone()).unwrap();
+        assert_eq!(stats.total_count, 0);
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn imports_duplicate_text_same_second_messages_in_one_package() {
+        let data_dir = seed_empty_import_dir("dup-in-package");
+        let zip_path = data_dir.join("dup.zip");
+        write_export_zip(
+            &zip_path,
+            &duplicate_text_same_second_manifest(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let result = import_data_zip_into_dir(&zip_path, &data_dir);
+
+        assert_eq!(result.unwrap(), (2, 0, 0));
+        let stats = read_legacy_stats_from_dir(data_dir.clone()).unwrap();
+        assert_eq!(stats.total_count, 2);
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn reimporting_same_package_is_idempotent() {
+        let data_dir = seed_empty_import_dir("reimport-idempotent");
+        let zip_path = data_dir.join("reimport.zip");
+        write_export_zip(
+            &zip_path,
+            &duplicate_text_same_second_manifest(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let first = import_data_zip_into_dir(&zip_path, &data_dir).unwrap();
+        assert_eq!(first, (2, 0, 0));
+        let second = import_data_zip_into_dir(&zip_path, &data_dir).unwrap();
+        assert_eq!(second, (0, 2, 0));
+
+        let stats = read_legacy_stats_from_dir(data_dir.clone()).unwrap();
+        assert_eq!(stats.total_count, 2);
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn export_temp_cleanup_removes_old_files_but_keeps_current() {
+        let dir = isolated_dir("export-cleanup");
+        fs::create_dir_all(&dir).unwrap();
+        let keep = "clipstash-export-20260101-000001.zip";
+        fs::write(dir.join(keep), b"current").unwrap();
+        fs::write(dir.join("clipstash-export-20250101-000001.zip"), b"old").unwrap();
+        fs::write(
+            dir.join("clipstash-export-20250101-000002.zip.tmp"),
+            b"stale",
+        )
+        .unwrap();
+        fs::write(dir.join("unrelated.txt"), b"keep").unwrap();
+
+        remove_stale_export_temp_files(&dir, keep);
+
+        assert!(dir.join(keep).is_file(), "本次导出的文件必须保留");
+        assert!(!dir.join("clipstash-export-20250101-000001.zip").exists());
+        assert!(!dir
+            .join("clipstash-export-20250101-000002.zip.tmp")
+            .exists());
+        assert!(dir.join("unrelated.txt").is_file(), "无关文件不受影响");
+        let _ = fs::remove_dir_all(dir);
     }
 }

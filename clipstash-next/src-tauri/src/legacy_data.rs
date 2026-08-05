@@ -519,6 +519,11 @@ mod tests {
                 archived INTEGER DEFAULT 0,
                 archived_at TIMESTAMP
             );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
             ",
         )
         .expect("seed fixture");
@@ -643,6 +648,11 @@ mod tests {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 archived INTEGER DEFAULT 0,
                 archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
             );
             ",
         )
@@ -1063,6 +1073,11 @@ mod tests {
                 archived INTEGER DEFAULT 0,
                 archived_at TIMESTAMP
             );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
             ",
         )
         .expect("seed fixture");
@@ -1354,6 +1369,11 @@ mod tests {
                 archived INTEGER DEFAULT 0,
                 archived_at TIMESTAMP
             );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
             ",
         )
         .expect("seed fixture");
@@ -1393,9 +1413,13 @@ mod tests {
                 archived INTEGER DEFAULT 0,
                 archived_at TIMESTAMP
             );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL
+            );
             ",
         )
-        .expect("seed fixture without message_images table");
+        .expect("seed fixture with message_images table missing image_filename column");
         drop(conn);
 
         let result = create_image_message_for_path(&db_path, vec![b"orphan-risk".to_vec()]);

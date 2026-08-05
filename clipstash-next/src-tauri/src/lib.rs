@@ -93,7 +93,7 @@ struct GlobalShortcutStatus {
     capture_shortcut: Mutex<Option<Shortcut>>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
     let stats = app_data::read_app_stats()?;
     Ok(legacy_data::LegacyStats {
@@ -108,12 +108,12 @@ fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn migrate_legacy_data() -> Result<app_data::AppMigrationResult, String> {
     app_data::migrate_legacy_data()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn export_normal_data_zip() -> Result<data_transfer::DataExportResult, String> {
     let Some(output_path) = pick_save_zip_file_with_windows_dialog()? else {
         return Err("已取消导出数据".to_string());
@@ -121,17 +121,17 @@ fn export_normal_data_zip() -> Result<data_transfer::DataExportResult, String> {
     data_transfer::export_normal_data_zip_to_path(output_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn export_normal_data_zip_bytes() -> Result<data_transfer::DataExportBytesResult, String> {
     data_transfer::export_normal_data_zip_to_temp_bytes()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn archive_exported_messages(message_ids: Vec<i64>) -> Result<app_data::AppStats, String> {
     app_data::archive_messages(&message_ids)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_data_zip() -> Result<data_transfer::DataImportResult, String> {
     let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
         return Err("已取消导入数据".to_string());
@@ -139,7 +139,7 @@ fn import_data_zip() -> Result<data_transfer::DataImportResult, String> {
     data_transfer::import_data_zip_from_path(zip_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_data_zip() -> Result<data_transfer::DataImportPreview, String> {
     let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
         return Err("已取消导入数据".to_string());
@@ -147,12 +147,12 @@ fn preview_data_zip() -> Result<data_transfer::DataImportPreview, String> {
     data_transfer::preview_data_zip_from_path(zip_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_data_zip_from_path(path: String) -> Result<data_transfer::DataImportResult, String> {
     data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_data_zip_bytes(
     filename: String,
     bytes: Vec<u8>,
@@ -160,7 +160,7 @@ fn import_data_zip_bytes(
     data_transfer::import_data_zip_from_bytes(filename, bytes)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_app_path(path: String) -> Result<(), String> {
     let path = std::path::PathBuf::from(path.trim());
     if !path.is_dir() {
@@ -169,7 +169,7 @@ fn open_app_path(path: String) -> Result<(), String> {
     open_path_in_file_manager(&path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn move_app_data_to_selected_dir() -> Result<app_data::AppDataMoveResult, String> {
     let Some(target_dir) = pick_folder_with_windows_dialog()? else {
         return Err("已取消选择数据目录".to_string());
@@ -177,12 +177,12 @@ fn move_app_data_to_selected_dir() -> Result<app_data::AppDataMoveResult, String
     app_data::move_app_data_to_dir(target_dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn repair_app_data_dir() -> Result<app_data::AppDataRepairResult, String> {
     app_data::repair_app_data_dir()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn fetch_latest_github_release() -> Result<GithubReleaseInfo, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -207,7 +207,7 @@ fn fetch_latest_github_release() -> Result<GithubReleaseInfo, String> {
         .map_err(|err| format!("解析 GitHub Release 响应失败：{err}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn download_and_open_update_installer(
     download_url: String,
     filename: String,
@@ -283,12 +283,12 @@ fn sanitize_installer_filename(filename: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn capture_current_clipboard() -> Result<CaptureClipboardResult, String> {
     capture_current_clipboard_to_app_data()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn read_current_clipboard() -> Result<ClipboardContent, String> {
     read_current_clipboard_content()
 }
@@ -300,7 +300,7 @@ fn get_global_shortcut_errors(
     Ok(status.errors.lock().unwrap().clone())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_launch_on_startup(app: AppHandle) -> Result<bool, String> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -332,7 +332,7 @@ fn restore_launch_on_startup_if_requested(app: &AppHandle) -> Result<bool, Strin
     Ok(enabled)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_launch_on_startup(app: AppHandle, enabled: bool) -> Result<bool, String> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -367,12 +367,12 @@ fn set_launch_on_startup(app: AppHandle, enabled: bool) -> Result<bool, String> 
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_app_settings() -> Result<app_settings::AppSettings, String> {
     app_settings::read_settings()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_app_settings(
     app: AppHandle,
     patch: app_settings::AppSettingsPatch,
@@ -387,33 +387,33 @@ fn update_app_settings(
     Ok(settings)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_external_window_targets() -> Result<Vec<window_targets::ExternalWindowTarget>, String> {
     window_targets::list_external_window_targets()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn validate_external_window_target(
     hwnd: isize,
 ) -> Result<window_targets::ExternalWindowValidation, String> {
     window_targets::validate_external_window_target(hwnd)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_legacy_text_message(
     text_content: String,
 ) -> Result<legacy_data::LegacyCreateTextMessageResult, String> {
     app_data::create_text_message(text_content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_legacy_image_message(
     images_data: Vec<Vec<u8>>,
 ) -> Result<legacy_data::LegacyCreateTextMessageResult, String> {
     app_data::create_image_message(images_data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_legacy_mixed_message(
     text_content: String,
     images_data: Vec<Vec<u8>>,
@@ -421,7 +421,7 @@ fn create_legacy_mixed_message(
     app_data::create_mixed_message(text_content, images_data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_legacy_message_text(
     message_id: i64,
     text_content: Option<String>,
@@ -429,7 +429,7 @@ fn update_legacy_message_text(
     app_data::update_message_text(message_id, text_content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn replace_legacy_message_images(
     message_id: i64,
     images_data: Vec<Vec<u8>>,
@@ -437,7 +437,7 @@ fn replace_legacy_message_images(
     app_data::replace_message_images(message_id, images_data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn split_legacy_message(
     message_id: i64,
     text_content: String,
@@ -446,14 +446,14 @@ fn split_legacy_message(
     app_data::split_message(message_id, text_content, images_data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_legacy_message(
     message_id: i64,
 ) -> Result<legacy_data::LegacyDeleteMessageResult, String> {
     app_data::delete_message(message_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_legacy_message_archived(
     message_id: i64,
     archived: bool,
@@ -461,19 +461,19 @@ fn set_legacy_message_archived(
     app_data::set_message_archived(message_id, archived)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn copy_legacy_image_to_clipboard(
     filename: String,
 ) -> Result<legacy_data::LegacyCopyImageResult, String> {
     app_data::copy_image_to_clipboard(filename)
 }
 
-#[tauri::command]
-fn read_legacy_image_bytes(filename: String) -> Result<Vec<u8>, String> {
-    app_data::read_image_bytes(filename)
+#[tauri::command(async)]
+fn read_legacy_image_bytes(filename: String) -> Result<tauri::ipc::Response, String> {
+    app_data::read_image_bytes(filename).map(tauri::ipc::Response::new)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn read_dropped_file_bytes(path: String) -> Result<Vec<u8>, String> {
     let path = std::path::PathBuf::from(path.trim());
     if !path.is_file() {
@@ -482,14 +482,14 @@ fn read_dropped_file_bytes(path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|err| format!("读取拖入文件失败：{}：{err}", path.display()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn copy_legacy_message_text_to_clipboard(
     message_id: i64,
 ) -> Result<legacy_data::LegacyCopyTextResult, String> {
     app_data::copy_message_text_to_clipboard(message_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn copy_legacy_message_import_queue_item_to_clipboard(
     message_id: i64,
     item_index: usize,
@@ -497,7 +497,7 @@ fn copy_legacy_message_import_queue_item_to_clipboard(
     app_data::copy_message_import_queue_item_to_clipboard(message_id, item_index)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn paste_legacy_import_queue_item(
     message_id: i64,
     item_index: usize,
@@ -506,7 +506,7 @@ fn paste_legacy_import_queue_item(
     import_executor::paste_legacy_import_queue_item(message_id, item_index, target_hwnd)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn paste_legacy_import_queue(
     message_id: i64,
     target_hwnd: isize,
@@ -515,7 +515,7 @@ fn paste_legacy_import_queue(
     import_executor::paste_legacy_import_queue(message_id, target_hwnd, delay_ms)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn paste_legacy_import_queue_with_optional_archive(
     message_id: i64,
     target_hwnd: isize,
@@ -530,7 +530,7 @@ fn paste_legacy_import_queue_with_optional_archive(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn paste_legacy_import_queue_to_recent_window(
     window: tauri::Window,
     message_id: i64,
@@ -539,6 +539,11 @@ fn paste_legacy_import_queue_to_recent_window(
 ) -> Result<import_executor::LegacyImportQueuePasteArchiveResult, String> {
     let target = window_targets::last_external_window_target()
         .ok_or_else(|| "未找到外部输入窗口，已取消导入".to_string())?;
+    window_targets::validate_recent_external_window_target(
+        target.hwnd,
+        target.process_id,
+        &target.title,
+    )?;
     let was_visible = window.is_visible().unwrap_or(false);
 
     if was_visible {
@@ -562,21 +567,21 @@ fn paste_legacy_import_queue_to_recent_window(
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stage_legacy_message_import_to_clipboard(
     message_id: i64,
 ) -> Result<legacy_data::LegacyImportStageResult, String> {
     app_data::stage_message_import_to_clipboard(message_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_legacy_message_import_queue(
     message_id: i64,
 ) -> Result<legacy_data::LegacyImportQueuePreview, String> {
     app_data::preview_message_import_queue(message_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_legacy_messages(
     view: legacy_data::MessageView,
     sort: legacy_data::SortOrder,
@@ -587,7 +592,7 @@ fn list_legacy_messages(
     app_data::list_messages(view, sort, offset, limit, search)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_legacy_message(message_id: i64) -> Result<legacy_data::LegacyMessage, String> {
     app_data::get_message(message_id)
 }
@@ -877,12 +882,7 @@ fn setup_global_shortcuts(app: &tauri::App) {
 
 #[cfg(target_os = "windows")]
 fn reload_global_shortcuts(app: &AppHandle, settings: &app_settings::AppSettings) {
-    let shortcuts = app.global_shortcut();
     let mut errors = Vec::new();
-
-    if let Err(err) = shortcuts.unregister_all() {
-        errors.push(format!("清除旧快捷键失败：{err}"));
-    }
 
     let show_shortcut = parse_global_shortcut("呼出界面快捷键", &settings.show_hotkey, &mut errors);
     let capture_shortcut = parse_global_shortcut(
@@ -890,6 +890,21 @@ fn reload_global_shortcuts(app: &AppHandle, settings: &app_settings::AppSettings
         &settings.capture_hotkey,
         &mut errors,
     );
+
+    // 热键值未变化时跳过重注册，避免保存任意设置都反复注销重注册全局快捷键。
+    if let Some(status) = app.try_state::<GlobalShortcutStatus>() {
+        if registered_hotkey_matches(&status.show_shortcut, &show_shortcut)
+            && registered_hotkey_matches(&status.capture_shortcut, &capture_shortcut)
+        {
+            return;
+        }
+    }
+
+    let shortcuts = app.global_shortcut();
+    if let Err(err) = shortcuts.unregister_all() {
+        errors.push(format!("清除旧快捷键失败：{err}"));
+    }
+
     let requested = [&show_shortcut, &capture_shortcut]
         .into_iter()
         .filter_map(|shortcut| shortcut.clone())
@@ -906,6 +921,15 @@ fn reload_global_shortcuts(app: &AppHandle, settings: &app_settings::AppSettings
         *status.capture_shortcut.lock().unwrap() = capture_shortcut;
         *status.errors.lock().unwrap() = errors;
     }
+}
+
+#[cfg(target_os = "windows")]
+fn registered_hotkey_matches(
+    current: &Mutex<Option<Shortcut>>,
+    requested: &Option<Shortcut>,
+) -> bool {
+    let to_text = |shortcut: &Shortcut| shortcut.clone().into_string();
+    current.lock().unwrap().as_ref().map(to_text) == requested.as_ref().map(to_text)
 }
 
 #[cfg(target_os = "windows")]
@@ -1232,6 +1256,31 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::update_installer_command;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn registered_hotkey_matches_compares_current_and_requested() {
+        use super::registered_hotkey_matches;
+        use crate::GlobalShortcutStatus;
+        use std::sync::Mutex;
+        use tauri_plugin_global_shortcut::Shortcut;
+
+        let status = GlobalShortcutStatus {
+            show_shortcut: Mutex::new(Some("Ctrl+Shift+V".parse::<Shortcut>().unwrap())),
+            capture_shortcut: Mutex::new(Some("Ctrl+Alt+V".parse::<Shortcut>().unwrap())),
+            ..Default::default()
+        };
+
+        assert!(registered_hotkey_matches(
+            &status.show_shortcut,
+            &Some("ctrl+shift+v".parse::<Shortcut>().unwrap())
+        ));
+        assert!(!registered_hotkey_matches(
+            &status.show_shortcut,
+            &Some("Ctrl+Shift+Z".parse::<Shortcut>().unwrap())
+        ));
+        assert!(!registered_hotkey_matches(&status.show_shortcut, &None));
+    }
 
     #[test]
     fn downloaded_nsis_installer_opens_in_update_mode() {

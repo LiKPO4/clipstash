@@ -52,6 +52,11 @@
                 android:resource="@xml/clipstash_widget_info" />
         </receiver>
 
+        <!-- 内部动作接收器：处理小组件点击/归档等自定义广播，不对外导出，防止伪造广播 -->
+        <receiver
+            android:name=".ClipStashWidgetActionsReceiver"
+            android:exported="false" />
+
         <service
             android:name=".ClipStashWidgetService"
             android:exported="false"
