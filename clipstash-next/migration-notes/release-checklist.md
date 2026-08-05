@@ -29,7 +29,7 @@ cargo test migrates_legacy_data_once_and_skips_duplicates_without_touching_legac
 - 主程序：`clipstash-next/src-tauri/target/release/clipstash-next.exe`
 - MSI：`clipstash-next/src-tauri/target/release/bundle/msi/ClipStash Next_2.2.0_x64_en-US.msi`
 - NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.2.0_x64-setup.exe`
-- Android release APK：Gradle 输出 `clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`，发布时复制改名为 `ClipStash.Next_<version>_android-universal-release-signed.apk`（当前为 `ClipStash.Next_2.2.0_android-universal-release-signed.apk`）。
+- Android release APK：自 v2.2.0 起由 CI（`.github/workflows/build.yml` 的 `android` job）用 GitHub Secrets 中的签名密钥云端构建，产物直接挂载 Release，命名为 `ClipStash.Next_<version>_android-universal-release-signed.apk`。本地手动构建时 Gradle 输出 `clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`。签名密钥存放在仓库 Secrets（`ANDROID_KEYSTORE_BASE64`/`KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`），正式证书 SHA-256 指纹 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。
 
 GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 MSI 作为备用安装入口；Android 版上传 release 构建签名通用 APK，用于侧载验收。
 
