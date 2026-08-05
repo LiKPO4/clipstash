@@ -108,3 +108,96 @@ jobs:
             clipstash-next/src-tauri/target/release/bundle/msi/*.msi
             clipstash-next/src-tauri/target/release/bundle/nsis/*.exe
           generate_release_notes: true
+
+  android:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: clipstash-next/package-lock.json
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push') {
+            $tag = '${{ github.ref_name }}'
+            $ver = $tag -replace '^v',''
+          } else {
+            $ver = '${{ github.event.inputs.version }}'
+          }
+          Write-Output "value=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "Build version: $ver"
+
+      - name: Restore Android signing keystore
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dir = "clipstash-next/src-tauri/gen/android"
+          New-Item -ItemType Directory -Force "$dir/.signing" | Out-Null
+          [IO.File]::WriteAllBytes("$dir/.signing/clipstash-next-release.jks", [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+          $props = @(
+            "storeFile=.signing/clipstash-next-release.jks",
+            "storePassword=$env:KEYSTORE_PASSWORD",
+            "keyAlias=$env:KEY_ALIAS",
+            "keyPassword=$env:KEY_PASSWORD"
+          )
+          ($props -join "`n") + "`n" | Set-Content "$dir/keystore.properties" -NoNewline -Encoding ascii
+
+      - name: Setup Android NDK path
+        shell: pwsh
+        run: |
+          $ndk = (Get-ChildItem "$env:ANDROID_HOME\ndk" | Sort-Object Name -Descending | Select-Object -First 1).FullName
+          Write-Host "Using NDK: $ndk"
+          Write-Output "NDK_HOME=$ndk" >> $env:GITHUB_ENV
+
+      - name: Install frontend dependencies
+        working-directory: clipstash-next
+        run: npm ci
+
+      - name: Build signed Android APK
+        working-directory: clipstash-next
+        run: npm run tauri android build
+
+      - name: Rename APK artifact
+        shell: pwsh
+        run: |
+          $apk = "clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk"
+          Copy-Item $apk "clipstash-next/ClipStash.Next_${{ steps.version.outputs.value }}_android-universal-release-signed.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipStash-Next-Android-v${{ steps.version.outputs.value }}
+          path: clipstash-next/ClipStash.Next_*_android-universal-release-signed.apk
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: clipstash-next/ClipStash.Next_*_android-universal-release-signed.apk
