@@ -26,6 +26,8 @@
 
 ## 已完成
 
+
+- 已发布 `v2.2.1`（标签提交 `6a7a47c`）：八阶段性能优化 + 审查整改（重量级命令 spawn_blocking、asset scope 去重、粘贴目标非空标题比对、深列表 4 路并发刷新、回退预览原图尺寸）。发布前验证：前端 136 passed / 9 skipped、生产构建通过、Rust 94 passed / 20 ignored、fmt 通过。CI 构建成功，GitHub Release 已挂 Windows MSI/NSIS 与 Android 签名 universal APK。真机验收（实机耗时/内存/预览焦点/跨应用分享）仍待用户回传。
 - 2026-09-04 性能阶段 2：数据目录初始化与统计解耦，成功初始化按目录缓存；并发首调、失败重试、目录隔离、修复失效均有测试，启动/导入前检查去掉无用统计。主代理 Rust 全测 67 passed / 20 ignored、fmt 通过；真实临时库独占锁阻止 COUNT 时仍能连续读图 100 次，初始化保持 1 次。没有数据格式变更，真实速度待采样。
 - 2026-09-04 性能阶段 1：统一异步补图、每批最多 4 张、切页/卸载失效保护、加载与错误占位分开，翻页失败仍继续当前页补图；新增加载集成测试 6 项，全量前端 98 passed / 9 skipped，生产构建通过。计时 measure 与实机采样限制见 `PERFORMANCE_PLAN.md`；真实 Windows/Android 速度仍待采样。后端基线 `cargo test --lib` 61 passed / 20 ignored。
 - 已发布 `v2.2.0`（发布提交 `9d247e7`）：消息时间按本机时区显示（库内统一 UTC，新增 `formatLocalTime`）；全部 IO 命令改 `#[tauri::command(async)]` 消除 UI 假死，前端加载加 epoch 竞态守卫；SQLite 开 WAL + busy_timeout 并新增 archived/created_at 与 message_id 索引；hover 预览窗口残留修复、图片 IPC 改二进制通道限并发、imageSources 缓存上限 300；zip 导入加大小上限且先验后读、导入去重改为导入前基准（包内重复消息不再丢失、重复导包仍幂等）；粘贴最近窗口前校验 PID+标题；破坏性操作写前备份保留最近 10 份；settings 原子写+损坏自愈、搜索 LIKE 转义、剪贴板重试、热键唯一性校验；Android 更新检查改异步、小组件 action 移入非导出 receiver、分享改队列、下载 ID 持久化、权限只提示一次、小组件查询 LIMIT 200。发布前验证通过：Vitest `91 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `59 passed | 20 ignored`、Kotlin 编译与单测；CI 构建 Windows MSI/NSIS 并自动挂 Release，Android universal APK 本地签名构建后手动上传。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.2.0`。已知遗留：hover 预览 localStorage 传整图、CSP 未开启、导出全量内存驻留、列表无 memo、迁移 O(N²) 无进度反馈、约 9 个零引用 API wrapper 待清理。真机验收（桌面 hover 预览/滚动手感、Android 分享/下载/小组件）仍待用户回传。
