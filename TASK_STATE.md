@@ -2,6 +2,11 @@
 
 ## 当前目标
 
+- 按用户授权顺序完成 ClipStash Next 八阶段性能优化的代码和自动化验收，保留原有 2.2.1 未提交改动，不自动发布。详细证据、限制与分阶段回滚见 PERFORMANCE_PLAN.md 文末最终验收。
+- 最终验证：前端 133 passed / 9 skipped，生产构建通过；Rust 93 passed / 20 ignored、fmt 通过。阶段 8 已包含 ZIP 图片及文件选择分块、顺序遍历、候选去重、回滚清理、最终替换保护、进度和 24 小时过期上传回收。
+- 2026-09-04 综合审查：最新 Android ARM64 cargo check 通过（50 条警告）；release Kotlin/JVM 任务成功，输出为 up-to-date。adb devices -l 为空，未做 APK 安装、真机耗时/帧率/内存与跨应用验证。
+- 后续最小行动：隔离 release 测试数据进行 Windows/Android 实机计时、内存与交互验收；当前未提交或发布，不能将自动化通过视作实机体验已通过。旧 bytes 导入仅兼容保留，文件选择走 1MiB 二进制块；新上传开始时回收过期暂存，正在导入的路径保持保护。
+
 - 将 ClipStash 逐步从 Python + Tkinter/customtkinter 重构为 Tauri 2 + React + TypeScript + Rust + SQLite。
 - 当前阶段切回功能优先：先把 Tauri 版做成可安心日常使用，再回头处理模块整理细节。
 - 根目录 `start-latest.bat` 现在应直接启动 `clipstash-next` 的 Tauri dev 入口，避免旧 release exe 打开过期界面。
@@ -20,6 +25,8 @@
 
 ## 已完成
 
+- 2026-09-04 性能阶段 2：数据目录初始化与统计解耦，成功初始化按目录缓存；并发首调、失败重试、目录隔离、修复失效均有测试，启动/导入前检查去掉无用统计。主代理 Rust 全测 67 passed / 20 ignored、fmt 通过；真实临时库独占锁阻止 COUNT 时仍能连续读图 100 次，初始化保持 1 次。没有数据格式变更，真实速度待采样。
+- 2026-09-04 性能阶段 1：统一异步补图、每批最多 4 张、切页/卸载失效保护、加载与错误占位分开，翻页失败仍继续当前页补图；新增加载集成测试 6 项，全量前端 98 passed / 9 skipped，生产构建通过。计时 measure 与实机采样限制见 `PERFORMANCE_PLAN.md`；真实 Windows/Android 速度仍待采样。后端基线 `cargo test --lib` 61 passed / 20 ignored。
 - 已发布 `v2.2.0`（发布提交 `9d247e7`）：消息时间按本机时区显示（库内统一 UTC，新增 `formatLocalTime`）；全部 IO 命令改 `#[tauri::command(async)]` 消除 UI 假死，前端加载加 epoch 竞态守卫；SQLite 开 WAL + busy_timeout 并新增 archived/created_at 与 message_id 索引；hover 预览窗口残留修复、图片 IPC 改二进制通道限并发、imageSources 缓存上限 300；zip 导入加大小上限且先验后读、导入去重改为导入前基准（包内重复消息不再丢失、重复导包仍幂等）；粘贴最近窗口前校验 PID+标题；破坏性操作写前备份保留最近 10 份；settings 原子写+损坏自愈、搜索 LIKE 转义、剪贴板重试、热键唯一性校验；Android 更新检查改异步、小组件 action 移入非导出 receiver、分享改队列、下载 ID 持久化、权限只提示一次、小组件查询 LIMIT 200。发布前验证通过：Vitest `91 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `59 passed | 20 ignored`、Kotlin 编译与单测；CI 构建 Windows MSI/NSIS 并自动挂 Release，Android universal APK 本地签名构建后手动上传。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.2.0`。已知遗留：hover 预览 localStorage 传整图、CSP 未开启、导出全量内存驻留、列表无 memo、迁移 O(N²) 无进度反馈、约 9 个零引用 API wrapper 待清理。真机验收（桌面 hover 预览/滚动手感、Android 分享/下载/小组件）仍待用户回传。
 - 已发布 `v2.1.19`（发布提交 `bce65cd`）：修复移动端打包导入的图片无法复制/导入（JPEG 字节以 .png 扩展名保存，复制时按扩展名选错解码器报"读取旧图片准备复制失败"），复制图片改为按内容魔数解码，存量数据直接恢复；源头治理为所有图片写入路径（新建、替换、拆分、Android 分享导入）和数据包导出/导入统一按内容魔数确定扩展名（png/jpg/gif/bmp/webp），旧数据包再导入自动修正文件名。发布前验证通过：Vitest `87 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `41 passed | 20 ignored`（含新增 3 个魔数嗅探单测）、本机旧库只读审计 `normal=5 archived=112 total=117 joined_images=130 orphan_images=0`；Windows MSI/NSIS 与 Android universal APK 均已上传，APK `versionName=2.1.19`、`versionCode=2001019`，V2 签名有效，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.19`。真机验收（导入消息 #380 含 JPEG 图片的队列粘贴、Android 分享 JPEG 落盘为 .jpg）仍待用户回传。
 - 已发布 `v2.1.18`（发布提交 `5577899`）：版本号已同步到 npm、Cargo、Tauri、前端和 Android（`versionName=2.1.18`、`versionCode=2001018`）；包含 Windows 图片单击不再误触 Android 固定预览，以及 Android 不再注册桌面文件拖放、全局粘贴快捷键和悬浮预览清理。发布前验证通过：Vitest `87 passed | 9 skipped`、前端构建、Cargo fmt、Rust 全测 `38 passed | 20 ignored`、迁移隔离测试和本机旧库只读审计；Windows MSI/NSIS 与 Android universal APK 均已上传，APK 四 ABI 齐全、V2 签名有效，正式证书 SHA-256 指纹保持 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。GitHub Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.1.18`。
