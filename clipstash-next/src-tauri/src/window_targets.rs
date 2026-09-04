@@ -42,20 +42,12 @@ pub fn last_external_window_target() -> Option<ExternalWindowTarget> {
 fn verify_target_identity(
     target: &ExternalWindowTarget,
     expected_process_id: u32,
-    expected_title: &str,
+    _expected_title: &str,
 ) -> Result<(), String> {
     if target.process_id != expected_process_id {
         return Err(format!(
             "目标窗口已变化，请重新切换到目标窗口后再试（期望 pid={expected_process_id}，实际 pid={}）：hwnd={}",
             target.process_id, target.hwnd
-        ));
-    }
-    if target.title.trim() != expected_title.trim() {
-        return Err(format!(
-            "目标窗口已变化，请重新切换到目标窗口后再试（期望标题“{}”，实际标题“{}”）：hwnd={}",
-            expected_title.trim(),
-            target.title.trim(),
-            target.hwnd
         ));
     }
     Ok(())
@@ -213,9 +205,6 @@ mod windows_impl {
         }
 
         let target = unsafe { target_from_hwnd(hwnd) }?;
-        if target.title.trim().is_empty() {
-            return Err(format!("目标窗口标题为空：hwnd={hwnd_value}"));
-        }
         verify_target_identity(&target, expected_process_id, expected_title)?;
         remember_external_window(target.clone());
 
@@ -390,7 +379,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verify_target_identity_rejects_changed_pid_or_title() {
+    fn verify_target_identity_rejects_changed_pid_but_allows_title_changes() {
         let target = ExternalWindowTarget {
             hwnd: 123,
             process_id: 456,
@@ -406,9 +395,15 @@ mod tests {
             .expect_err("changed pid must be rejected");
         assert!(pid_changed.contains("目标窗口已变化"));
 
-        let title_changed = verify_target_identity(&target, 456, "其他窗口")
-            .expect_err("changed title must be rejected");
-        assert!(title_changed.contains("目标窗口已变化"));
+        verify_target_identity(&target, 456, "其他窗口")
+            .expect("dynamic window title changes must not block validation");
+
+        let empty_title = ExternalWindowTarget {
+            title: String::new(),
+            ..target
+        };
+        verify_target_identity(&empty_title, 456, "其他窗口")
+            .expect("an empty dynamic title must not block validation");
     }
 
     #[test]
