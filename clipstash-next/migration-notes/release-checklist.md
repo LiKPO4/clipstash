@@ -24,11 +24,11 @@ cargo test migrates_legacy_data_once_and_skips_duplicates_without_touching_legac
 
 ## 发布产物
 
-版本号来自 `clipstash-next/src-tauri/tauri.conf.json` 和 `clipstash-next/package.json`，当前为 `2.2.0`。
+版本号来自 `clipstash-next/src-tauri/tauri.conf.json` 和 `clipstash-next/package.json`，当前为 `2.2.1`。
 
 - 主程序：`clipstash-next/src-tauri/target/release/clipstash-next.exe`
-- MSI：`clipstash-next/src-tauri/target/release/bundle/msi/ClipStash Next_2.2.0_x64_en-US.msi`
-- NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.2.0_x64-setup.exe`
+- MSI：`clipstash-next/src-tauri/target/release/bundle/msi/ClipStash Next_2.2.1_x64_en-US.msi`
+- NSIS：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.2.1_x64-setup.exe`
 - Android release APK：自 v2.2.0 起由 CI（`.github/workflows/build.yml` 的 `android` job）用 GitHub Secrets 中的签名密钥云端构建，产物直接挂载 Release，命名为 `ClipStash.Next_<version>_android-universal-release-signed.apk`。本地手动构建时 Gradle 输出 `clipstash-next/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`。签名密钥存放在仓库 Secrets（`ANDROID_KEYSTORE_BASE64`/`KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`），正式证书 SHA-256 指纹 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a`。
 
 GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 MSI 作为备用安装入口；Android 版上传 release 构建签名通用 APK，用于侧载验收。
@@ -58,7 +58,7 @@ GitHub Release 上传 Windows 用户优先使用 NSIS 安装包，同时保留 M
 ### 1. 安装与首次迁移
 
 1. 关闭正在运行的 ClipStash Next。
-2. 运行 NSIS 安装包：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.2.0_x64-setup.exe`。
+2. 运行 NSIS 安装包：`clipstash-next/src-tauri/target/release/bundle/nsis/ClipStash Next_2.2.1_x64-setup.exe`。
 3. 启动 ClipStash Next。
 4. 打开设置页，确认“本地存储”指向 `%APPDATA%\ClipStash Next`。
 5. 确认 `%APPDATA%\ClipStash Next\clipstash.db` 和 `%APPDATA%\ClipStash Next\images` 存在。
