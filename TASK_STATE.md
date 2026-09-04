@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-- 按用户授权顺序完成 ClipStash Next 八阶段性能优化的代码和自动化验收，保留原有 2.2.1 未提交改动，不自动发布。详细证据、限制与分阶段回滚见 PERFORMANCE_PLAN.md 文末最终验收。
-- 最终验证：前端 133 passed / 9 skipped，生产构建通过；Rust 93 passed / 20 ignored、fmt 通过。阶段 8 已包含 ZIP 图片及文件选择分块、顺序遍历、候选去重、回滚清理、最终替换保护、进度和 24 小时过期上传回收。
+- 八阶段性能优化已拆分提交（470a4f2..f5adbbb 共 5 个提交），审查整改也已提交（2c46f15、5b09700、cdf0cbd）。详细证据、限制与分阶段回滚见 PERFORMANCE_PLAN.md 文末最终验收。
+- 2026-09-04 审查整改：重量级导入/导出/上传/预览命令改 spawn_blocking；asset scope 授权前 is_allowed 去重；粘贴目标校验恢复非空标题比对；深列表刷新改 4 路并发批查询；消息/编辑器磁贴回退预览按原图真实尺寸。遗留：prepare_preview_upload 的 ≤128MiB bytes.clone 受 tauri raw-body 借用模型限制仍在 worker 上（毫秒级）。
+- 整改后验证：前端 136 passed / 9 skipped，生产构建通过；Rust 94 passed / 20 ignored、fmt 通过。
 - 2026-09-04 综合审查：最新 Android ARM64 cargo check 通过（50 条警告）；release Kotlin/JVM 任务成功，输出为 up-to-date。adb devices -l 为空，未做 APK 安装、真机耗时/帧率/内存与跨应用验证。
-- 后续最小行动：隔离 release 测试数据进行 Windows/Android 实机计时、内存与交互验收；当前未提交或发布，不能将自动化通过视作实机体验已通过。旧 bytes 导入仅兼容保留，文件选择走 1MiB 二进制块；新上传开始时回收过期暂存，正在导入的路径保持保护。
+- 后续最小行动：隔离 release 测试数据进行 Windows/Android 实机计时、内存与交互验收；未发布，不能将自动化通过视作实机体验已通过。旧 bytes 导入仅兼容保留，文件选择走 1MiB 二进制块；新上传开始时回收过期暂存，正在导入的路径保持保护。
 
 - 将 ClipStash 逐步从 Python + Tkinter/customtkinter 重构为 Tauri 2 + React + TypeScript + Rust + SQLite。
 - 当前阶段切回功能优先：先把 Tauri 版做成可安心日常使用，再回头处理模块整理细节。
