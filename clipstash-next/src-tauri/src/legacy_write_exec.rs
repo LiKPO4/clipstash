@@ -355,7 +355,41 @@ pub(crate) fn create_mixed_message_for_path(
     images_data: Vec<Vec<u8>>,
 ) -> Result<LegacyMessage, String> {
     validate_images_data(&images_data)?;
+    create_message_with_image_reader(db_path, text_content, images_data.into_iter().map(Ok))
+}
 
+pub(crate) fn create_message_from_image_files_for_path(
+    db_path: &Path,
+    text_content: Option<String>,
+    files: Vec<std::path::PathBuf>,
+) -> Result<LegacyMessage, String> {
+    if files.is_empty() {
+        return create_text_message_for_path(db_path, text_content);
+    }
+    create_message_with_image_reader(
+        db_path,
+        text_content,
+        files.into_iter().map(|path| {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            fs::File::open(&path)
+                .map_err(|e| e.to_string())?
+                .take(256 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.is_empty() || bytes.len() > 256 * 1024 * 1024 {
+                return Err("分享图片为空或超过 256MiB".into());
+            }
+            Ok(bytes)
+        }),
+    )
+}
+
+fn create_message_with_image_reader(
+    db_path: &Path,
+    text_content: Option<String>,
+    images_data: impl Iterator<Item = Result<Vec<u8>, String>>,
+) -> Result<LegacyMessage, String> {
     if !db_path.is_file() {
         return Err(format!(
             "新增图片消息失败，数据库不存在：{}",
@@ -389,12 +423,13 @@ pub(crate) fn create_mixed_message_for_path(
         .map_err(|err| format!("新增图文消息失败：{err}"))?;
 
         let message_id = tx.last_insert_rowid();
-        for (index, image_data) in images_data.iter().enumerate() {
+        for (index, image_data) in images_data.enumerate() {
+            let image_data = image_data?;
             let filename =
-                next_image_filename(&images_dir, index, sniff_image_extension(image_data));
+                next_image_filename(&images_dir, index, sniff_image_extension(&image_data));
             let path = images_dir.join(&filename);
             saved_paths.push(path.clone());
-            save_image_file(&path, image_data)?;
+            save_image_file(&path, &image_data)?;
             tx.execute(
                 "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
                 params![message_id, filename],

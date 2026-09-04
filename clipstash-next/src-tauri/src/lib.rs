@@ -1,6 +1,9 @@
+mod android_share;
 mod app_data;
 mod app_settings;
 mod data_transfer;
+mod image_preview;
+mod image_thumbnails;
 mod import_executor;
 mod keyboard_input;
 mod legacy_backup;
@@ -21,7 +24,9 @@ mod legacy_write_exec;
 mod legacy_write_ops;
 mod legacy_write_precheck;
 mod legacy_write_validation;
+mod transfer_progress;
 mod window_targets;
+mod zip_upload;
 
 use std::fs;
 use std::process::Command;
@@ -114,16 +119,39 @@ fn migrate_legacy_data() -> Result<app_data::AppMigrationResult, String> {
 }
 
 #[tauri::command(async)]
-fn export_normal_data_zip() -> Result<data_transfer::DataExportResult, String> {
+fn export_normal_data_zip(
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<data_transfer::DataExportResult, String> {
     let Some(output_path) = pick_save_zip_file_with_windows_dialog()? else {
         return Err("已取消导出数据".to_string());
     };
-    data_transfer::export_normal_data_zip_to_path(output_path)
+    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+        data_transfer::export_normal_data_zip_to_path(output_path)
+    })
 }
 
 #[tauri::command(async)]
-fn export_normal_data_zip_bytes() -> Result<data_transfer::DataExportBytesResult, String> {
-    data_transfer::export_normal_data_zip_to_temp_bytes()
+fn export_normal_data_zip_bytes(
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<data_transfer::DataExportBytesResult, String> {
+    transfer_progress::run(
+        progress.map(|id| id.channel_on(webview)),
+        data_transfer::export_normal_data_zip_to_temp_bytes,
+    )
+}
+
+#[tauri::command(async)]
+fn export_normal_data_zip_file(
+    app: AppHandle,
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<data_transfer::DataExportFileResult, String> {
+    let root = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+        data_transfer::export_normal_data_zip_to_temp_file(root.join("ClipStash Next Exports"))
+    })
 }
 
 #[tauri::command(async)]
@@ -132,32 +160,52 @@ fn archive_exported_messages(message_ids: Vec<i64>) -> Result<app_data::AppStats
 }
 
 #[tauri::command(async)]
-fn import_data_zip() -> Result<data_transfer::DataImportResult, String> {
+fn import_data_zip(
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<data_transfer::DataImportResult, String> {
     let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
         return Err("已取消导入数据".to_string());
     };
-    data_transfer::import_data_zip_from_path(zip_path)
+    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+        data_transfer::import_data_zip_from_path(zip_path)
+    })
 }
 
 #[tauri::command(async)]
-fn preview_data_zip() -> Result<data_transfer::DataImportPreview, String> {
+fn preview_data_zip(
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<data_transfer::DataImportPreview, String> {
     let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
         return Err("已取消导入数据".to_string());
     };
-    data_transfer::preview_data_zip_from_path(zip_path)
+    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+        data_transfer::preview_data_zip_from_path(zip_path)
+    })
 }
 
 #[tauri::command(async)]
-fn import_data_zip_from_path(path: String) -> Result<data_transfer::DataImportResult, String> {
-    data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
+fn import_data_zip_from_path(
+    path: String,
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<data_transfer::DataImportResult, String> {
+    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+        data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
+    })
 }
 
 #[tauri::command(async)]
 fn import_data_zip_bytes(
     filename: String,
     bytes: Vec<u8>,
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataImportResult, String> {
-    data_transfer::import_data_zip_from_bytes(filename, bytes)
+    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+        data_transfer::import_data_zip_from_bytes(filename, bytes)
+    })
 }
 
 #[tauri::command(async)]
@@ -493,8 +541,13 @@ fn copy_legacy_message_text_to_clipboard(
 fn copy_legacy_message_import_queue_item_to_clipboard(
     message_id: i64,
     item_index: usize,
+    match_blank_lines_to_images: bool,
 ) -> Result<legacy_data::LegacyImportQueueCopyResult, String> {
-    app_data::copy_message_import_queue_item_to_clipboard(message_id, item_index)
+    app_data::copy_message_import_queue_item_to_clipboard(
+        message_id,
+        item_index,
+        match_blank_lines_to_images,
+    )
 }
 
 #[tauri::command(async)]
@@ -502,8 +555,14 @@ fn paste_legacy_import_queue_item(
     message_id: i64,
     item_index: usize,
     target_hwnd: isize,
+    match_blank_lines_to_images: bool,
 ) -> Result<import_executor::LegacyImportPasteResult, String> {
-    import_executor::paste_legacy_import_queue_item(message_id, item_index, target_hwnd)
+    import_executor::paste_legacy_import_queue_item(
+        message_id,
+        item_index,
+        target_hwnd,
+        match_blank_lines_to_images,
+    )
 }
 
 #[tauri::command(async)]
@@ -511,8 +570,14 @@ fn paste_legacy_import_queue(
     message_id: i64,
     target_hwnd: isize,
     delay_ms: Option<u64>,
+    match_blank_lines_to_images: bool,
 ) -> Result<import_executor::LegacyImportQueuePasteResult, String> {
-    import_executor::paste_legacy_import_queue(message_id, target_hwnd, delay_ms)
+    import_executor::paste_legacy_import_queue(
+        message_id,
+        target_hwnd,
+        delay_ms,
+        match_blank_lines_to_images,
+    )
 }
 
 #[tauri::command(async)]
@@ -521,12 +586,14 @@ fn paste_legacy_import_queue_with_optional_archive(
     target_hwnd: isize,
     delay_ms: Option<u64>,
     archive_after_success: bool,
+    match_blank_lines_to_images: bool,
 ) -> Result<import_executor::LegacyImportQueuePasteArchiveResult, String> {
     import_executor::paste_legacy_import_queue_with_optional_archive(
         message_id,
         target_hwnd,
         delay_ms,
         archive_after_success,
+        match_blank_lines_to_images,
     )
 }
 
@@ -536,6 +603,7 @@ fn paste_legacy_import_queue_to_recent_window(
     message_id: i64,
     delay_ms: Option<u64>,
     archive_after_success: bool,
+    match_blank_lines_to_images: bool,
 ) -> Result<import_executor::LegacyImportQueuePasteArchiveResult, String> {
     let target = window_targets::last_external_window_target()
         .ok_or_else(|| "未找到外部输入窗口，已取消导入".to_string())?;
@@ -556,6 +624,7 @@ fn paste_legacy_import_queue_to_recent_window(
         target.hwnd,
         delay_ms,
         archive_after_success,
+        match_blank_lines_to_images,
     );
 
     if was_visible {
@@ -577,8 +646,9 @@ fn stage_legacy_message_import_to_clipboard(
 #[tauri::command(async)]
 fn preview_legacy_message_import_queue(
     message_id: i64,
+    match_blank_lines_to_images: bool,
 ) -> Result<legacy_data::LegacyImportQueuePreview, String> {
-    app_data::preview_message_import_queue(message_id)
+    app_data::preview_message_import_queue(message_id, match_blank_lines_to_images)
 }
 
 #[tauri::command(async)]
@@ -1153,7 +1223,7 @@ pub fn run() {
                     .map_err(|err| format!("定位应用数据目录失败：{err}"))?;
                 app_data::set_app_data_base_dir(data_dir);
             }
-            app_data::ensure_app_data_ready()?;
+            app_data::ready_app_data_dir_path()?;
             #[cfg(target_os = "windows")]
             {
                 if let Err(err) = restore_launch_on_startup_if_requested(app.handle()) {
@@ -1204,6 +1274,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            zip_upload::begin_zip_upload,
+            zip_upload::append_zip_upload,
+            zip_upload::abort_zip_upload,
+            zip_upload::finish_zip_upload,
             archive_exported_messages,
             capture_current_clipboard,
             create_legacy_image_message,
@@ -1212,6 +1286,7 @@ pub fn run() {
             download_and_open_update_installer,
             export_normal_data_zip,
             export_normal_data_zip_bytes,
+            export_normal_data_zip_file,
             fetch_latest_github_release,
             copy_legacy_image_to_clipboard,
             copy_legacy_message_text_to_clipboard,
@@ -1238,6 +1313,11 @@ pub fn run() {
             preview_legacy_message_import_queue,
             read_dropped_file_bytes,
             read_legacy_image_bytes,
+            image_thumbnails::read_image_thumbnail_bytes,
+            image_preview::prepare_image_preview,
+            image_preview::prepare_preview_upload,
+            image_preview::release_preview_upload,
+            android_share::import_android_share,
             read_current_clipboard,
             repair_app_data_dir,
             replace_legacy_message_images,

@@ -23,6 +23,103 @@ use std::{
 };
 
 #[test]
+fn batch_images_preserve_page_boundaries_order_and_nullable_archive() {
+    let data_dir = env::temp_dir().join(format!(
+        "clipstash-batch-images-{}-{}",
+        process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(data_dir.join("images")).unwrap();
+    fs::write(data_dir.join("images/present.png"), b"fixture").unwrap();
+    let conn = Connection::open(data_dir.join("clipstash.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY, text_content TEXT,
+            created_at TEXT, archived INTEGER, archived_at TEXT);
+         CREATE TABLE message_images (id INTEGER PRIMARY KEY, message_id INTEGER,
+            image_filename TEXT);
+         CREATE INDEX image_owner ON message_images(message_id);
+         WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x<205)
+         INSERT INTO messages SELECT x, 'match', '2024-01-01',
+            CASE WHEN x=1 THEN NULL WHEN x>103 THEN 1 ELSE 0 END, NULL FROM seq;
+         INSERT INTO message_images SELECT id*10+2, id, 'missing.png' FROM messages WHERE id%3<>0;
+         INSERT INTO message_images SELECT id*10+1, id, 'present.png' FROM messages WHERE id%3<>0;
+         INSERT INTO message_images VALUES (99999, 99999, 'orphan.png');",
+    )
+    .unwrap();
+    for (view, first, last) in [
+        (MessageView::Normal, 1, 103),
+        (MessageView::Archived, 104, 205),
+    ] {
+        for sort in [SortOrder::Newest, SortOrder::Oldest] {
+            let mut actual = Vec::new();
+            let mut offset = 0;
+            loop {
+                let page = list_legacy_messages_from_dir_filtered(
+                    data_dir.clone(),
+                    view,
+                    sort,
+                    Some(offset),
+                    Some(500),
+                    Some("match".into()),
+                )
+                .unwrap();
+                assert_eq!(page.limit, 100);
+                assert_eq!(page.total_count, last - first + 1);
+                for message in &page.messages {
+                    assert_eq!(message.archived, message.id > 103);
+                    if message.id % 3 == 0 {
+                        assert!(message.images.is_empty());
+                    } else {
+                        assert_eq!(
+                            message
+                                .images
+                                .iter()
+                                .map(|image| image.id)
+                                .collect::<Vec<_>>(),
+                            vec![message.id * 10 + 1, message.id * 10 + 2]
+                        );
+                        assert!(message.images[0].exists);
+                        assert!(!message.images[1].exists);
+                        assert_eq!(message.images[0].filename, "present.png");
+                    }
+                    actual.push(message.id);
+                }
+                offset += page.messages.len() as i64;
+                if !page.has_more {
+                    break;
+                }
+            }
+            let mut expected: Vec<i64> = (first..=last).collect();
+            if sort == SortOrder::Newest {
+                expected.reverse();
+            }
+            assert_eq!(actual, expected);
+        }
+    }
+    let empty = list_legacy_messages_from_dir_filtered(
+        data_dir.clone(),
+        MessageView::Normal,
+        SortOrder::Newest,
+        None,
+        None,
+        Some("absent".into()),
+    )
+    .unwrap();
+    assert!(empty.messages.is_empty());
+    assert_eq!(empty.total_count, 0);
+    assert!(!empty.has_more);
+    let nullable =
+        crate::legacy_query::read_legacy_message_by_id(&conn, &data_dir.join("images"), 1).unwrap();
+    assert!(!nullable.archived);
+    assert_eq!(nullable.images.len(), 2);
+    drop(conn);
+    fs::remove_dir_all(data_dir).unwrap();
+}
+
+#[test]
 fn reads_counts_from_legacy_messages_table() {
     let data_dir = env::temp_dir().join(format!(
         "clipstash-next-legacy-stats-test-{}",
@@ -263,7 +360,7 @@ fn previews_import_queue_in_legacy_order_without_writing() {
     .expect("seed fixture");
     drop(conn);
 
-    let preview = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 1)
+    let preview = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 1, false)
         .expect("preview import queue");
 
     assert_eq!(preview.message_id, 1);
@@ -288,19 +385,239 @@ fn previews_import_queue_in_legacy_order_without_writing() {
         Some("second.png")
     );
 
-    let empty = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 2)
+    let empty = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 2, false)
         .expect_err("empty message should fail preview");
     assert!(empty.contains("消息为空或图片文件缺失"));
 
     let out_of_range =
-        copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir.clone(), 1, 3)
+        copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir.clone(), 1, 3, false)
             .expect_err("out-of-range queue item should fail before writing clipboard");
     assert!(out_of_range.contains("索引超出范围"));
 
     let empty_copy =
-        copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir.clone(), 2, 0)
+        copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir.clone(), 2, 0, false)
             .expect_err("empty message should fail before writing clipboard");
     assert!(empty_copy.contains("消息为空或图片文件缺失"));
+
+    fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
+}
+
+#[test]
+fn matches_internal_blank_lines_to_existing_images_when_enabled() {
+    let data_dir = env::temp_dir().join(format!(
+        "clipstash-next-import-queue-blank-line-test-{}",
+        process::id()
+    ));
+    let _ = fs::remove_dir_all(&data_dir);
+    fs::create_dir_all(data_dir.join("images")).expect("create images dir");
+    for filename in ["one.png", "two.png", "three.png"] {
+        fs::write(data_dir.join("images").join(filename), tiny_png_bytes()).expect("seed image");
+    }
+
+    let db_path = data_dir.join("clipstash.db");
+    let conn = Connection::open(&db_path).expect("create sqlite fixture");
+    conn.execute_batch(
+        "
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            archived INTEGER DEFAULT 0,
+            archived_at TIMESTAMP
+        );
+        CREATE TABLE message_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL,
+            image_filename TEXT NOT NULL
+        );
+        INSERT INTO messages (id, text_content, archived) VALUES
+            (1, 'first\n\nsecond\n\n\nthird', 0),
+            (2, 'no blank line', 0),
+            (3, 'one\n\ntwo', 0),
+            (4, 'left\r\n  \r\nright', 0),
+            (5, 'first\n\nsecond\n\nthird', 0),
+            (6, 'first\n\n  \r\nthird', 0),
+            (7, 'text only', 0),
+            (8, NULL, 0);
+        INSERT INTO message_images (id, message_id, image_filename) VALUES
+            (10, 1, 'one.png'),
+            (20, 1, 'two.png'),
+            (30, 1, 'three.png'),
+            (40, 2, 'one.png'),
+            (50, 2, 'two.png'),
+            (60, 3, 'one.png'),
+            (70, 3, 'two.png'),
+            (80, 3, 'three.png'),
+            (90, 4, 'one.png'),
+            (100, 5, 'one.png'),
+            (110, 5, 'missing.png'),
+            (120, 5, 'two.png'),
+            (130, 6, 'one.png'),
+            (140, 8, 'one.png');
+        ",
+    )
+    .expect("seed fixture");
+    drop(conn);
+
+    let default_off = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 1, false)
+        .expect("preview with matching disabled");
+    assert_eq!(default_off.items.len(), 4);
+    assert_eq!(
+        default_off.items[0].text.as_deref(),
+        Some("first\n\nsecond\n\n\nthird")
+    );
+
+    let matched = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 1, true)
+        .expect("preview matching three images");
+    assert_eq!(matched.items.len(), 7);
+    assert_eq!(matched.items[0].text.as_deref(), Some("first\n"));
+    assert_eq!(
+        matched.items[1]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
+    assert_eq!(matched.items[2].text.as_deref(), Some("\nsecond\n"));
+    assert_eq!(
+        matched.items[3]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("two.png")
+    );
+    assert_eq!(matched.items[4].text.as_deref(), Some("\n"));
+    assert_eq!(
+        matched.items[5]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("three.png")
+    );
+    assert_eq!(matched.items[6].text.as_deref(), Some("\nthird"));
+
+    let no_blank = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 2, true)
+        .expect("preview without blank lines");
+    assert_eq!(no_blank.items.len(), 3);
+    assert_eq!(no_blank.items[0].text.as_deref(), Some("no blank line"));
+    assert_eq!(
+        no_blank.items[1]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
+    assert_eq!(
+        no_blank.items[2]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("two.png")
+    );
+
+    let extra_images = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 3, true)
+        .expect("preview with extra images");
+    assert_eq!(extra_images.items.len(), 5);
+    assert_eq!(extra_images.items[0].text.as_deref(), Some("one\n"));
+    assert_eq!(
+        extra_images.items[1]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
+    assert_eq!(extra_images.items[2].text.as_deref(), Some("\ntwo"));
+    assert_eq!(
+        extra_images.items[3]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("two.png")
+    );
+    assert_eq!(
+        extra_images.items[4]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("three.png")
+    );
+
+    let whitespace_crlf = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 4, true)
+        .expect("preview CRLF whitespace-only placeholder");
+    assert_eq!(whitespace_crlf.items.len(), 3);
+    assert_eq!(whitespace_crlf.items[0].text.as_deref(), Some("left\r\n"));
+    assert_eq!(
+        whitespace_crlf.items[1]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
+    assert_eq!(whitespace_crlf.items[2].text.as_deref(), Some("\r\nright"));
+
+    let missing_does_not_consume_slot =
+        preview_legacy_message_import_queue_from_dir(data_dir.clone(), 5, true)
+            .expect("preview with missing image");
+    assert_eq!(missing_does_not_consume_slot.skipped_missing_image_count, 1);
+    assert_eq!(missing_does_not_consume_slot.items.len(), 5);
+    assert_eq!(
+        missing_does_not_consume_slot.items[0].text.as_deref(),
+        Some("first\n")
+    );
+    assert_eq!(
+        missing_does_not_consume_slot.items[1]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
+    assert_eq!(
+        missing_does_not_consume_slot.items[2].text.as_deref(),
+        Some("\nsecond\n")
+    );
+    assert_eq!(
+        missing_does_not_consume_slot.items[3]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("two.png")
+    );
+    assert_eq!(
+        missing_does_not_consume_slot.items[4].text.as_deref(),
+        Some("\nthird")
+    );
+
+    let image_shortage = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 6, true)
+        .expect("preview with fewer existing images than blank lines");
+    assert_eq!(image_shortage.items.len(), 3);
+    assert_eq!(image_shortage.items[0].text.as_deref(), Some("first\n"));
+    assert_eq!(
+        image_shortage.items[1]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
+    assert_eq!(
+        image_shortage.items[2].text.as_deref(),
+        Some("\n  \r\nthird")
+    );
+
+    let text_only = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 7, true)
+        .expect("preview text-only message");
+    assert_eq!(text_only.items.len(), 1);
+    assert_eq!(text_only.items[0].text.as_deref(), Some("text only"));
+
+    let image_only = preview_legacy_message_import_queue_from_dir(data_dir.clone(), 8, true)
+        .expect("preview image-only message");
+    assert_eq!(image_only.items.len(), 1);
+    assert_eq!(
+        image_only.items[0]
+            .image
+            .as_ref()
+            .map(|image| image.filename.as_str()),
+        Some("one.png")
+    );
 
     fs::remove_dir_all(data_dir).expect("remove sqlite fixture");
 }

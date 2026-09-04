@@ -12,13 +12,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
-import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.core.content.FileProvider
 import java.io.File
+import java.lang.ref.WeakReference
+import java.util.UUID
 import java.net.HttpURLConnection
 import java.net.URL
 import android.widget.Toast
@@ -29,9 +30,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
-  private var appWebView: WebView? = null
+  @Volatile private var appWebView: WebView? = null
   // 分享载荷队列：连续多次分享不会互相覆盖（前端每次消费一条，直到队列为空）
-  private val pendingShareQueue = ArrayDeque<String>()
   private var pendingWidgetAction: String? = null
   private var pendingUpdateJson: String? = null
   private var pendingUpdateApk: File? = null
@@ -43,6 +43,9 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    shareActivity = WeakReference(this)
+    val shareRoot = File(applicationContext.cacheDir, "clipstash-shares")
+    shareExecutor.execute { runCatching { ShareFileIO.removeStalePackets(shareRoot) } }
     captureSharedIntent(intent)
     captureWidgetAction(intent)
     restorePendingUpdateDownload()
@@ -86,6 +89,11 @@ class MainActivity : TauriActivity() {
     }
     webView.addJavascriptInterface(ClipStashAndroidBridge(), "ClipStashAndroid")
     notifyWidgetActionAvailable()
+  }
+
+  override fun onDestroy() {
+    appWebView = null
+    super.onDestroy()
   }
 
   override fun onNewIntent(intent: Intent) {
@@ -180,27 +188,24 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun shareZip(path: String) {
-      runOnUiThread {
-        val file = File(path)
-        if (!file.exists()) {
-          Toast.makeText(this@MainActivity, "导出的 zip 不存在", Toast.LENGTH_SHORT).show()
-          return@runOnUiThread
-        }
-
-        val uri = FileProvider.getUriForFile(
-          this@MainActivity,
-          "${applicationContext.packageName}.fileprovider",
-          file,
-        )
-        val intent = Intent(Intent.ACTION_SEND).apply {
-          type = "application/zip"
-          putExtra(Intent.EXTRA_STREAM, uri)
-          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+      shareExecutor.execute {
         try {
-          startActivity(Intent.createChooser(intent, "分享 ClipStash 数据包"))
-        } catch (_: ActivityNotFoundException) {
-          Toast.makeText(this@MainActivity, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+          val file = File(path)
+          require(file.isFile) { "导出的 zip 不存在" }
+          val uri = FileProvider.getUriForFile(this@MainActivity, "${applicationContext.packageName}.fileprovider", file)
+          val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          }
+          runOnUiThread {
+            try { startActivity(Intent.createChooser(intent, "分享 ClipStash 数据包")) }
+            catch (_: ActivityNotFoundException) {
+              Toast.makeText(this@MainActivity, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+            }
+          }
+        } catch (error: Exception) {
+          runOnUiThread { Toast.makeText(this@MainActivity, error.message ?: "分享数据包失败", Toast.LENGTH_SHORT).show() }
         }
       }
     }
@@ -474,40 +479,42 @@ class MainActivity : TauriActivity() {
     if (intent == null) return false
     val action = intent.action ?: return false
     if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return false
-
     val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.trim().orEmpty()
-    val images = readSharedImages(intent)
-    if (text.isEmpty() && images.length() == 0) return false
-
-    synchronized(pendingShareQueue) {
-      pendingShareQueue.addLast(
-        JSONObject()
-          .put("text", text)
-          .put("images", images)
-          .toString(),
-      )
+    val uris = sharedImageUris(intent)
+    if (text.isEmpty() && uris.isEmpty()) return false
+    val fallbackMime = intent.type.orEmpty()
+    val resolver = applicationContext.contentResolver
+    val root = File(applicationContext.cacheDir, "clipstash-shares")
+    // Consume the intent now so Activity recreation cannot enqueue this share again.
+    intent.action = null
+    intent.removeExtra(Intent.EXTRA_STREAM)
+    intent.removeExtra(Intent.EXTRA_TEXT)
+    shareExecutor.execute {
+      val shareId = UUID.randomUUID().toString()
+      val packet = File(root, shareId)
+      val payload = try {
+        check(packet.mkdirs()) { "创建分享暂存目录失败" }
+        val images = JSONArray()
+        var total = 0L
+        for (uri in uris) {
+          val mime = resolver.getType(uri) ?: fallbackMime
+          if (!mime.startsWith("image/")) continue
+          val filename = "${images.length()}.bin"
+          val input = resolver.openInputStream(uri) ?: error("无法读取分享图片")
+          total += input.use { ShareFileIO.copy(it, File(packet, filename), minOf(ShareFileIO.MAX_IMAGE_BYTES, ShareFileIO.MAX_PACKET_BYTES - total)) }
+          images.put(filename)
+        }
+        require(text.isNotEmpty() || images.length() > 0) { "分享内容为空" }
+        File(packet, "manifest.json").writeText(JSONObject().put("text", text).put("images", images).toString())
+        JSONObject().put("shareId", shareId).toString()
+      } catch (error: Exception) {
+        packet.deleteRecursively()
+        JSONObject().put("error", error.message ?: "接收分享失败").toString()
+      }
+      synchronized(pendingShareQueue) { pendingShareQueue.addLast(payload) }
+      shareActivity?.get()?.notifyShareAvailable()
     }
     return true
-  }
-
-  private fun readSharedImages(intent: Intent): JSONArray {
-    val images = JSONArray()
-    for (uri in sharedImageUris(intent)) {
-      val mimeType = contentResolver.getType(uri) ?: intent.type.orEmpty()
-      if (!mimeType.startsWith("image/")) continue
-
-      val bytes = contentResolver.openInputStream(uri)?.use { stream ->
-        stream.readBytes()
-      } ?: continue
-      if (bytes.isEmpty()) continue
-
-      images.put(
-        JSONObject()
-          .put("mimeType", mimeType)
-          .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)),
-      )
-    }
-    return images
   }
 
   @Suppress("DEPRECATION")
@@ -519,6 +526,10 @@ class MainActivity : TauriActivity() {
   }
 
   companion object {
+    private val shareExecutor = Executors.newSingleThreadExecutor()
+    private val pendingShareQueue = ArrayDeque<String>()
+    @Volatile private var shareActivity: WeakReference<MainActivity>? = null
+
     private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
     private const val GITHUB_RELEASE_API_URL =
       "https://api.github.com/repos/LiKPO4/clipstash/releases/latest"

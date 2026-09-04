@@ -5,7 +5,7 @@ use crate::{
 };
 use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 const DEFAULT_MESSAGE_LIMIT: i64 = 30;
 const MAX_MESSAGE_LIMIT: i64 = 100;
@@ -91,6 +91,10 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         .map_err(|err| format!("只读打开旧数据库失败：{err}"))?;
     configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
+    // Keep page rows, associated images, and any exact count in one read snapshot.
+    let snapshot = conn
+        .unchecked_transaction()
+        .map_err(|err| format!("开始消息读取事务失败：{err}"))?;
 
     let offset = offset.unwrap_or(0).max(0);
     let limit = limit
@@ -102,19 +106,6 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
     let search_pattern = normalized_search
         .as_ref()
         .map(|value| format!("%{}%", escape_like_pattern(value)));
-    let total_count = if let Some(pattern) = search_pattern.as_deref() {
-        conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM messages WHERE ({}) AND text_content LIKE ? ESCAPE '\\'",
-                view_where_sql(view)
-            ),
-            params![pattern],
-            |row| row.get(0),
-        )
-        .map_err(|err| format!("查询旧数据库计数失败：{err}"))?
-    } else {
-        query_count(&conn, view_count_sql(view))?
-    };
     let order = match sort {
         SortOrder::Newest => "DESC",
         SortOrder::Oldest => "ASC",
@@ -143,12 +134,12 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         .prepare(&sql)
         .map_err(|err| format!("准备旧消息查询失败：{err}"))?;
     let map_row = |row: &rusqlite::Row<'_>| {
-        let archived: i64 = row.get(3)?;
+        let archived: Option<i64> = row.get(3)?;
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, String>(2)?,
-            archived == 1,
+            archived == Some(1),
             row.get::<_, Option<String>>(4)?,
         ))
     };
@@ -163,18 +154,36 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
     for row in rows {
         let (id, text_content, created_at, archived, archived_at) =
             row.map_err(|err| format!("读取旧消息行失败：{err}"))?;
-        let images = list_images_for_message(&conn, &images_dir, id)?;
         messages.push(LegacyMessage {
             id,
             text_content,
             created_at,
             archived,
             archived_at,
-            images,
+            images: Vec::new(),
         });
     }
+    attach_images_for_page(&conn, &images_dir, &mut messages)?;
+    let total_count = page_total_count(offset, limit, messages.len(), || {
+        if let Some(pattern) = search_pattern.as_deref() {
+            conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM messages WHERE ({}) AND text_content LIKE ? ESCAPE '\\'",
+                    view_where_sql(view)
+                ),
+                params![pattern],
+                |row| row.get(0),
+            )
+            .map_err(|err| format!("查询旧数据库计数失败：{err}"))
+        } else {
+            query_count(&conn, view_count_sql(view))
+        }
+    })?;
 
     let has_more = offset + (messages.len() as i64) < total_count;
+    snapshot
+        .commit()
+        .map_err(|err| format!("结束消息读取事务失败：{err}"))?;
 
     Ok(LegacyMessagePage {
         view: view_key(view).to_string(),
@@ -187,18 +196,47 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
     })
 }
 
+fn page_total_count(
+    offset: i64,
+    limit: i64,
+    length: usize,
+    count: impl FnOnce() -> Result<i64, String>,
+) -> Result<i64, String> {
+    // A short nonempty page (or first empty page) proves the end in this snapshot.
+    // An empty deep page may have overshot after deletions, so still count it.
+    if (length as i64) < limit && (offset == 0 || length > 0) {
+        Ok(offset + length as i64)
+    } else {
+        count()
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    #[test]
+    fn skips_count_only_when_page_proves_exact_total() {
+        for (offset, length, expected) in [(0, 0, 0), (0, 29, 29), (60, 12, 72)] {
+            assert_eq!(
+                super::page_total_count(offset, 30, length, || panic!("unneeded COUNT")).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(super::page_total_count(0, 30, 30, || Ok(90)).unwrap(), 90);
+        assert_eq!(super::page_total_count(90, 30, 0, || Ok(42)).unwrap(), 42);
+        assert!(super::page_total_count(0, 30, 30, || Err("read failure".into())).is_err());
+    }
+}
+
 pub(crate) fn view_where_sql(view: MessageView) -> &'static str {
     match view {
-        MessageView::Normal => "archived = 0 OR archived IS NULL",
+        MessageView::Normal => "COALESCE(archived, 0) = 0",
         MessageView::Archived => "archived = 1",
     }
 }
 
 fn view_count_sql(view: MessageView) -> &'static str {
     match view {
-        MessageView::Normal => {
-            "SELECT COUNT(*) FROM messages WHERE archived = 0 OR archived IS NULL"
-        }
+        MessageView::Normal => "SELECT COUNT(*) FROM messages WHERE COALESCE(archived, 0) = 0",
         MessageView::Archived => "SELECT COUNT(*) FROM messages WHERE archived = 1",
     }
 }
@@ -244,12 +282,12 @@ pub(crate) fn read_legacy_message_by_id(
              WHERE id = ?",
             [message_id],
             |row| {
-                let archived: i64 = row.get(3)?;
+                let archived: Option<i64> = row.get(3)?;
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
-                    archived == 1,
+                    archived == Some(1),
                     row.get::<_, Option<String>>(4)?,
                 ))
             },
@@ -265,6 +303,52 @@ pub(crate) fn read_legacy_message_by_id(
         archived_at,
         images,
     })
+}
+
+// A page has at most 100 messages, safely below SQLite's bound-parameter limit.
+fn attach_images_for_page(
+    conn: &Connection,
+    images_dir: &PathBuf,
+    messages: &mut [LegacyMessage],
+) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let positions: HashMap<i64, usize> = messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| (message.id, index))
+        .collect();
+    let placeholders = vec!["?"; messages.len()].join(",");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT id, message_id, image_filename FROM message_images \
+             WHERE message_id IN ({placeholders}) ORDER BY message_id, id"
+        ))
+        .map_err(|err| format!("准备旧图片查询失败：{err}"))?;
+    let ids: Vec<i64> = messages.iter().map(|message| message.id).collect();
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(ids), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|err| format!("查询旧图片失败：{err}"))?;
+    for row in rows {
+        let (id, message_id, filename) = row.map_err(|err| format!("读取旧图片行失败：{err}"))?;
+        let path = images_dir.join(&filename);
+        if let Some(&index) = positions.get(&message_id) {
+            messages[index].images.push(LegacyMessageImage {
+                id,
+                filename,
+                exists: path.is_file(),
+                path: path_to_string(path),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn list_images_for_message(

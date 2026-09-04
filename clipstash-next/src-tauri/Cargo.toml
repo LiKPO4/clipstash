@@ -1,6 +1,6 @@
 [package]
 name = "clipstash-next"
-version = "2.2.0"
+version = "2.2.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -27,10 +27,10 @@ reqwest = { version = "0.13.4", default-features = false, features = ["blocking"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 sha2 = "0.10.9"
 zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = "3.6.1"
-image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-single-instance = "2.3.4"

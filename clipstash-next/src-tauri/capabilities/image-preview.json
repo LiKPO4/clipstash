@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "image-preview",
+  "description": "Preview window receives image URLs and acknowledges loading",
+  "windows": ["image-preview"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:event:allow-emit-to"]
+}

@@ -230,21 +230,22 @@ pub(crate) fn stage_legacy_message_import_to_clipboard_from_dir(
 pub(crate) fn preview_legacy_message_import_queue_from_dir(
     data_dir: PathBuf,
     message_id: i64,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueuePreview, String> {
     let db_path = data_dir.join("clipstash.db");
     let message = read_message_for_update_precheck(&db_path, message_id)?;
-    import_queue_preview_from_message(message)
+    import_queue_preview_from_message(message, match_blank_lines_to_images)
 }
 
 fn import_queue_preview_from_message(
     message: LegacyMessage,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueuePreview, String> {
     let text = message
         .text_content
         .as_deref()
         .map(str::trim)
         .filter(|text| !text.is_empty());
-    let text_length = text.map(|value| value.chars().count()).unwrap_or(0);
     let existing_images: Vec<LegacyMessageImage> = message
         .images
         .iter()
@@ -253,23 +254,12 @@ fn import_queue_preview_from_message(
         .collect();
     let skipped_missing_image_count = message.images.len().saturating_sub(existing_images.len());
 
-    let mut items = Vec::new();
-    if let Some(text) = text {
-        items.push(LegacyImportQueueItem {
-            kind: "text".to_string(),
-            text: Some(text.to_string()),
-            text_length,
-            image: None,
-        });
-    }
-    for image in existing_images.iter().cloned() {
-        items.push(LegacyImportQueueItem {
-            kind: "image".to_string(),
-            text: None,
-            text_length: 0,
-            image: Some(image),
-        });
-    }
+    let items = build_import_queue(
+        text,
+        existing_images.iter().cloned(),
+        match_blank_lines_to_images,
+    );
+    let text_length = items.iter().map(|item| item.text_length).sum();
 
     if items.is_empty() {
         return Err(format!(
@@ -288,12 +278,109 @@ fn import_queue_preview_from_message(
     })
 }
 
+fn build_import_queue(
+    text: Option<&str>,
+    images: impl IntoIterator<Item = LegacyMessageImage>,
+    match_blank_lines_to_images: bool,
+) -> Vec<LegacyImportQueueItem> {
+    let images: Vec<LegacyMessageImage> = images.into_iter().collect();
+    let mut items = Vec::new();
+
+    let Some(text) = text else {
+        append_images(&mut items, images);
+        return items;
+    };
+
+    if !match_blank_lines_to_images || images.is_empty() {
+        append_text_item(&mut items, text);
+        append_images(&mut items, images);
+        return items;
+    }
+
+    // `str::trim` above keeps the established behavior of ignoring leading and
+    // trailing whitespace. Here, only an internal whitespace-only line can be
+    // consumed as an image placeholder. Keep the placeholder's terminating
+    // line ending in the following text item so every image has a newline
+    // before and after it. This also gives adjacent matched images a newline
+    // separator without dropping any text when images run out.
+    let mut image_index = 0;
+    let mut text_start = 0;
+    let mut line_start = 0;
+    for (index, character) in text.char_indices() {
+        if character != '\n' {
+            continue;
+        }
+
+        let line_end = index + character.len_utf8();
+        let content_end = if index > line_start && text.as_bytes()[index - 1] == b'\r' {
+            index - 1
+        } else {
+            index
+        };
+        if image_index < images.len() && text[line_start..content_end].trim().is_empty() {
+            append_text_item(&mut items, &text[text_start..line_start]);
+            items.push(image_item(images[image_index].clone()));
+            image_index += 1;
+            // `content_end` points at the CR in a CRLF line (or at the LF for
+            // an LF line), preserving exactly one line ending after the image.
+            text_start = content_end;
+        }
+        line_start = line_end;
+    }
+
+    append_text_item(&mut items, &text[text_start..]);
+    append_images(&mut items, images.into_iter().skip(image_index));
+    items
+}
+
+fn append_text_item(items: &mut Vec<LegacyImportQueueItem>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(last) = items.last_mut().filter(|item| item.kind == "text") {
+        let value = last
+            .text
+            .as_mut()
+            .expect("text queue item must include text");
+        value.push_str(text);
+        last.text_length = value.chars().count();
+        return;
+    }
+    items.push(LegacyImportQueueItem {
+        kind: "text".to_string(),
+        text: Some(text.to_string()),
+        text_length: text.chars().count(),
+        image: None,
+    });
+}
+
+fn append_images(
+    items: &mut Vec<LegacyImportQueueItem>,
+    images: impl IntoIterator<Item = LegacyMessageImage>,
+) {
+    items.extend(images.into_iter().map(image_item));
+}
+
+fn image_item(image: LegacyMessageImage) -> LegacyImportQueueItem {
+    LegacyImportQueueItem {
+        kind: "image".to_string(),
+        text: None,
+        text_length: 0,
+        image: Some(image),
+    }
+}
+
 pub(crate) fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
     data_dir: PathBuf,
     message_id: i64,
     item_index: usize,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueueCopyResult, String> {
-    let preview = preview_legacy_message_import_queue_from_dir(data_dir.clone(), message_id)?;
+    let preview = preview_legacy_message_import_queue_from_dir(
+        data_dir.clone(),
+        message_id,
+        match_blank_lines_to_images,
+    )?;
     let item = preview.items.get(item_index).ok_or_else(|| {
         format!(
             "复制导入队列项失败，索引超出范围：#{message_id} index={item_index} total={}",

@@ -1,9 +1,8 @@
 use crate::{
     app_data,
     legacy_image_files::sniff_image_extension,
-    legacy_model::{LegacyMessage, MessageView, SortOrder},
+    legacy_model::{LegacyMessage, LegacyMessageImage},
     legacy_paths::path_to_string,
-    legacy_query::list_legacy_messages_from_dir,
     legacy_schema::{configure_connection, ensure_legacy_schema},
 };
 use chrono::Utc;
@@ -11,7 +10,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -48,6 +47,13 @@ pub struct DataExportBytesResult {
     pub filename: String,
     pub export: DataExportResult,
     pub bytes: Vec<u8>,
+    pub message_ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DataExportFileResult {
+    pub filename: String,
+    pub export: DataExportResult,
     pub message_ids: Vec<i64>,
 }
 
@@ -100,26 +106,34 @@ pub fn export_normal_data_zip_to_path(output_path: PathBuf) -> Result<DataExport
 }
 
 pub fn export_normal_data_zip_to_temp_bytes() -> Result<DataExportBytesResult, String> {
+    let result =
+        export_normal_data_zip_to_temp_file(std::env::temp_dir().join("ClipStash Next Exports"))?;
+    let bytes =
+        fs::read(&result.export.path).map_err(|err| format!("读取导出数据包失败：{err}"))?;
+    Ok(DataExportBytesResult {
+        filename: result.filename,
+        export: result.export,
+        bytes,
+        message_ids: result.message_ids,
+    })
+}
+
+pub fn export_normal_data_zip_to_temp_file(
+    temp_dir: PathBuf,
+) -> Result<DataExportFileResult, String> {
     let filename = default_export_filename();
-    let temp_dir = std::env::temp_dir().join("ClipStash Next Exports");
     fs::create_dir_all(&temp_dir)
         .map_err(|err| format!("创建导出临时目录失败：{}：{err}", temp_dir.display()))?;
-    // 清理上次导出遗留的临时 zip（保留本次即将生成的文件：Android 端
-    // 分享流程仍依赖导出返回的 path 指向的文件存在，旧文件在下一次
-    // 导出前不再被任何流程引用）
+    // 接收应用可能延迟读取之前分享的 URI，只清理超过保留期的文件。
     remove_stale_export_temp_files(&temp_dir, &filename);
     let output_path = temp_dir.join(&filename);
     let stats = app_data::ensure_app_data_ready()?;
     let data_dir = app_data::app_data_dir_path()?;
     let (export, message_ids) =
         build_normal_data_zip_from_dir(&data_dir, output_path.clone(), stats.archived_count)?;
-    let bytes = fs::read(&output_path)
-        .map_err(|err| format!("读取导出数据包失败：{}：{err}", output_path.display()))?;
-
-    Ok(DataExportBytesResult {
+    Ok(DataExportFileResult {
         filename,
         export,
-        bytes,
         message_ids,
     })
 }
@@ -145,16 +159,14 @@ fn build_normal_data_zip_from_dir(
             .map_err(|err| format!("创建导出目录失败：{}：{err}", parent.display()))?;
     }
 
-    let mut messages = Vec::new();
-    collect_messages(&data_dir, MessageView::Normal, &mut messages)?;
-
     let mut manifest_messages = Vec::new();
     let mut exported_message_ids = Vec::new();
     let mut staged_images = Vec::new();
     let mut skipped_missing_image_count = 0_i64;
     let mut skipped_empty_message_count = 0_i64;
 
-    for (message_index, message) in messages.iter().enumerate() {
+    crate::transfer_progress::stage("export_hash", None);
+    visit_normal_messages(data_dir, |message_index, message| {
         let mut manifest_images = Vec::new();
         for (image_index, image) in message.images.iter().enumerate() {
             if !image.exists {
@@ -163,11 +175,10 @@ fn build_normal_data_zip_from_dir(
             }
 
             let image_path = PathBuf::from(&image.path);
-            let bytes = fs::read(&image_path)
+            let mut source = File::open(&image_path)
                 .map_err(|err| format!("读取导出图片失败：{}：{err}", image_path.display()))?;
-            let sha256 = sha256_hex(&bytes);
+            let (sha256, size, extension) = stream_image(&mut source, &mut std::io::sink())?;
             // 扩展名以图片内容魔数为准，避免把 JPEG 字节的图片以 .png 名写入数据包
-            let extension = sniff_image_extension(&bytes).to_string();
             let zip_path = format!(
                 "images/m{}-i{}-{}.{}",
                 message_index + 1,
@@ -176,13 +187,14 @@ fn build_normal_data_zip_from_dir(
                 extension
             );
 
-            manifest_images.push(ExportImage {
+            let entry = ExportImage {
                 path: zip_path.clone(),
                 sha256,
                 extension,
-                size: bytes.len() as u64,
-            });
-            staged_images.push((zip_path, bytes));
+                size,
+            };
+            manifest_images.push(entry.clone());
+            staged_images.push((entry, image_path));
         }
 
         let text_content = message
@@ -192,7 +204,7 @@ fn build_normal_data_zip_from_dir(
             .filter(|text| !text.is_empty());
         if text_content.is_none() && manifest_images.is_empty() {
             skipped_empty_message_count += 1;
-            continue;
+            return Ok(());
         }
 
         manifest_messages.push(ExportMessage {
@@ -201,7 +213,8 @@ fn build_normal_data_zip_from_dir(
             images: manifest_images,
         });
         exported_message_ids.push(message.id);
-    }
+        Ok(())
+    })?;
 
     let manifest = ExportManifest {
         schema_version: EXPORT_SCHEMA_VERSION,
@@ -210,7 +223,24 @@ fn build_normal_data_zip_from_dir(
         source_platform: std::env::consts::OS.to_string(),
         messages: manifest_messages,
     };
-    write_export_zip(&output_path, &manifest, staged_images)?;
+    crate::transfer_progress::stage(
+        "export_write",
+        Some(staged_images.iter().map(|(entry, _)| entry.size).sum()),
+    );
+    write_export_zip(&output_path, &manifest, |zip, options| {
+        for (entry, path) in staged_images {
+            validate_zip_entry_path(&entry.path)?;
+            zip.start_file(&entry.path, options)
+                .map_err(|err| format!("写入导出图片失败：{err}"))?;
+            let mut source = File::open(&path)
+                .map_err(|err| format!("读取导出图片失败：{}：{err}", path.display()))?;
+            let (hash, size, _) = stream_image(&mut source, zip)?;
+            if hash != entry.sha256 || size != entry.size {
+                return Err(format!("导出期间图片已变化，请重试：{}", path.display()));
+            }
+        }
+        Ok(())
+    })?;
 
     let bytes = output_path
         .metadata()
@@ -235,8 +265,7 @@ fn build_normal_data_zip_from_dir(
 
 pub fn import_data_zip_from_path(zip_path: PathBuf) -> Result<DataImportResult, String> {
     let zip_path = validate_import_zip_path(zip_path)?;
-    app_data::ensure_app_data_ready()?;
-    let data_dir = app_data::app_data_dir_path()?;
+    let data_dir = app_data::ready_app_data_dir_path()?;
     let (inserted_messages, skipped_messages, imported_images) =
         import_data_zip_into_dir(&zip_path, &data_dir)?;
 
@@ -251,8 +280,7 @@ pub fn import_data_zip_from_path(zip_path: PathBuf) -> Result<DataImportResult, 
 
 pub fn preview_data_zip_from_path(zip_path: PathBuf) -> Result<DataImportPreview, String> {
     let zip_path = validate_import_zip_path(zip_path)?;
-    app_data::ensure_app_data_ready()?;
-    let data_dir = app_data::app_data_dir_path()?;
+    let data_dir = app_data::ready_app_data_dir_path()?;
     let (total_messages, inserted_messages, skipped_messages, image_count) =
         preview_data_zip_against_dir(&zip_path, &data_dir)?;
 
@@ -314,7 +342,8 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
         // 去重基准：只统计本次导入前库内已存在的消息签名，本次循环中
         // 新插入的消息不加入基准，因此包内重复消息也能全部导入；
         // 重复导入同一个包仍会命中首次导入已落库的签名，保持幂等
-        let existing_signatures = load_existing_message_signatures(&tx, &images_dir)?;
+        let existing_signatures = load_existing_message_signatures(&tx, &images_dir, &manifest)?;
+        crate::transfer_progress::stage("import", manifest_image_bytes(&manifest));
         let mut total_uncompressed_bytes = 0_u64;
         let mut inserted_messages = 0_i64;
         let mut skipped_messages = 0_i64;
@@ -322,11 +351,10 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
 
         for message in &manifest.messages {
             validate_import_message(message)?;
-            let image_entries =
-                read_message_images(&mut archive, message, &mut total_uncompressed_bytes)?;
-            let image_hashes: Vec<String> = image_entries
+            let image_hashes: Vec<String> = message
+                .images
                 .iter()
-                .map(|entry| entry.manifest.sha256.clone())
+                .map(|entry| entry.sha256.clone())
                 .collect();
 
             if message_exists_by_signature(
@@ -335,6 +363,14 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
                 &message.created_at,
                 &image_hashes,
             ) {
+                for image in &message.images {
+                    read_import_image(
+                        &mut archive,
+                        image,
+                        &mut total_uncompressed_bytes,
+                        &mut std::io::sink(),
+                    )?;
+                }
                 skipped_messages += 1;
                 continue;
             }
@@ -348,17 +384,42 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
             let message_id = tx.last_insert_rowid();
             inserted_messages += 1;
 
-            for (index, entry) in image_entries.into_iter().enumerate() {
+            for (index, entry) in message.images.iter().enumerate() {
+                validate_import_image(entry)?;
+                let temp_name = unique_imported_image_filename(
+                    &images_dir,
+                    message_id,
+                    index + 1,
+                    "tmp",
+                    &entry.sha256,
+                );
+                let temp_path = images_dir.join(temp_name);
+                let mut target = File::options()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temp_path)
+                    .map_err(|err| format!("创建导入临时图片失败：{err}"))?;
+                saved_paths.push(temp_path.clone());
+                let extension = read_import_image(
+                    &mut archive,
+                    entry,
+                    &mut total_uncompressed_bytes,
+                    &mut target,
+                )?;
+                target
+                    .flush()
+                    .map_err(|err| format!("写入导入图片失败：{err}"))?;
+                drop(target);
                 // 扩展名以图片内容魔数为准，修正旧数据包中 JPEG 字节使用 .png 扩展名的问题
                 let filename = unique_imported_image_filename(
                     &images_dir,
                     message_id,
                     index + 1,
-                    sniff_image_extension(&entry.bytes),
-                    &entry.manifest.sha256,
+                    &extension,
+                    &entry.sha256,
                 );
                 let path = images_dir.join(&filename);
-                fs::write(&path, &entry.bytes)
+                fs::rename(&temp_path, &path)
                     .map_err(|err| format!("写入导入图片失败：{}：{err}", path.display()))?;
                 saved_paths.push(path.clone());
                 tx.execute(
@@ -371,6 +432,7 @@ fn import_data_zip_into_dir(zip_path: &Path, data_dir: &Path) -> Result<(i64, i6
             }
         }
 
+        crate::transfer_progress::stage("commit", None);
         tx.commit()
             .map_err(|err| format!("提交数据导入失败：{err}"))?;
         Ok::<(i64, i64, i64), String>((inserted_messages, skipped_messages, imported_images))
@@ -406,7 +468,8 @@ fn preview_data_zip_against_dir(
     ensure_legacy_schema(&conn)?;
 
     // 与导入相同的去重基准语义，保证预览结果与真实导入一致
-    let existing_signatures = load_existing_message_signatures(&conn, &images_dir)?;
+    let existing_signatures = load_existing_message_signatures(&conn, &images_dir, &manifest)?;
+    crate::transfer_progress::stage("preview", manifest_image_bytes(&manifest));
     let mut total_uncompressed_bytes = 0_u64;
     let mut inserted_messages = 0_i64;
     let mut skipped_messages = 0_i64;
@@ -414,12 +477,19 @@ fn preview_data_zip_against_dir(
 
     for message in &manifest.messages {
         validate_import_message(message)?;
-        let image_entries =
-            read_message_images(&mut archive, message, &mut total_uncompressed_bytes)?;
-        image_count += image_entries.len() as i64;
-        let image_hashes: Vec<String> = image_entries
+        for image in &message.images {
+            read_import_image(
+                &mut archive,
+                image,
+                &mut total_uncompressed_bytes,
+                &mut std::io::sink(),
+            )?;
+        }
+        image_count += message.images.len() as i64;
+        let image_hashes: Vec<String> = message
+            .images
             .iter()
-            .map(|entry| entry.manifest.sha256.clone())
+            .map(|entry| entry.sha256.clone())
             .collect();
 
         if message_exists_by_signature(
@@ -442,44 +512,95 @@ fn preview_data_zip_against_dir(
     ))
 }
 
+fn stream_image(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+) -> Result<(String, u64, String), String> {
+    let mut buffer = [0_u8; IMAGE_READ_CHUNK_SIZE];
+    let mut header = Vec::with_capacity(12);
+    let mut hash = Sha256::new();
+    let mut size = 0_u64;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|err| format!("读取导出图片失败：{err}"))?;
+        if count == 0 {
+            break;
+        }
+        header.extend_from_slice(&buffer[..count.min(12 - header.len())]);
+        hash.update(&buffer[..count]);
+        writer
+            .write_all(&buffer[..count])
+            .map_err(|err| format!("写入导出图片失败：{err}"))?;
+        size += count as u64;
+        crate::transfer_progress::advance(count as u64);
+    }
+    Ok((
+        format!("{:x}", hash.finalize()),
+        size,
+        sniff_image_extension(&header).to_string(),
+    ))
+}
+
 fn write_export_zip(
     output_path: &Path,
     manifest: &ExportManifest,
-    staged_images: Vec<(String, Vec<u8>)>,
+    write_images: impl FnOnce(&mut ZipWriter<File>, SimpleFileOptions) -> Result<(), String>,
 ) -> Result<(), String> {
     let temp_path = output_path.with_extension("zip.tmp");
-    let file = File::create(&temp_path)
+    let file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
         .map_err(|err| format!("创建导出 zip 失败：{}：{err}", temp_path.display()))?;
-    let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    let manifest_text =
-        serde_json::to_vec_pretty(manifest).map_err(|err| format!("序列化导出清单失败：{err}"))?;
+    let result = (|| {
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    zip.start_file(EXPORT_MANIFEST_NAME, options)
-        .map_err(|err| format!("写入导出清单失败：{err}"))?;
-    zip.write_all(&manifest_text)
-        .map_err(|err| format!("写入导出清单失败：{err}"))?;
+        zip.start_file(EXPORT_MANIFEST_NAME, options)
+            .map_err(|err| format!("写入导出清单失败：{err}"))?;
+        serde_json::to_writer_pretty(&mut zip, manifest)
+            .map_err(|err| format!("写入导出清单失败：{err}"))?;
 
-    for (zip_path, bytes) in staged_images {
-        validate_zip_entry_path(&zip_path)?;
-        zip.start_file(zip_path, options)
-            .map_err(|err| format!("写入导出图片失败：{err}"))?;
-        zip.write_all(&bytes)
-            .map_err(|err| format!("写入导出图片失败：{err}"))?;
+        write_images(&mut zip, options)?;
+
+        crate::transfer_progress::stage("commit", None);
+        let completed = zip
+            .finish()
+            .map_err(|err| format!("完成导出 zip 失败：{err}"))?;
+        completed
+            .sync_all()
+            .map_err(|err| format!("保存导出 zip 内容失败：{err}"))?;
+        drop(completed);
+        // rename replaces an existing file on both Windows and Unix. Never unlink it first.
+        fs::rename(&temp_path, output_path).map_err(|err| {
+            format!(
+                "保存导出 zip 失败：{} -> {}：{err}",
+                temp_path.display(),
+                output_path.display()
+            )
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
     }
+    result
+}
 
-    zip.finish()
-        .map_err(|err| format!("完成导出 zip 失败：{err}"))?;
-    if output_path.exists() {
-        fs::remove_file(output_path)
-            .map_err(|err| format!("替换旧导出文件失败：{}：{err}", output_path.display()))?;
-    }
-    fs::rename(&temp_path, output_path).map_err(|err| {
-        format!(
-            "保存导出 zip 失败：{} -> {}：{err}",
-            temp_path.display(),
-            output_path.display()
-        )
+#[cfg(test)]
+fn write_fixture_zip(
+    output_path: &Path,
+    manifest: &ExportManifest,
+    images: Vec<(String, Vec<u8>)>,
+) -> Result<(), String> {
+    write_export_zip(output_path, manifest, |zip, options| {
+        for (name, bytes) in images {
+            validate_zip_entry_path(&name)?;
+            zip.start_file(name, options)
+                .map_err(|err| err.to_string())?;
+            zip.write_all(&bytes).map_err(|err| err.to_string())?;
+        }
+        Ok(())
     })
 }
 
@@ -505,65 +626,65 @@ fn read_manifest(archive: &mut ZipArchive<File>) -> Result<ExportManifest, Strin
     serde_json::from_str(&text).map_err(|err| format!("解析导入清单失败：{err}"))
 }
 
-fn read_message_images(
+fn read_import_image(
     archive: &mut ZipArchive<File>,
-    message: &ExportMessage,
+    image: &ExportImage,
     total_uncompressed_bytes: &mut u64,
-) -> Result<Vec<ImportImageEntry>, String> {
-    let mut entries = Vec::new();
-    for image in &message.images {
-        validate_import_image(image)?;
-        let mut image_file = archive
-            .by_name(&image.path)
-            .map_err(|_| format!("导入 zip 缺少图片：{}", image.path))?;
-        // 先用 zip 条目声明的解压大小与 manifest 声明比对，不一致直接拒绝，
-        // 避免解压出与清单不符的巨量数据
-        if image_file.size() != image.size {
-            return Err(format!("导入图片大小不匹配：{}", image.path));
+    writer: &mut impl Write,
+) -> Result<String, String> {
+    validate_import_image(image)?;
+    let mut image_file = archive
+        .by_name(&image.path)
+        .map_err(|_| format!("导入 zip 缺少图片：{}", image.path))?;
+    // 先用 zip 条目声明的解压大小与 manifest 声明比对，不一致直接拒绝，
+    // 避免解压出与清单不符的巨量数据
+    if image_file.size() != image.size {
+        return Err(format!("导入图片大小不匹配：{}", image.path));
+    }
+    if image.size > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "导入图片超过单张大小上限：{}（{} 字节，上限 {} 字节）",
+            image.path, image.size, MAX_IMAGE_BYTES
+        ));
+    }
+    let mut hash = Sha256::new();
+    let mut size = 0_u64;
+    let mut header = Vec::with_capacity(12);
+    let mut chunk = [0_u8; IMAGE_READ_CHUNK_SIZE];
+    loop {
+        let read = image_file
+            .read(&mut chunk)
+            .map_err(|err| format!("读取导入图片失败：{}：{err}", image.path))?;
+        if read == 0 {
+            break;
         }
-        if image.size > MAX_IMAGE_BYTES {
+        *total_uncompressed_bytes += read as u64;
+        if *total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES {
             return Err(format!(
-                "导入图片超过单张大小上限：{}（{} 字节，上限 {} 字节）",
-                image.path, image.size, MAX_IMAGE_BYTES
+                "导入数据包图片解压总量超过上限：{} 字节",
+                MAX_TOTAL_UNCOMPRESSED_BYTES
             ));
         }
-        let mut bytes = Vec::with_capacity(image.size as usize);
-        let mut chunk = [0_u8; IMAGE_READ_CHUNK_SIZE];
-        loop {
-            let read = image_file
-                .read(&mut chunk)
-                .map_err(|err| format!("读取导入图片失败：{}：{err}", image.path))?;
-            if read == 0 {
-                break;
-            }
-            *total_uncompressed_bytes += read as u64;
-            if *total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES {
-                return Err(format!(
-                    "导入数据包图片解压总量超过上限：{} 字节",
-                    MAX_TOTAL_UNCOMPRESSED_BYTES
-                ));
-            }
-            bytes.extend_from_slice(&chunk[..read]);
-        }
-        // 与 zip 条目声明大小一致前提下的兜底校验
-        if bytes.len() as u64 != image.size {
+        size += read as u64;
+        if size > image.size || size > MAX_IMAGE_BYTES {
             return Err(format!("导入图片大小不匹配：{}", image.path));
         }
-        let actual_hash = sha256_hex(&bytes);
-        if actual_hash != image.sha256 {
-            return Err(format!("导入图片校验失败：{}", image.path));
-        }
-        entries.push(ImportImageEntry {
-            manifest: image.clone(),
-            bytes,
-        });
+        header.extend_from_slice(&chunk[..read.min(12 - header.len())]);
+        hash.update(&chunk[..read]);
+        crate::transfer_progress::advance(read as u64);
+        writer
+            .write_all(&chunk[..read])
+            .map_err(|err| format!("写入导入图片失败：{err}"))?;
     }
-    Ok(entries)
-}
-
-struct ImportImageEntry {
-    manifest: ExportImage,
-    bytes: Vec<u8>,
+    // 与 zip 条目声明大小一致前提下的兜底校验
+    if size != image.size {
+        return Err(format!("导入图片大小不匹配：{}", image.path));
+    }
+    let actual_hash = format!("{:x}", hash.finalize());
+    if actual_hash != image.sha256 {
+        return Err(format!("导入图片校验失败：{}", image.path));
+    }
+    Ok(sniff_image_extension(&header).to_string())
 }
 
 fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
@@ -578,6 +699,15 @@ fn validate_manifest(manifest: &ExportManifest) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn manifest_image_bytes(manifest: &ExportManifest) -> Option<u64> {
+    manifest
+        .messages
+        .iter()
+        .flat_map(|message| &message.images)
+        .try_fold(0_u64, |total, image| total.checked_add(image.size))
+        .filter(|total| *total > 0)
 }
 
 fn validate_import_message(message: &ExportMessage) -> Result<(), String> {
@@ -655,15 +785,16 @@ fn ensure_zip_output_path(path: PathBuf) -> Result<PathBuf, String> {
 }
 
 fn default_export_filename() -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
-        "clipstash-export-{}.zip",
-        Utc::now().format("%Y%m%d-%H%M%S")
+        "clipstash-export-{}-{}-{}.zip",
+        Utc::now().format("%Y%m%d-%H%M%S%3f"),
+        std::process::id(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     )
 }
 
-/// 清理导出临时目录中上一次遗留的 clipstash 导出 zip（含写入中断残留的
-/// .zip.tmp），保留本次即将生成的文件：Android 端分享流程仍依赖导出
-/// 返回的 path 指向的文件存在，因此只清理旧文件。
+/// 接收应用可能稍后才读取 URI，至少保留 24 小时；只清理应用自己的过期导出。
 fn remove_stale_export_temp_files(temp_dir: &Path, keep_filename: &str) {
     let Ok(entries) = fs::read_dir(temp_dir) else {
         return;
@@ -671,6 +802,23 @@ fn remove_stale_export_temp_files(temp_dir: &Path, keep_filename: &str) {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name == keep_filename || !name.starts_with("clipstash-export-") {
+            continue;
+        }
+        if !(name.ends_with(".zip") || name.ends_with(".zip.tmp")) {
+            continue;
+        }
+        let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        if !metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.elapsed().ok())
+            .is_some_and(|age| age.as_secs() >= 24 * 60 * 60)
+        {
             continue;
         }
         let _ = fs::remove_file(entry.path());
@@ -710,35 +858,107 @@ fn sanitize_zip_stem(filename: &str) -> String {
     }
 }
 
-fn collect_messages(
+fn visit_normal_messages(
     data_dir: &Path,
-    view: MessageView,
-    messages: &mut Vec<LegacyMessage>,
+    mut visit: impl FnMut(usize, LegacyMessage) -> Result<(), String>,
 ) -> Result<(), String> {
-    let mut offset = 0;
-    loop {
-        let page = list_legacy_messages_from_dir(
-            data_dir.to_path_buf(),
-            view,
-            SortOrder::Oldest,
-            Some(offset),
-            Some(100),
-        )?;
-        offset += page.messages.len() as i64;
-        messages.extend(page.messages);
-        if !page.has_more {
-            break;
+    let conn = Connection::open_with_flags(
+        data_dir.join("clipstash.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|err| format!("打开导出数据库失败：{err}"))?;
+    configure_connection(&conn)?;
+    ensure_legacy_schema(&conn)?;
+    // One statement retains a single SQLite snapshot and never repeats COUNT/OFFSET.
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id,m.text_content,m.created_at,m.archived_at,i.id,i.image_filename
+         FROM messages m LEFT JOIN message_images i ON i.message_id=m.id
+         WHERE COALESCE(m.archived,0)=0 ORDER BY m.created_at,m.id,i.id",
+        )
+        .map_err(|err| format!("准备导出查询失败：{err}"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|err| format!("查询导出消息失败：{err}"))?;
+    let mut current: Option<LegacyMessage> = None;
+    let mut index = 0;
+    let images_dir = data_dir.join("images");
+    while let Some(row) = rows
+        .next()
+        .map_err(|err| format!("读取导出消息失败：{err}"))?
+    {
+        let id: i64 = row.get(0).map_err(|err| err.to_string())?;
+        if current.as_ref().is_some_and(|message| message.id != id) {
+            visit(index, current.take().unwrap())?;
+            index += 1;
         }
+        if current.is_none() {
+            current = Some(LegacyMessage {
+                id,
+                text_content: row.get(1).map_err(|err| err.to_string())?,
+                created_at: row.get(2).map_err(|err| err.to_string())?,
+                archived: false,
+                archived_at: row.get(3).map_err(|err| err.to_string())?,
+                images: Vec::new(),
+            });
+        }
+        if let Some(image_id) = row
+            .get::<_, Option<i64>>(4)
+            .map_err(|err| err.to_string())?
+        {
+            let filename: String = row.get(5).map_err(|err| err.to_string())?;
+            let path = images_dir.join(&filename);
+            current.as_mut().unwrap().images.push(LegacyMessageImage {
+                id: image_id,
+                filename,
+                exists: path.is_file(),
+                path: path_to_string(path),
+            });
+        }
+    }
+    if let Some(message) = current {
+        visit(index, message)?;
     }
     Ok(())
 }
 
+type MessageSignatures = HashMap<(Option<String>, String), HashSet<Vec<String>>>;
+
 fn load_existing_message_signatures(
     conn: &Connection,
     images_dir: &Path,
-) -> Result<HashMap<(Option<String>, String), Vec<String>>, String> {
+    manifest: &ExportManifest,
+) -> Result<MessageSignatures, String> {
+    crate::transfer_progress::stage("dedupe", None);
+    load_candidate_signatures(conn, images_dir, manifest, |path| {
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let mut file = File::open(path)
+            .map_err(|err| format!("读取导入图片去重文件失败：{}：{err}", path.display()))?;
+        stream_image(&mut file, &mut std::io::sink()).map(|(hash, _, _)| Some(hash))
+    })
+}
+
+fn load_candidate_signatures(
+    conn: &Connection,
+    images_dir: &Path,
+    manifest: &ExportManifest,
+    mut hash_file: impl FnMut(&Path) -> Result<Option<String>, String>,
+) -> Result<MessageSignatures, String> {
+    let candidates: HashSet<_> = manifest
+        .messages
+        .iter()
+        .map(|message| (message.text_content.clone(), message.created_at.clone()))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(HashMap::new());
+    }
     let mut stmt = conn
-        .prepare("SELECT id, text_content, created_at FROM messages")
+        .prepare(
+            "SELECT m.id, m.text_content, m.created_at, i.image_filename FROM messages m
+                  LEFT JOIN message_images i ON i.message_id=m.id ORDER BY m.id, i.id",
+        )
         .map_err(|err| format!("准备导入去重基准查询失败：{err}"))?;
     let rows = stmt
         .query_map([], |row| {
@@ -746,21 +966,49 @@ fn load_existing_message_signatures(
                 row.get::<_, i64>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(|err| format!("查询导入去重基准失败：{err}"))?;
-    let mut signatures = HashMap::new();
+    let mut signatures: MessageSignatures = HashMap::new();
+    let mut file_hashes = HashMap::<String, Option<String>>::new();
+    let mut current: Option<(i64, (Option<String>, String), Vec<String>, bool)> = None;
+    let finish = |current: &mut Option<(i64, (Option<String>, String), Vec<String>, bool)>,
+                  signatures: &mut MessageSignatures| {
+        if let Some((_, key, hashes, valid)) = current.take() {
+            if valid {
+                signatures.entry(key).or_default().insert(hashes);
+            }
+        }
+    };
     for row in rows {
-        let (message_id, text_content, created_at) =
+        let (message_id, text_content, created_at, filename) =
             row.map_err(|err| format!("读取导入去重基准失败：{err}"))?;
-        let hashes = read_message_image_hashes(conn, images_dir, message_id)?;
-        signatures.insert((text_content, created_at), hashes);
+        if current.as_ref().is_some_and(|entry| entry.0 != message_id) {
+            finish(&mut current, &mut signatures);
+        }
+        let key = (text_content, created_at);
+        if !candidates.contains(&key) {
+            continue;
+        }
+        let (_, _, hashes, valid) =
+            current.get_or_insert_with(|| (message_id, key, Vec::new(), true));
+        if let Some(filename) = filename {
+            if !file_hashes.contains_key(&filename) {
+                file_hashes.insert(filename.clone(), hash_file(&images_dir.join(&filename))?);
+            }
+            match &file_hashes[&filename] {
+                Some(hash) => hashes.push(hash.clone()),
+                None => *valid = false,
+            }
+        }
     }
+    finish(&mut current, &mut signatures);
     Ok(signatures)
 }
 
 fn message_exists_by_signature(
-    existing_signatures: &HashMap<(Option<String>, String), Vec<String>>,
+    existing_signatures: &MessageSignatures,
     text_content: Option<&str>,
     created_at: &str,
     image_hashes: &[String],
@@ -771,34 +1019,8 @@ fn message_exists_by_signature(
     );
     existing_signatures
         .get(&key)
-        .map(|hashes| hashes == image_hashes)
+        .map(|variants| variants.contains(image_hashes))
         .unwrap_or(false)
-}
-
-fn read_message_image_hashes(
-    conn: &Connection,
-    images_dir: &Path,
-    message_id: i64,
-) -> Result<Vec<String>, String> {
-    let mut stmt = conn
-        .prepare("SELECT image_filename FROM message_images WHERE message_id = ? ORDER BY id")
-        .map_err(|err| format!("准备导入图片去重查询失败：{err}"))?;
-    let rows = stmt
-        .query_map([message_id], |row| row.get::<_, String>(0))
-        .map_err(|err| format!("查询导入图片去重失败：{err}"))?;
-
-    let mut hashes = Vec::new();
-    for row in rows {
-        let filename = row.map_err(|err| format!("读取导入图片去重失败：{err}"))?;
-        let path = images_dir.join(filename);
-        if !path.is_file() {
-            return Ok(Vec::new());
-        }
-        let bytes = fs::read(&path)
-            .map_err(|err| format!("读取导入图片去重文件失败：{}：{err}", path.display()))?;
-        hashes.push(sha256_hex(&bytes));
-    }
-    Ok(hashes)
 }
 
 fn unique_imported_image_filename(
@@ -851,6 +1073,307 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn export_replace_failure_preserves_locked_target_and_retry_succeeds() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = seed_empty_import_dir("replace-locked-export");
+        let output = dir.join("existing.zip");
+        std::fs::write(&output, b"previous export").unwrap();
+        // Allow readers but deny deletion/rename by a second handle.
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&output)
+            .unwrap();
+        let manifest = duplicate_text_same_second_manifest();
+        assert!(super::write_fixture_zip(&output, &manifest, Vec::new())
+            .unwrap_err()
+            .contains("保存导出 zip 失败"));
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous export");
+        assert!(!output.with_extension("zip.tmp").exists());
+        drop(lock);
+        super::write_fixture_zip(&output, &manifest, Vec::new()).unwrap();
+        let mut archive = super::open_zip(&output).unwrap();
+        assert_eq!(
+            super::read_manifest(&mut archive).unwrap().messages.len(),
+            2
+        );
+        drop(archive);
+        assert!(!output.with_extension("zip.tmp").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streamed_import_bounds_writes_and_rolls_back_late_corruption() {
+        struct CountWriter {
+            total: usize,
+            largest: usize,
+        }
+        impl std::io::Write for CountWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.total += bytes.len();
+                self.largest = self.largest.max(bytes.len());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let dir = seed_empty_import_dir("stream-import-rollback");
+        let zip_path = dir.join("stream.zip");
+        let image_bytes = vec![5_u8; 2 * 1024 * 1024 + 19];
+        let entries: Vec<super::ExportImage> = ["images/one.png", "images/two.png"]
+            .into_iter()
+            .map(|path| super::ExportImage {
+                path: path.into(),
+                sha256: super::sha256_hex(&image_bytes),
+                extension: "png".into(),
+                size: image_bytes.len() as u64,
+            })
+            .collect();
+        let mut manifest = duplicate_text_same_second_manifest();
+        manifest.messages.truncate(1);
+        manifest.messages[0].images = entries.clone();
+        super::write_fixture_zip(
+            &zip_path,
+            &manifest,
+            entries
+                .iter()
+                .map(|entry| (entry.path.clone(), image_bytes.clone()))
+                .collect(),
+        )
+        .unwrap();
+        let mut archive = super::open_zip(&zip_path).unwrap();
+        let mut writer = CountWriter {
+            total: 0,
+            largest: 0,
+        };
+        super::read_import_image(&mut archive, &entries[0], &mut 0, &mut writer).unwrap();
+        assert_eq!(writer.total, image_bytes.len());
+        assert!(writer.largest <= super::IMAGE_READ_CHUNK_SIZE);
+        let mut total = super::MAX_TOTAL_UNCOMPRESSED_BYTES - 1;
+        assert!(super::read_import_image(
+            &mut archive,
+            &entries[0],
+            &mut total,
+            &mut std::io::sink()
+        )
+        .unwrap_err()
+        .contains("总量超过上限"));
+        drop(archive);
+        let corrupt_zip = dir.join("corrupt.zip");
+        let mut corrupt = image_bytes.clone();
+        corrupt[0] ^= 1;
+        super::write_fixture_zip(
+            &corrupt_zip,
+            &manifest,
+            vec![
+                (entries[0].path.clone(), image_bytes.clone()),
+                (entries[1].path.clone(), corrupt),
+            ],
+        )
+        .unwrap();
+        assert!(super::import_data_zip_into_dir(&corrupt_zip, &dir)
+            .unwrap_err()
+            .contains("校验失败"));
+        let conn = rusqlite::Connection::open(dir.join("clipstash.db")).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(std::fs::read_dir(dir.join("images")).unwrap().count(), 0);
+        assert_eq!(
+            super::import_data_zip_into_dir(&zip_path, &dir).unwrap(),
+            (1, 0, 2)
+        );
+        // Matching manifest signatures still must validate corrupt bytes on the skip path.
+        assert!(super::import_data_zip_into_dir(&corrupt_zip, &dir)
+            .unwrap_err()
+            .contains("校验失败"));
+        assert!(super::preview_data_zip_against_dir(&corrupt_zip, &dir)
+            .unwrap_err()
+            .contains("校验失败"));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(std::fs::read_dir(dir.join("images")).unwrap().count(), 2);
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn export_walk_preserves_order_and_snapshot_during_writes() {
+        for count in [100, 1000, 10000] {
+            let dir = seed_empty_import_dir(&format!("export-walk-{count}"));
+            let conn = rusqlite::Connection::open(dir.join("clipstash.db")).unwrap();
+            conn.execute_batch(&format!("PRAGMA journal_mode=WAL;
+                CREATE INDEX IF NOT EXISTS idx_walk_images ON message_images(message_id);
+                WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x<{count})
+                INSERT INTO messages(id,text_content,created_at,archived)
+                SELECT x,'text',printf('2024-01-%02d',1+x%28),CASE WHEN x%3=0 THEN 1 WHEN x%5=0 THEN NULL ELSE 0 END FROM seq;
+                INSERT INTO message_images(id,message_id,image_filename) VALUES (2,1,'missing.png'),(1,1,'present.png');")).unwrap();
+            std::fs::write(dir.join("images/present.png"), b"fixture").unwrap();
+            let expected: Vec<i64> = conn.prepare("SELECT id FROM messages WHERE archived=0 OR archived IS NULL ORDER BY created_at,id").unwrap()
+                .query_map([],|row| row.get(0)).unwrap().map(Result::unwrap).collect();
+            let mut actual = Vec::new();
+            super::visit_normal_messages(&dir, |index,message| {
+                assert_eq!(index,actual.len());
+                if index==0 {
+                    conn.execute_batch("UPDATE messages SET archived=1 WHERE id>5;
+                        INSERT INTO messages(text_content,created_at,archived) VALUES ('late','2024-03-01',0);").unwrap();
+                }
+                assert!(!message.archived);
+                if message.id==1 {
+                    assert_eq!(message.images.iter().map(|image|image.id).collect::<Vec<_>>(),vec![1,2]);
+                    assert!(message.images[0].exists);
+                    assert!(!message.images[1].exists);
+                }
+                actual.push(message.id);
+                Ok(())
+            }).unwrap();
+            assert_eq!(actual, expected);
+            let result = super::visit_normal_messages(&dir, |_, _| Err("stop on failure".into()));
+            assert_eq!(result.unwrap_err(), "stop on failure");
+            drop(conn);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn candidate_signatures_keep_variants_and_hash_only_relevant_files_once() {
+        let dir = seed_empty_import_dir("signature-candidates");
+        let conn = rusqlite::Connection::open(dir.join("clipstash.db")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO messages(id,text_content,created_at) VALUES
+            (1,'same','time'),(2,'same','time'),(3,'same','time'),
+            (4,'unrelated','time'),(5,'broken','time');
+            INSERT INTO message_images(message_id,image_filename) VALUES
+            (1,'a.png'),(2,'b.png'),(3,'a.png'),(3,'b.png'),
+            (4,'must-not-read.png'),(5,'missing.png');",
+        )
+        .unwrap();
+        let mut manifest = duplicate_text_same_second_manifest();
+        manifest.messages = ["same", "broken"]
+            .into_iter()
+            .map(|text| super::ExportMessage {
+                text_content: Some(text.into()),
+                created_at: "time".into(),
+                images: Vec::new(),
+            })
+            .collect();
+        let mut reads = std::collections::HashMap::<String, usize>::new();
+        let signatures =
+            super::load_candidate_signatures(&conn, &dir.join("images"), &manifest, |path| {
+                let name = path.file_name().unwrap().to_str().unwrap().to_string();
+                assert_ne!(name, "must-not-read.png");
+                *reads.entry(name.clone()).or_default() += 1;
+                Ok(if name == "missing.png" {
+                    None
+                } else {
+                    Some(name)
+                })
+            })
+            .unwrap();
+        assert_eq!(reads.len(), 3);
+        assert!(reads.values().all(|count| *count == 1));
+        for hashes in [
+            vec!["a.png".to_string()],
+            vec!["b.png".to_string()],
+            vec!["a.png".to_string(), "b.png".to_string()],
+        ] {
+            assert!(super::message_exists_by_signature(
+                &signatures,
+                Some("same"),
+                "time",
+                &hashes
+            ));
+        }
+        assert!(!super::message_exists_by_signature(
+            &signatures,
+            Some("same"),
+            "time",
+            &["b.png".into(), "a.png".into()]
+        ));
+        assert!(!super::message_exists_by_signature(
+            &signatures,
+            Some("broken"),
+            "time",
+            &[]
+        ));
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn image_stream_is_bounded_and_hashes_short_reads_correctly() {
+        struct Chunks {
+            remaining: usize,
+            max_requested: usize,
+        }
+        impl std::io::Read for Chunks {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.max_requested = self.max_requested.max(buffer.len());
+                let count = self.remaining.min(buffer.len()).min(317);
+                buffer[..count].fill(7);
+                self.remaining -= count;
+                Ok(count)
+            }
+        }
+        let size = 8 * 1024 * 1024 + 19;
+        let mut reader = Chunks {
+            remaining: size,
+            max_requested: 0,
+        };
+        let (hash, actual, extension) =
+            super::stream_image(&mut reader, &mut std::io::sink()).unwrap();
+        assert_eq!(actual, size as u64);
+        assert_eq!(hash, super::sha256_hex(&vec![7; size]));
+        assert_eq!(extension, "png");
+        assert_eq!(reader.max_requested, super::IMAGE_READ_CHUNK_SIZE);
+        let jpeg = b"\xff\xd8\xffpayload";
+        let mut copied = Vec::new();
+        let (_, _, extension) = super::stream_image(&mut &jpeg[..], &mut copied).unwrap();
+        assert_eq!(extension, "jpg");
+        assert_eq!(copied, jpeg);
+    }
+
+    #[test]
+    fn failed_export_cleans_own_temp_and_preserves_previous_output() {
+        let data_dir = seed_empty_import_dir("failed-stream-export");
+        let output = data_dir.join("existing.zip");
+        std::fs::write(&output, b"previous export").unwrap();
+        let result = super::write_export_zip(
+            &output,
+            &duplicate_text_same_second_manifest(),
+            |zip, options| {
+                zip.start_file("images/partial.png", options).unwrap();
+                std::io::Write::write_all(zip, b"partial").unwrap();
+                Err("injected read failure".into())
+            },
+        );
+        assert!(result.unwrap_err().contains("injected read failure"));
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous export");
+        assert!(!output.with_extension("zip.tmp").exists());
+        std::fs::write(output.with_extension("zip.tmp"), b"other operation").unwrap();
+        assert!(super::write_export_zip(
+            &output,
+            &duplicate_text_same_second_manifest(),
+            |_, _| Ok(())
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(output.with_extension("zip.tmp")).unwrap(),
+            b"other operation"
+        );
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
     use super::*;
     use crate::legacy_query::read_legacy_stats_from_dir;
     use rusqlite::Connection;
@@ -1020,7 +1543,7 @@ mod tests {
                 }],
             }],
         };
-        write_export_zip(&zip_path, &manifest, Vec::new()).unwrap();
+        write_fixture_zip(&zip_path, &manifest, Vec::new()).unwrap();
 
         let result = import_data_zip_into_dir(&zip_path, &data_dir);
 
@@ -1093,7 +1616,7 @@ mod tests {
                 }],
             }],
         };
-        write_export_zip(
+        write_fixture_zip(
             &zip_path,
             &manifest,
             vec![("images/size-mismatch.png".to_string(), b"abc".to_vec())],
@@ -1112,7 +1635,7 @@ mod tests {
     fn imports_duplicate_text_same_second_messages_in_one_package() {
         let data_dir = seed_empty_import_dir("dup-in-package");
         let zip_path = data_dir.join("dup.zip");
-        write_export_zip(
+        write_fixture_zip(
             &zip_path,
             &duplicate_text_same_second_manifest(),
             Vec::new(),
@@ -1131,7 +1654,7 @@ mod tests {
     fn reimporting_same_package_is_idempotent() {
         let data_dir = seed_empty_import_dir("reimport-idempotent");
         let zip_path = data_dir.join("reimport.zip");
-        write_export_zip(
+        write_fixture_zip(
             &zip_path,
             &duplicate_text_same_second_manifest(),
             Vec::new(),
@@ -1161,6 +1684,19 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("unrelated.txt"), b"keep").unwrap();
+        fs::write(dir.join("clipstash-export-recent.zip"), b"recent").unwrap();
+        let old = SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60);
+        for name in [
+            "clipstash-export-20250101-000001.zip",
+            "clipstash-export-20250101-000002.zip.tmp",
+        ] {
+            File::options()
+                .write(true)
+                .open(dir.join(name))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
 
         remove_stale_export_temp_files(&dir, keep);
 
@@ -1170,6 +1706,10 @@ mod tests {
             .join("clipstash-export-20250101-000002.zip.tmp")
             .exists());
         assert!(dir.join("unrelated.txt").is_file(), "无关文件不受影响");
+        assert!(
+            dir.join("clipstash-export-recent.zip").is_file(),
+            "最近分享的文件应可继续读取"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -34,15 +34,21 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
 
 const APP_DATA_DIR_NAME: &str = "ClipStash Next";
 const APP_DB_NAME: &str = "clipstash.db";
 const DATA_LOCATION_FILE_NAME: &str = "data-location.json";
 static APP_DATA_BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static READY_APP_DATA_DIRS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+#[cfg(test)]
+static APP_DATA_INITIALIZATION_COUNTS: OnceLock<Mutex<std::collections::HashMap<PathBuf, usize>>> =
+    OnceLock::new();
 
 #[derive(Debug, Serialize)]
 pub struct AppStats {
@@ -109,6 +115,41 @@ pub fn set_app_data_base_dir(path: PathBuf) {
 
 pub fn ensure_app_data_ready() -> Result<AppStats, String> {
     let paths = app_paths()?;
+    ensure_app_data_ready_for_paths(&paths)?;
+    read_app_stats_from_paths(&paths)
+}
+
+pub(crate) fn ready_app_data_dir_path() -> Result<PathBuf, String> {
+    Ok(ready_paths()?.data_dir)
+}
+
+fn ensure_app_data_ready_for_paths(paths: &AppPaths) -> Result<(), String> {
+    let mut ready_dirs = ready_app_data_dirs()
+        .lock()
+        .map_err(|_| "应用数据初始化状态锁已损坏".to_string())?;
+
+    if ready_dirs.contains(&paths.data_dir) && app_data_files_are_ready(paths) {
+        return Ok(());
+    }
+
+    // A deleted/recreated directory, a copied repair, or an earlier failed attempt must run
+    // through initialization again. Do not cache failures, so a later call can retry them.
+    ready_dirs.remove(&paths.data_dir);
+    initialize_app_data_for_paths(paths)?;
+    ready_dirs.insert(paths.data_dir.clone());
+    Ok(())
+}
+
+fn initialize_app_data_for_paths(paths: &AppPaths) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let mut counts = APP_DATA_INITIALIZATION_COUNTS
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .map_err(|_| "应用数据初始化测试计数锁已损坏".to_string())?;
+        *counts.entry(paths.data_dir.clone()).or_default() += 1;
+    }
+
     fs::create_dir_all(&paths.images_dir).map_err(|err| format!("创建应用图片目录失败：{err}"))?;
 
     let mut conn =
@@ -118,8 +159,21 @@ pub fn ensure_app_data_ready() -> Result<AppStats, String> {
     if !has_migration_state(&conn)? {
         migrate_legacy_once(&mut conn, &paths)?;
     }
+    Ok(())
+}
 
-    read_app_stats_from_paths(&paths)
+fn app_data_files_are_ready(paths: &AppPaths) -> bool {
+    paths.data_dir.is_dir() && paths.db_path.is_file() && paths.images_dir.is_dir()
+}
+
+fn ready_app_data_dirs() -> &'static Mutex<HashSet<PathBuf>> {
+    READY_APP_DATA_DIRS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn invalidate_app_data_ready(paths: &AppPaths) {
+    if let Ok(mut ready_dirs) = ready_app_data_dirs().lock() {
+        ready_dirs.remove(&paths.data_dir);
+    }
 }
 
 pub fn read_app_stats() -> Result<AppStats, String> {
@@ -128,22 +182,31 @@ pub fn read_app_stats() -> Result<AppStats, String> {
 
 pub fn migrate_legacy_data() -> Result<AppMigrationResult, String> {
     let paths = app_paths()?;
+    let mut ready_dirs = ready_app_data_dirs()
+        .lock()
+        .map_err(|_| "应用数据初始化状态锁已损坏".to_string())?;
     fs::create_dir_all(&paths.images_dir).map_err(|err| format!("创建应用图片目录失败：{err}"))?;
 
     let mut conn =
         Connection::open(&paths.db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
     ensure_app_schema(&conn)?;
-    merge_legacy_data(&mut conn, &paths)
+    let result = merge_legacy_data(&mut conn, &paths)?;
+    ready_dirs.insert(paths.data_dir.clone());
+    Ok(result)
 }
 
 pub fn move_app_data_to_dir(target_dir: PathBuf) -> Result<AppDataMoveResult, String> {
-    ensure_app_data_ready()?;
-    let current_paths = app_paths()?;
+    let current_paths = ready_paths()?;
     let (current_dir, target_dir) = move_app_data_files(
         &current_paths.data_dir,
         target_dir,
         &default_app_data_dir_path()?,
     )?;
+    invalidate_app_data_ready(&AppPaths {
+        db_path: target_dir.join(APP_DB_NAME),
+        images_dir: target_dir.join("images"),
+        data_dir: target_dir.clone(),
+    });
     let stats = read_app_stats()?;
 
     Ok(AppDataMoveResult {
@@ -165,6 +228,7 @@ fn repair_app_data_dir_from_default(
 ) -> Result<AppDataRepairResult, String> {
     let current_dir = normalize_existing_or_create_dir(&paths.data_dir)?;
     let source_dir = normalize_existing_or_create_dir(&default_dir)?;
+    invalidate_app_data_ready(paths);
 
     if current_dir == source_dir {
         return Ok(AppDataRepairResult {
@@ -390,7 +454,12 @@ pub fn copy_image_to_clipboard(filename: String) -> Result<LegacyCopyImageResult
 }
 
 pub fn read_image_bytes(filename: String) -> Result<Vec<u8>, String> {
-    let paths = ready_paths()?;
+    let paths = app_paths()?;
+    read_image_bytes_from_paths(&paths, &filename)
+}
+
+fn read_image_bytes_from_paths(paths: &AppPaths, filename: &str) -> Result<Vec<u8>, String> {
+    ensure_app_data_ready_for_paths(paths)?;
     let image_path = resolve_legacy_image_path(&paths.data_dir, &filename)?;
     fs::read(&image_path)
         .map_err(|err| format!("读取图片文件失败：{}：{err}", image_path.display()))
@@ -408,26 +477,36 @@ pub fn stage_message_import_to_clipboard(
     stage_legacy_message_import_to_clipboard_from_dir(paths.data_dir, message_id)
 }
 
-pub fn preview_message_import_queue(message_id: i64) -> Result<LegacyImportQueuePreview, String> {
+pub fn preview_message_import_queue(
+    message_id: i64,
+    match_blank_lines_to_images: bool,
+) -> Result<LegacyImportQueuePreview, String> {
     let paths = ready_paths()?;
-    preview_legacy_message_import_queue_from_dir(paths.data_dir, message_id)
+    preview_legacy_message_import_queue_from_dir(
+        paths.data_dir,
+        message_id,
+        match_blank_lines_to_images,
+    )
 }
 
 pub fn copy_message_import_queue_item_to_clipboard(
     message_id: i64,
     item_index: usize,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueueCopyResult, String> {
     let paths = ready_paths()?;
     copy_legacy_message_import_queue_item_to_clipboard_from_dir(
         paths.data_dir,
         message_id,
         item_index,
+        match_blank_lines_to_images,
     )
 }
 
 fn ready_paths() -> Result<AppPaths, String> {
-    ensure_app_data_ready()?;
-    app_paths()
+    let paths = app_paths()?;
+    ensure_app_data_ready_for_paths(&paths)?;
+    Ok(paths)
 }
 
 fn app_paths() -> Result<AppPaths, String> {
@@ -584,6 +663,10 @@ fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
             ON messages(archived, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_message_images_message_id
             ON message_images(message_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_normal_order
+            ON messages(COALESCE(archived, 0), created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_archive_order
+            ON messages(archived, COALESCE(archived_at, created_at) DESC, id DESC);
         ",
     )
     .map_err(|err| format!("初始化应用数据库结构失败：{err}"))?;
@@ -1088,9 +1171,152 @@ fn audit_for_backup(operation: &str, message_id: i64, backup: &LegacyDbBackup) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn measures_deep_offset_against_keyset() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        super::ensure_app_schema(&conn).unwrap();
+        conn.execute_batch(
+            "WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x<10000)
+            INSERT INTO messages(id,text_content,created_at,archived)
+            SELECT x,'sample',printf('2024-01-%02d',1+x%28),0 FROM seq;",
+        )
+        .unwrap();
+        for offset in [100, 1000, 9000] {
+            let (key, id): (String, i64) = conn.query_row(
+                "SELECT created_at,id FROM messages WHERE COALESCE(archived,0)=0 ORDER BY created_at DESC,id DESC LIMIT 1 OFFSET ?",
+                [offset-1], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+            let sqls = [
+                format!("SELECT id FROM messages WHERE COALESCE(archived,0)=0 ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET {offset}"),
+                format!("SELECT id FROM messages WHERE COALESCE(archived,0)=0 AND (created_at,id)<('{key}',{id}) ORDER BY created_at DESC,id DESC LIMIT 30")
+            ];
+            let mut results = Vec::new();
+            for sql in sqls {
+                let mut timings = Vec::new();
+                let mut stmt = conn.prepare(&sql).unwrap();
+                let mut ids = Vec::<i64>::new();
+                for _ in 0..10 {
+                    let start = std::time::Instant::now();
+                    ids = stmt
+                        .query_map([], |row| row.get(0))
+                        .unwrap()
+                        .map(Result::unwrap)
+                        .collect();
+                    timings.push(start.elapsed().as_nanos());
+                }
+                timings.sort();
+                results.push((
+                    ids,
+                    stmt.get_status(rusqlite::StatementStatus::VmStep) / 10,
+                    timings[5],
+                ));
+            }
+            assert_eq!(results[0].0, results[1].0);
+            println!(
+                "offset {offset}: OFFSET steps={} median_ns={}; keyset steps={} median_ns={}",
+                results[0].1, results[0].2, results[1].1, results[1].2
+            );
+            if offset == 9000 {
+                assert!(results[1].1 < results[0].1);
+            }
+        }
+    }
+
+    #[test]
+    fn message_order_indexes_avoid_sort_and_preserve_results() {
+        use rusqlite::StatementStatus;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        super::ensure_app_schema(&conn).unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_messages_normal_order;
+             DROP INDEX idx_messages_archive_order;
+             WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x<10000)
+             INSERT INTO messages(id,text_content,created_at,archived,archived_at)
+             SELECT x, 'sample', printf('2024-01-%02d',1+x%28),
+                CASE WHEN x%5=0 THEN NULL ELSE x%2 END,
+                CASE WHEN x%3=0 THEN NULL ELSE printf('2024-02-%02d',1+x%28) END FROM seq;",
+        )
+        .unwrap();
+        let mut samples = Vec::new();
+        for (filter, column) in [
+            ("archived=0 OR archived IS NULL", "created_at"),
+            ("archived=1", "COALESCE(archived_at, created_at)"),
+        ] {
+            for order in ["ASC", "DESC"] {
+                let sql = format!("SELECT id,text_content,created_at,archived,archived_at FROM messages WHERE {filter} ORDER BY {column} {order}, id {order} LIMIT 30 OFFSET 0");
+                let mut stmt = conn.prepare(&sql).unwrap();
+                let ids: Vec<i64> = stmt
+                    .query_map([], |row| row.get(0))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect();
+                let steps = stmt.get_status(StatementStatus::VmStep);
+                assert!(stmt.get_status(StatementStatus::Sort) > 0);
+                samples.push((sql, ids, steps));
+            }
+        }
+        super::ensure_app_schema(&conn).unwrap();
+        for (sql, expected, before_steps) in samples {
+            let sql = sql.replace("archived=0 OR archived IS NULL", "COALESCE(archived, 0)=0");
+            let plan: Vec<String> = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap()
+                .query_map([], |row| row.get(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let ids: Vec<i64> = stmt
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(ids, expected);
+            assert_eq!(stmt.get_status(StatementStatus::Sort), 0, "{plan:?}");
+            let after_steps = stmt.get_status(StatementStatus::VmStep);
+            assert!(after_steps < before_steps);
+            println!("{sql}\nplan={plan:?}; VM steps {before_steps} -> {after_steps}");
+        }
+    }
+
     use super::*;
     use crate::legacy_test_support::tiny_png_bytes;
-    use std::{fs, path::Path, process};
+    use std::{
+        fs,
+        path::Path,
+        process,
+        sync::{Mutex, OnceLock},
+        time::Duration,
+    };
+
+    static READY_CACHE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn reset_ready_cache_for_test() {
+        ready_app_data_dirs().lock().unwrap().clear();
+        APP_DATA_INITIALIZATION_COUNTS
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .unwrap()
+            .clear();
+    }
+
+    fn initialization_count_for(paths: &AppPaths) -> usize {
+        APP_DATA_INITIALIZATION_COUNTS
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .unwrap()
+            .get(&paths.data_dir)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn ready_cache_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        let guard = READY_CACHE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        reset_ready_cache_for_test();
+        guard
+    }
 
     fn reset_dir(path: &Path) {
         let _ = fs::remove_dir_all(path);
@@ -1104,6 +1330,184 @@ mod tests {
             images_dir: data_dir.join("images"),
             data_dir,
         }
+    }
+
+    fn seed_ready_paths(base: &Path) -> AppPaths {
+        let paths = create_paths(base);
+        fs::create_dir_all(&paths.images_dir).unwrap();
+        fs::write(paths.images_dir.join("image.png"), tiny_png_bytes()).unwrap();
+        let conn = Connection::open(&paths.db_path).unwrap();
+        ensure_app_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO migration_state (
+                id, migrated_at, legacy_message_count, legacy_image_count
+             ) VALUES (1, '2024-01-01 00:00:00', 0, 0)",
+            [],
+        )
+        .unwrap();
+        paths
+    }
+
+    #[test]
+    fn ready_paths_initializes_once_and_cached_image_reads_do_not_touch_locked_database() {
+        let _guard = ready_cache_test_guard();
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-ready-image-read-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let paths = seed_ready_paths(&base);
+
+        ensure_app_data_ready_for_paths(&paths).unwrap();
+        assert_eq!(initialization_count_for(&paths), 1);
+
+        let conn = Connection::open(&paths.db_path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE")
+            .unwrap();
+        let probe = Connection::open(&paths.db_path).unwrap();
+        probe.busy_timeout(Duration::from_millis(0)).unwrap();
+        let blocked_query = probe
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_err();
+        assert_eq!(
+            blocked_query.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseBusy),
+            "the lock test must block a database COUNT query"
+        );
+        drop(probe);
+
+        for _ in 0..100 {
+            assert_eq!(
+                read_image_bytes_from_paths(&paths, "image.png").unwrap(),
+                tiny_png_bytes()
+            );
+        }
+        assert_eq!(initialization_count_for(&paths), 1);
+        conn.execute_batch("ROLLBACK").unwrap();
+        drop(conn);
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn concurrent_first_ready_calls_initialize_a_directory_once() {
+        let _guard = ready_cache_test_guard();
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-ready-concurrent-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let paths = seed_ready_paths(&base);
+
+        std::thread::scope(|scope| {
+            let mut tasks = Vec::new();
+            for _ in 0..8 {
+                tasks.push(scope.spawn(|| ensure_app_data_ready_for_paths(&paths)));
+            }
+            for task in tasks {
+                task.join().unwrap().unwrap();
+            }
+        });
+
+        assert_eq!(initialization_count_for(&paths), 1);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn failed_initialization_is_not_cached_and_can_retry() {
+        let _guard = ready_cache_test_guard();
+        let base =
+            env::temp_dir().join(format!("clipstash-next-ready-retry-test-{}", process::id()));
+        reset_dir(&base);
+        let data_dir = base.join("blocked-data-dir");
+        fs::write(&data_dir, b"not a directory").unwrap();
+        let paths = AppPaths {
+            db_path: data_dir.join(APP_DB_NAME),
+            images_dir: data_dir.join("images"),
+            data_dir: data_dir.clone(),
+        };
+
+        assert!(ensure_app_data_ready_for_paths(&paths).is_err());
+        assert_eq!(initialization_count_for(&paths), 1);
+
+        fs::remove_file(&data_dir).unwrap();
+        fs::create_dir_all(&paths.images_dir).unwrap();
+        let conn = Connection::open(&paths.db_path).unwrap();
+        ensure_app_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO migration_state (
+                id, migrated_at, legacy_message_count, legacy_image_count
+             ) VALUES (1, '2024-01-01 00:00:00', 0, 0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        ensure_app_data_ready_for_paths(&paths).unwrap();
+        assert_eq!(initialization_count_for(&paths), 2);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn ready_cache_is_scoped_to_data_directory() {
+        let _guard = ready_cache_test_guard();
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-ready-switch-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let first = seed_ready_paths(&base.join("first"));
+        let second = seed_ready_paths(&base.join("second"));
+
+        ensure_app_data_ready_for_paths(&first).unwrap();
+        ensure_app_data_ready_for_paths(&second).unwrap();
+        ensure_app_data_ready_for_paths(&first).unwrap();
+
+        assert_eq!(initialization_count_for(&first), 1);
+        assert_eq!(initialization_count_for(&second), 1);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn deleted_images_directory_invalidates_cache_and_is_recreated() {
+        let _guard = ready_cache_test_guard();
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-ready-recreate-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let paths = seed_ready_paths(&base);
+
+        ensure_app_data_ready_for_paths(&paths).unwrap();
+        fs::remove_dir_all(&paths.images_dir).unwrap();
+        ensure_app_data_ready_for_paths(&paths).unwrap();
+
+        assert!(paths.images_dir.is_dir());
+        assert_eq!(initialization_count_for(&paths), 2);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn repair_explicitly_invalidates_the_ready_cache() {
+        let _guard = ready_cache_test_guard();
+        let base = env::temp_dir().join(format!(
+            "clipstash-next-ready-repair-invalidate-test-{}",
+            process::id()
+        ));
+        reset_dir(&base);
+        let paths = seed_ready_paths(&base.join("current"));
+        let default_dir = base.join("default");
+        fs::create_dir_all(default_dir.join("images")).unwrap();
+
+        ensure_app_data_ready_for_paths(&paths).unwrap();
+        let repair = repair_app_data_dir_from_default(&paths, &default_dir).unwrap();
+        assert!(!repair.copied_db);
+        ensure_app_data_ready_for_paths(&paths).unwrap();
+
+        assert_eq!(initialization_count_for(&paths), 2);
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn seed_legacy_data_dir(base: &Path) -> PathBuf {

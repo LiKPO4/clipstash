@@ -37,9 +37,14 @@ pub fn paste_legacy_import_queue_item(
     message_id: i64,
     item_index: usize,
     target_hwnd: isize,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportPasteResult, String> {
     window_targets::validate_external_window_target(target_hwnd)?;
-    let copied = app_data::copy_message_import_queue_item_to_clipboard(message_id, item_index)?;
+    let copied = app_data::copy_message_import_queue_item_to_clipboard(
+        message_id,
+        item_index,
+        match_blank_lines_to_images,
+    )?;
     let focused = window_targets::focus_external_window_target(target_hwnd)?;
     keyboard_input::send_ctrl_v()?;
 
@@ -58,8 +63,9 @@ pub fn paste_legacy_import_queue(
     message_id: i64,
     target_hwnd: isize,
     delay_ms: Option<u64>,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueuePasteResult, String> {
-    let preview = app_data::preview_message_import_queue(message_id)?;
+    let preview = app_data::preview_message_import_queue(message_id, match_blank_lines_to_images)?;
     if preview.item_count == 0 {
         return Err(format!("粘贴导入队列失败，队列为空：#{message_id}"));
     }
@@ -74,7 +80,12 @@ pub fn paste_legacy_import_queue(
             std::thread::sleep(delay);
         }
 
-        match paste_legacy_import_queue_item(message_id, item_index, target_hwnd) {
+        match paste_legacy_import_queue_item(
+            message_id,
+            item_index,
+            target_hwnd,
+            match_blank_lines_to_images,
+        ) {
             Ok(result) => {
                 last_target = Some(window_targets::ExternalWindowTarget {
                     hwnd: result.target.hwnd,
@@ -120,8 +131,14 @@ pub fn paste_legacy_import_queue_with_optional_archive(
     target_hwnd: isize,
     delay_ms: Option<u64>,
     archive_after_success: bool,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueuePasteArchiveResult, String> {
-    let paste = paste_legacy_import_queue(message_id, target_hwnd, delay_ms)?;
+    let paste = paste_legacy_import_queue(
+        message_id,
+        target_hwnd,
+        delay_ms,
+        match_blank_lines_to_images,
+    )?;
     if !archive_after_success || paste.failure.is_some() {
         return Ok(LegacyImportQueuePasteArchiveResult {
             paste,
@@ -167,7 +184,7 @@ mod tests {
             .parse::<isize>()
             .expect("CLIPSTASH_NEXT_PASTE_IMPORT_HWND must be an integer");
 
-        let result = paste_legacy_import_queue_item(message_id, item_index, target_hwnd)
+        let result = paste_legacy_import_queue_item(message_id, item_index, target_hwnd, false)
             .expect("paste legacy import queue item");
 
         assert!(result.sent_ctrl_v);
@@ -203,7 +220,7 @@ mod tests {
                     .expect("CLIPSTASH_NEXT_PASTE_QUEUE_DELAY_MS must be an integer")
             });
 
-        let result = paste_legacy_import_queue(message_id, target_hwnd, delay_ms)
+        let result = paste_legacy_import_queue(message_id, target_hwnd, delay_ms, false)
             .expect("paste legacy import queue");
 
         assert_eq!(result.message_id, message_id);
@@ -249,6 +266,7 @@ mod tests {
             target_hwnd,
             delay_ms,
             archive_after_success,
+            false,
         )
         .expect("paste legacy import queue with optional archive");
 

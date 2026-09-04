@@ -166,17 +166,24 @@ pub fn stage_legacy_message_import_to_clipboard(
 
 pub fn preview_legacy_message_import_queue(
     message_id: i64,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueuePreview, String> {
     let data_dir = legacy_data_dir()?;
-    preview_legacy_message_import_queue_from_dir(data_dir, message_id)
+    preview_legacy_message_import_queue_from_dir(data_dir, message_id, match_blank_lines_to_images)
 }
 
 pub fn copy_legacy_message_import_queue_item_to_clipboard(
     message_id: i64,
     item_index: usize,
+    match_blank_lines_to_images: bool,
 ) -> Result<LegacyImportQueueCopyResult, String> {
     let data_dir = legacy_data_dir()?;
-    copy_legacy_message_import_queue_item_to_clipboard_from_dir(data_dir, message_id, item_index)
+    copy_legacy_message_import_queue_item_to_clipboard_from_dir(
+        data_dir,
+        message_id,
+        item_index,
+        match_blank_lines_to_images,
+    )
 }
 
 pub fn list_legacy_messages(
@@ -1708,8 +1715,9 @@ mod tests {
             .parse::<usize>()
             .expect("CLIPSTASH_NEXT_COPY_LEGACY_IMPORT_INDEX must be a zero-based integer");
 
-        let result = copy_legacy_message_import_queue_item_to_clipboard(message_id, item_index)
-            .expect("copy local legacy import queue item");
+        let result =
+            copy_legacy_message_import_queue_item_to_clipboard(message_id, item_index, false)
+                .expect("copy local legacy import queue item");
 
         assert_eq!(result.message_id, message_id);
         assert_eq!(result.item_index, item_index);

@@ -17,6 +17,7 @@ pub struct AppSettings {
     pub launch_on_startup: bool,
     pub main_window_state: Option<MainWindowState>,
     pub archive_after_import: bool,
+    pub match_blank_lines_to_images: bool,
     pub archive_after_export: bool,
     pub paste_interval_ms: u64,
     pub show_hotkey: String,
@@ -45,6 +46,7 @@ impl Default for AppSettings {
             launch_on_startup: false,
             main_window_state: None,
             archive_after_import: false,
+            match_blank_lines_to_images: false,
             archive_after_export: false,
             paste_interval_ms: 250,
             show_hotkey: "Ctrl+Shift+V".to_string(),
@@ -66,6 +68,7 @@ pub struct AppSettingsPatch {
     pub launch_on_startup: Option<bool>,
     pub main_window_state: Option<Option<MainWindowState>>,
     pub archive_after_import: Option<bool>,
+    pub match_blank_lines_to_images: Option<bool>,
     pub archive_after_export: Option<bool>,
     pub paste_interval_ms: Option<u64>,
     pub show_hotkey: Option<String>,
@@ -143,6 +146,9 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     }
     if let Some(value) = patch.archive_after_import {
         settings.archive_after_import = value;
+    }
+    if let Some(value) = patch.match_blank_lines_to_images {
+        settings.match_blank_lines_to_images = value;
     }
     if let Some(value) = patch.archive_after_export {
         settings.archive_after_export = value;
@@ -376,6 +382,7 @@ mod tests {
         assert!(!settings.launch_on_startup);
         assert!(settings.main_window_state.is_none());
         assert!(settings.archive_after_import);
+        assert!(!settings.match_blank_lines_to_images);
         assert!(!settings.archive_after_export);
         assert_eq!(settings.edit_textarea_height, 360);
         assert_eq!(settings.message_double_click_action, "edit");
@@ -395,6 +402,7 @@ mod tests {
             launch_on_startup: None,
             main_window_state: None,
             archive_after_import: None,
+            match_blank_lines_to_images: None,
             archive_after_export: None,
             message_double_click_action: None,
             paste_interval_ms: None,
@@ -457,6 +465,23 @@ mod tests {
 
         assert!(settings.archive_after_export);
         assert!(read_settings().unwrap().archive_after_export);
+    }
+
+    #[test]
+    fn updates_match_blank_lines_to_images_setting() {
+        let _guard = env_lock().lock().unwrap();
+        let appdata = isolated_appdata("match-blank-lines-to-images");
+        reset_dir(&appdata);
+        env::set_var("APPDATA", &appdata);
+
+        let settings = update_settings(AppSettingsPatch {
+            match_blank_lines_to_images: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(settings.match_blank_lines_to_images);
+        assert!(read_settings().unwrap().match_blank_lines_to_images);
     }
 
     #[test]
