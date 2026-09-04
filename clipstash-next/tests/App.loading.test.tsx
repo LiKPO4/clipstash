@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import App, { loadRetainedMessagePage } from "../src/App";
 import type { LegacyMessage, LegacyMessagePage } from "../src/api/types";
 import { imageUrlMocks, installImageUrlMocks } from "./imageUrlMocks";
 
@@ -143,6 +143,25 @@ describe("message loading independent of image IO", () => {
     expect(list.querySelectorAll(".message-card")).toHaveLength(60);
   });
 
+  it("restores a deep prefix with at most 4 concurrent batch queries in order", async () => {
+    let active = 0;
+    let maxActive = 0;
+    getPage = ({ offset = 0, limit = 30 }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      return Promise.resolve(page(
+        Array.from({ length: limit }, (_, index) => message(offset + index + 1, 0)),
+        { offset, limit, has_more: offset + limit < 450 },
+      )).finally(() => { active -= 1; });
+    };
+    const result = await loadRetainedMessagePage("normal", "newest", "", 450);
+    expect(maxActive).toBeLessThanOrEqual(4);
+    expect(result.messages).toHaveLength(450);
+    expect(result.messages.map((row) => row.id)).toEqual(
+      Array.from({ length: 450 }, (_, index) => index + 1),
+    );
+  });
+
   it("shows text and controls while image IO is pending, then fills the image", async () => {
     render(<App />);
     expect(await screen.findByText("测试消息 1")).toBeTruthy();
@@ -270,5 +289,69 @@ describe("message loading independent of image IO", () => {
     });
     expect(await screen.findByAltText("1-0.png")).toBeTruthy();
     expect(invokeMock.mock.calls.filter(([command]) => command === "read_image_thumbnail_bytes")).toHaveLength(1);
+  });
+
+  it("sizes the fallback hover preview from the original instead of the 320px thumbnail", async () => {
+    const previous = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "get_app_settings") return Promise.resolve({ ...settings, hover_delay: 0 });
+      if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4]));
+      return previous(command, args);
+    });
+    const imageDescriptor = Object.getOwnPropertyDescriptor(window, "Image");
+    class FakeImage {
+      naturalWidth = 1600;
+      naturalHeight = 800;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    Object.defineProperty(window, "Image", { configurable: true, value: FakeImage });
+    try {
+      render(<App />);
+      await screen.findByText("测试消息 1");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "1-0.png" }));
+      const preview = await screen.findByRole("tooltip");
+      expect(preview.style.width).toBe("1000px");
+      expect(preview.style.height).toBe("500px");
+    } finally {
+      if (imageDescriptor) Object.defineProperty(window, "Image", imageDescriptor);
+      else delete (window as Window & { Image?: typeof Image }).Image;
+    }
+  });
+
+  it("sizes the editor tile fallback hover preview from the original instead of the 320px thumbnail", async () => {
+    const previous = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "get_app_settings") return Promise.resolve({ ...settings, hover_delay: 0 });
+      if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4]));
+      return previous(command, args);
+    });
+    const imageDescriptor = Object.getOwnPropertyDescriptor(window, "Image");
+    class FakeImage {
+      naturalWidth = 1600;
+      naturalHeight = 800;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    Object.defineProperty(window, "Image", { configurable: true, value: FakeImage });
+    try {
+      render(<App />);
+      await screen.findByText("测试消息 1");
+      fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+      const dialog = await screen.findByRole("dialog", { name: "编辑消息 1" });
+      fireEvent.mouseEnter(dialog.querySelector<HTMLButtonElement>(".composer-image-tile")!);
+      const preview = await screen.findByRole("tooltip");
+      expect(preview.style.width).toBe("1000px");
+      expect(preview.style.height).toBe("500px");
+    } finally {
+      if (imageDescriptor) Object.defineProperty(window, "Image", imageDescriptor);
+      else delete (window as Window & { Image?: typeof Image }).Image;
+    }
   });
 });

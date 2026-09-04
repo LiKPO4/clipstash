@@ -3853,7 +3853,22 @@ function ComposerImageTile({
     previewTimerRef.current = window.setTimeout(() => {
       previewTimerRef.current = null;
       showHoverPreviewWindow(nextPreview, anchor).catch(() => {
-        if (request === previewRequestRef.current) onPreview(nextPreview);
+        if (request !== previewRequestRef.current) return;
+        if (item.kind !== "existing") {
+          onPreview(nextPreview);
+          return;
+        }
+        readPreviewOriginal(item.image.filename, () => request === previewRequestRef.current)
+          .then((bytes) => probeOriginalImageSize(bytes, mimeTypeFromImagePath(item.image.filename)))
+          .then((size) => {
+            if (request !== previewRequestRef.current) return;
+            onPreview(size
+              ? { ...nextPreview, position: calculatePreviewPosition(anchor, size.width, size.height) }
+              : nextPreview);
+          })
+          .catch(() => {
+            if (request === previewRequestRef.current) onPreview(nextPreview);
+          });
       });
     }, Math.max(0, previewDelaySeconds * 1000));
   }
@@ -3980,7 +3995,18 @@ function MessageImageTile({
       previewTimerRef.current = null;
       onPreview({ ...preview, externalWindow: true });
       showHoverPreviewWindow(preview, anchor).catch(() => {
-        if (request === previewRequestRef.current) onPreview(preview);
+        if (request !== previewRequestRef.current) return;
+        readPreviewOriginal(image.filename, () => request === previewRequestRef.current)
+          .then((bytes) => probeOriginalImageSize(bytes, mimeTypeFromImagePath(image.filename)))
+          .then((size) => {
+            if (request !== previewRequestRef.current) return;
+            onPreview(size
+              ? { ...preview, position: calculatePreviewPosition(anchor, size.width, size.height) }
+              : preview);
+          })
+          .catch(() => {
+            if (request === previewRequestRef.current) onPreview(preview);
+          });
       });
     }, Math.max(0, previewDelaySeconds * 1000));
   }
@@ -4047,6 +4073,24 @@ function readPreviewOriginal(filename: string, isCurrent: () => boolean) {
   // Keep only the queue tail, never a resolved promise containing a previous original's bytes.
   originalReadTask = result.then(() => undefined, () => undefined);
   return result;
+}
+
+function probeOriginalImageSize(bytes: Uint8Array, type: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(new Blob([bytes], { type }));
+    const probe = new Image();
+    probe.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(probe.naturalWidth > 0 && probe.naturalHeight > 0
+        ? { width: probe.naturalWidth, height: probe.naturalHeight }
+        : null);
+    };
+    probe.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    probe.src = url;
+  });
 }
 
 function useOriginalPreview(image: PreviewImage): { src: string; failed?: boolean } {
@@ -4423,18 +4467,55 @@ async function loadAppData(view: MessageView, sort: SortOrder, search: string, r
   }
 }
 
-async function loadRetainedMessagePage(view: MessageView, sort: SortOrder, search: string, count: number) {
+const RETAINED_BATCH_LIMIT = 100;
+const RETAINED_BATCH_CONCURRENCY = 4;
+
+export async function loadRetainedMessagePage(view: MessageView, sort: SortOrder, search: string, count: number) {
   // The backend caps each query at 100. Rebuild only the prefix the user already loaded.
-  const first = await listLegacyMessages({ view, sort, offset: 0, limit: Math.min(count, 100), search });
-  if (count <= PAGE_LIMIT) return first;
-  let result = first;
-  while (result.has_more && result.messages.length < count) {
-    const next = await listLegacyMessages({ view, sort, offset: result.messages.length,
-      limit: Math.min(count - result.messages.length, 100), search });
-    result = { ...next, offset: 0, messages: [...result.messages, ...next.messages] };
-    if (!next.messages.length) break;
+  const first = await listLegacyMessages({ view, sort, offset: 0, limit: Math.min(count, RETAINED_BATCH_LIMIT), search });
+  if (count <= PAGE_LIMIT || !first.has_more || first.messages.length >= count) return first;
+  const batches = new Map<number, LegacyMessagePage>();
+  let nextOffset = RETAINED_BATCH_LIMIT;
+  let nextCommitOffset = RETAINED_BATCH_LIMIT;
+  const lastOffset = (Math.ceil(count / RETAINED_BATCH_LIMIT) - 1) * RETAINED_BATCH_LIMIT;
+  let failure: unknown = null;
+  let done = false;
+  const workers = Array.from({ length: RETAINED_BATCH_CONCURRENCY }, async () => {
+    while (!done) {
+      const offset = nextOffset;
+      if (offset > lastOffset) break;
+      nextOffset += RETAINED_BATCH_LIMIT;
+      try {
+        const batch = await listLegacyMessages({ view, sort, offset,
+          limit: Math.min(RETAINED_BATCH_LIMIT, count - offset), search });
+        if (done) return;
+        batches.set(offset, batch);
+        while (batches.has(nextCommitOffset)) {
+          const committed = batches.get(nextCommitOffset)!;
+          nextCommitOffset += RETAINED_BATCH_LIMIT;
+          if (!committed.has_more || committed.messages.length === 0) {
+            done = true;
+            break;
+          }
+        }
+      } catch (err) {
+        failure = err;
+        done = true;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failure !== null) throw failure;
+  const offsets = [...batches.keys()].sort((a, b) => a - b);
+  const messages = [...first.messages];
+  let hasMore: boolean = first.has_more;
+  for (const offset of offsets) {
+    const batch = batches.get(offset)!;
+    if (messages.length >= count) break;
+    messages.push(...batch.messages);
+    hasMore = batch.has_more;
   }
-  return result;
+  return { ...first, offset: 0, has_more: hasMore, messages };
 }
 
 function startPerformanceMeasurement(name: string): PerformanceMeasurement | null {
