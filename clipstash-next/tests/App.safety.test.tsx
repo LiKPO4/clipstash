@@ -2,6 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
+import { installImageUrlMocks } from "./imageUrlMocks";
+
+installImageUrlMocks();
 
 const { invokeMock, isAlwaysOnTopMock, openPathMock, openUrlMock, setAlwaysOnTopMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -12,6 +15,7 @@ const { invokeMock, isAlwaysOnTopMock, openPathMock, openUrlMock, setAlwaysOnTop
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class { onmessage = (_value: unknown) => {}; },
   convertFileSrc: (path: string) => `asset://${path}`,
   invoke: invokeMock,
 }));
@@ -54,6 +58,7 @@ const defaultAppSettings = {
   main_window_state: null,
   archive_after_import: false,
   archive_after_export: false,
+  match_blank_lines_to_images: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -95,6 +100,7 @@ let latestReleaseResponse: unknown = null;
           messages: [],
         });
       }
+      if (command === "read_image_thumbnail_bytes") return Promise.resolve(new Uint8Array([137, 80, 78, 71]));
       if (command === "migrate_legacy_data") {
         migratedStats = { ...stats, normal_count: 8, total_count: 117 };
         return Promise.resolve({
@@ -271,13 +277,13 @@ let latestReleaseResponse: unknown = null;
 
     await user.click(within(panel).getByRole("button", { name: "导出数据" }));
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip");
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip", { progress: expect.anything() });
     });
     expect(await within(panel).findByText("已导出 6 条普通消息，图片 4 张。")).toBeTruthy();
 
     await user.click(within(panel).getByRole("button", { name: "导入数据" }));
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("preview_data_zip");
+      expect(invokeMock).toHaveBeenCalledWith("preview_data_zip", { progress: expect.anything() });
     });
     const previewDialog = await screen.findByRole("dialog", { name: "确认导入数据包" });
     expect(within(previewDialog).getByText("数据包包含 4 条消息，图片 2 张。")).toBeTruthy();
@@ -285,6 +291,7 @@ let latestReleaseResponse: unknown = null;
     await user.click(within(previewDialog).getByRole("button", { name: "确认导入" }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("import_data_zip_from_path", {
+        progress: expect.anything(),
         path: "D:\\clipstash-export.zip",
       });
     });
@@ -347,12 +354,17 @@ let latestReleaseResponse: unknown = null;
     });
     expect(await within(dialog).findByText("消息排序已应用")).toBeTruthy();
 
-    await user.click(within(dialog).getAllByRole("checkbox")[0]);
+    await user.click(within(dialog).getByRole("checkbox", { name: /^快速导入后自动归档/ }));
     expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
       patch: { archive_after_import: true },
     });
 
-    await user.click(within(dialog).getAllByRole("checkbox")[1]);
+    await user.click(within(dialog).getByRole("checkbox", { name: /^空行与图片匹配导入/ }));
+    expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+      patch: { match_blank_lines_to_images: true },
+    });
+
+    await user.click(within(dialog).getByRole("checkbox", { name: /^关闭窗口时隐藏到托盘/ }));
     expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
       patch: { close_to_tray: false },
     });

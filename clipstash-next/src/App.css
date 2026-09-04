@@ -1030,6 +1030,23 @@ textarea:focus,
   width: 7px;
 }
 
+.message-list-virtual {
+  display: block;
+  overflow-anchor: none;
+}
+
+.message-virtual-space {
+  position: relative;
+  width: 100%;
+}
+
+.message-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
 .message-list::-webkit-scrollbar-track {
   background: #e7eef8;
   border-radius: 999px;
@@ -1955,3 +1972,21 @@ textarea:focus,
   gap: 6px;
   justify-content: flex-end;
 }
+.data-transfer-progress {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 2000;
+  padding: 12px 16px;
+  border: 1px solid #9ba4b2;
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 4px 16px #0002;
+  pointer-events: none;
+  font-size: 13px;
+}
+
+.data-transfer-progress progress { display: block; width: 100%; margin: 6px 0; }
+.data-transfer-progress small { font-variant-numeric: tabular-nums; }

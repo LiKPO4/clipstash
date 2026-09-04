@@ -1,4 +1,9 @@
+import { invokeDataTransfer } from "../transferProgress";
 import { invoke } from "@tauri-apps/api/core";
+
+export function importAndroidShare(shareId: string) {
+  return invoke<LegacyMessage>("import_android_share", { shareId });
+}
 import type {
   AppMigrationResult,
   AppDataMoveResult,
@@ -45,11 +50,15 @@ export function migrateLegacyData() {
 }
 
 export function exportNormalDataZip() {
-  return invoke<DataExportResult>("export_normal_data_zip");
+  return invokeDataTransfer<DataExportResult>("export_normal_data_zip");
 }
 
 export function exportNormalDataZipBytes() {
-  return invoke<DataExportBytesResult>("export_normal_data_zip_bytes");
+  return invokeDataTransfer<DataExportBytesResult>("export_normal_data_zip_bytes");
+}
+
+export function exportNormalDataZipFile() {
+  return invokeDataTransfer<Omit<DataExportBytesResult, "bytes">>("export_normal_data_zip_file");
 }
 
 export function archiveExportedMessages(messageIds: number[]) {
@@ -57,19 +66,19 @@ export function archiveExportedMessages(messageIds: number[]) {
 }
 
 export function importDataZip() {
-  return invoke<DataImportResult>("import_data_zip");
+  return invokeDataTransfer<DataImportResult>("import_data_zip");
 }
 
 export function previewDataZip() {
-  return invoke<DataImportPreview>("preview_data_zip");
+  return invokeDataTransfer<DataImportPreview>("preview_data_zip");
 }
 
 export function importDataZipBytes(filename: string, bytes: number[]) {
-  return invoke<DataImportResult>("import_data_zip_bytes", { filename, bytes });
+  return invokeDataTransfer<DataImportResult>("import_data_zip_bytes", { filename, bytes });
 }
 
 export function importDataZipFromPath(path: string) {
-  return invoke<DataImportResult>("import_data_zip_from_path", { path });
+  return invokeDataTransfer<DataImportResult>("import_data_zip_from_path", { path });
 }
 
 export function moveAppDataToSelectedDir() {
@@ -236,6 +245,11 @@ export async function readLegacyImageBytes(filename: string): Promise<Uint8Array
   return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 }
 
+export async function readImageThumbnailBytes(filename: string, expectedPath: string): Promise<Uint8Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array>("read_image_thumbnail_bytes", { filename, expectedPath });
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+}
+
 export function readDroppedFileBytes(path: string) {
   return invoke<number[]>("read_dropped_file_bytes", {
     path,
@@ -254,21 +268,27 @@ export function stageLegacyMessageImportToClipboard(messageId: number) {
   });
 }
 
-export function previewLegacyMessageImportQueue(messageId: number) {
+export function previewLegacyMessageImportQueue(
+  messageId: number,
+  matchBlankLinesToImages: boolean,
+) {
   return invoke<LegacyImportQueuePreview>("preview_legacy_message_import_queue", {
     messageId,
+    matchBlankLinesToImages,
   });
 }
 
 export function copyLegacyMessageImportQueueItemToClipboard(
   messageId: number,
   itemIndex: number,
+  matchBlankLinesToImages: boolean,
 ) {
   return invoke<LegacyImportQueueCopyResult>(
     "copy_legacy_message_import_queue_item_to_clipboard",
     {
       messageId,
       itemIndex,
+      matchBlankLinesToImages,
     },
   );
 }
@@ -277,11 +297,13 @@ export function pasteLegacyImportQueueItem(
   messageId: number,
   itemIndex: number,
   targetHwnd: number,
+  matchBlankLinesToImages: boolean,
 ) {
   return invoke<LegacyImportPasteResult>("paste_legacy_import_queue_item", {
     messageId,
     itemIndex,
     targetHwnd,
+    matchBlankLinesToImages,
   });
 }
 
@@ -289,11 +311,13 @@ export function pasteLegacyImportQueue(
   messageId: number,
   targetHwnd: number,
   delayMs?: number,
+  matchBlankLinesToImages = false,
 ) {
   return invoke<LegacyImportQueuePasteResult>("paste_legacy_import_queue", {
     messageId,
     targetHwnd,
     delayMs,
+    matchBlankLinesToImages,
   });
 }
 
@@ -302,11 +326,13 @@ export function pasteLegacyImportQueueWithOptionalArchive({
   targetHwnd,
   delayMs,
   archiveAfterSuccess,
+  matchBlankLinesToImages,
 }: {
   messageId: number;
   targetHwnd: number;
   delayMs?: number;
   archiveAfterSuccess: boolean;
+  matchBlankLinesToImages: boolean;
 }) {
   return invoke<LegacyImportQueuePasteArchiveResult>(
     "paste_legacy_import_queue_with_optional_archive",
@@ -315,6 +341,7 @@ export function pasteLegacyImportQueueWithOptionalArchive({
       targetHwnd,
       delayMs,
       archiveAfterSuccess,
+      matchBlankLinesToImages,
     },
   );
 }
@@ -323,10 +350,12 @@ export function pasteLegacyImportQueueToRecentWindow({
   messageId,
   delayMs,
   archiveAfterSuccess,
+  matchBlankLinesToImages,
 }: {
   messageId: number;
   delayMs?: number;
   archiveAfterSuccess: boolean;
+  matchBlankLinesToImages: boolean;
 }) {
   return invoke<LegacyImportQueuePasteArchiveResult>(
     "paste_legacy_import_queue_to_recent_window",
@@ -334,6 +363,7 @@ export function pasteLegacyImportQueueToRecentWindow({
       messageId,
       delayMs,
       archiveAfterSuccess,
+      matchBlankLinesToImages,
     },
   );
 }

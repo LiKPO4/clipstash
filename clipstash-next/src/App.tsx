@@ -9,16 +9,24 @@ import {
   type ReactNode,
   type TouchEvent,
   type RefObject,
+  memo,
+  useCallback,
+  useMemo,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { useVirtualizer, defaultRangeExtractor } from "@tanstack/react-virtual";
+import { DataTransferProgress } from "./transferProgress";
+import { importZipFile } from "./zipFileUpload";
+import { useCommittedCallback } from "./useCommittedCallback";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { showDesktopPreview, hideDesktopPreview } from "./desktopPreview";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import { formatLocalTime } from "./formatTime";
+import { ThumbnailProvider, useThumbnail } from "./useThumbnail";
 import {
   archiveExportedMessages,
   copyLegacyMessageTextToClipboard,
@@ -29,14 +37,15 @@ import {
   downloadAndOpenUpdateInstaller,
   exportNormalDataZip,
   exportNormalDataZipBytes,
+  exportNormalDataZipFile,
   fetchLatestGithubRelease,
   getAppSettings,
   getGlobalShortcutErrors,
   getLegacyMessage,
   getLegacyStats,
   getLaunchOnStartup,
-  importDataZipBytes,
   importDataZipFromPath,
+  importAndroidShare,
   listLegacyMessages,
   migrateLegacyData,
   moveAppDataToSelectedDir,
@@ -79,7 +88,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.2.0";
+const CURRENT_VERSION = "2.2.1";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -138,6 +147,7 @@ type ScreenRect = {
 };
 
 type PreviewImageItem = {
+  file?: File;
   filename: string;
   path: string;
   src: string;
@@ -167,6 +177,8 @@ type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
 type ImportQueuePasteArchiveResult = LegacyImportQueuePasteArchiveResult;
 
 type AndroidSharedPayload = {
+  shareId?: string;
+  error?: string;
   text?: string;
   images?: AndroidSharedImage[];
 };
@@ -195,17 +207,22 @@ type ReleaseDownloadAsset = {
   filename: string;
 };
 
-let hoverPreviewWindow: WebviewWindow | null = null;
-let hoverPreviewStorageKey: string | null = null;
+type PerformanceMeasurement = {
+  measure: string;
+  start: number;
+};
+
 // 预览窗口创建代次：close 时递增；show 的异步流程每次 await 后校验，代次过期则放弃创建，
 // 避免鼠标已移开（或已按 Escape）后异步流程仍把窗口创建出来造成残留。
-let hoverPreviewSeq = 0;
 const MESSAGE_DOUBLE_CLICK_DELAY_MS = 220;
 
 function App() {
+  return <ThumbnailProvider><AppContent /></ThumbnailProvider>;
+}
+
+function AppContent() {
   const [stats, setStats] = useState<LegacyStats | null>(null);
   const [page, setPage] = useState<LegacyMessagePage | null>(null);
-  const [imageSources, setImageSources] = useState<Record<string, string>>({});
   const [view, setView] = useState<MessageView>("normal");
   const [sort, setSort] = useState<SortOrder>(() => getStoredSort());
   const [searchOpen, setSearchOpen] = useState(false);
@@ -259,6 +276,7 @@ function App() {
     useState<ImportQueuePasteAllResult | null>(null);
   const [archiveAfterImport, setArchiveAfterImport] = useState(false);
   const [archiveAfterExport, setArchiveAfterExport] = useState(false);
+  const [matchBlankLinesToImages, setMatchBlankLinesToImages] = useState(false);
   const [appSettingsReady, setAppSettingsReady] = useState(false);
   const [importQueuePasteArchiveResult, setImportQueuePasteArchiveResult] =
     useState<ImportQueuePasteArchiveResult | null>(null);
@@ -292,42 +310,57 @@ function App() {
   const [dataImportPreview, setDataImportPreview] = useState<DataImportPreview | null>(null);
   const [dataTransferError, setDataTransferError] = useState<string | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
+  const loadMoreInFlightRef = useRef(false);
+  const androidShareTaskRef = useRef<Promise<void>>(Promise.resolve());
   // 上次实际调用 setAlwaysOnTop IPC 时的值，用于跳过无变化的重复调用（null 表示尚未调用过）。
   const lastAlwaysOnTopValueRef = useRef<boolean | null>(null);
   const dataPackageInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMessageListScrollTopRef = useRef<number | null>(null);
   const requestEpochRef = useRef(0);
+  const pageCommitMeasurementRef = useRef<PerformanceMeasurement | null>(null);
   const [dataPackageInputKey, setDataPackageInputKey] = useState(0);
+
+  function commitPage(nextPage: LegacyMessagePage) {
+    finishPerformanceMeasurement(pageCommitMeasurementRef.current);
+    pageCommitMeasurementRef.current = startPerformanceMeasurement("page-dom-commit");
+    setPage(nextPage);
+  }
 
   useEffect(() => {
     document.title = APP_TITLE;
   }, []);
 
   useEffect(() => {
-    if (!IS_ANDROID) return;
+    return () => {
+      finishPerformanceMeasurement(pageCommitMeasurementRef.current);
+      pageCommitMeasurementRef.current = null;
+    };
+  }, []);
 
+  const saveAndroidShare = useCommittedCallback(createMessageFromAndroidShare);
+  useEffect(() => {
+    if (!IS_ANDROID) return;
     function consumeAndroidShare() {
-      // 队列式消费：连续多次分享时每次消费一条，直到队列为空，避免丢分享
       let rawPayload = window.ClipStashAndroid?.consumePendingShare?.();
       while (rawPayload) {
-        try {
-          const payload = JSON.parse(rawPayload) as AndroidSharedPayload;
-          createMessageFromAndroidShare(payload).catch((err: unknown) => {
-            setAndroidShareError(err instanceof Error ? err.message : String(err));
-            setAndroidShareResult(null);
-          });
-        } catch (err) {
-          setAndroidShareError(err instanceof Error ? err.message : String(err));
+        const raw = rawPayload;
+        // Only small identifiers enter this queue. Saving and refreshing are serialized.
+        androidShareTaskRef.current = androidShareTaskRef.current.then(async () => {
+          const payload = JSON.parse(raw) as AndroidSharedPayload;
+          if (payload.error) throw new Error(payload.error);
+          await saveAndroidShare(payload);
+        }).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setAndroidShareError((previous) => [previous, message].filter(Boolean).join("\n").split("\n").slice(-5).join("\n"));
           setAndroidShareResult(null);
-        }
+        });
         rawPayload = window.ClipStashAndroid?.consumePendingShare?.();
       }
     }
-
     consumeAndroidShare();
     window.addEventListener(ANDROID_SHARE_EVENT, consumeAndroidShare);
     return () => window.removeEventListener(ANDROID_SHARE_EVENT, consumeAndroidShare);
-  }, [sort, imageSources]);
+  }, [saveAndroidShare]);
 
   useEffect(() => {
     if (!IS_ANDROID) return;
@@ -433,12 +466,11 @@ function App() {
     setError(null);
     setLoadingMore(false);
 
-    loadAppDataWithImages(view, sort, imageSources, searchQuery)
-      .then(({ imageSources: nextImageSources, page: nextPage, stats: nextStats }) => {
+    loadAppData(view, sort, searchQuery)
+      .then(([nextStats, nextPage]) => {
         if (!alive || requestEpochRef.current !== requestEpoch) return;
-        setImageSources(nextImageSources);
         setStats(nextStats);
-        setPage(nextPage);
+        commitPage(nextPage);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -452,6 +484,11 @@ function App() {
   }, [view, sort, searchQuery]);
 
   useLayoutEffect(() => {
+    if (pageCommitMeasurementRef.current) {
+      finishPerformanceMeasurement(pageCommitMeasurementRef.current);
+      pageCommitMeasurementRef.current = null;
+    }
+
     const pendingScrollTop = pendingMessageListScrollTopRef.current;
     if (pendingScrollTop === null || !page) return;
 
@@ -483,35 +520,18 @@ function App() {
   }, [previewImage]);
 
   useEffect(() => {
-    let alive = true;
-
-    Promise.all(
-      mediaFiles.map(async (file, index) => ({
-        filename: file.name,
-        path: `composer:${index}:${file.name}:${file.size}`,
-        src: await fileToDataUrl(file),
-      })),
-    ).then((previewImages) => {
-      if (alive) setMediaPreviewImages(previewImages);
-    });
-
-    return () => {
-      alive = false;
-    };
+    const previews = mediaFiles.map((file, index) => ({
+      filename: file.name, path: `composer:${index}:${file.name}:${file.size}`,
+      src: URL.createObjectURL(file), file,
+    }));
+    setMediaPreviewImages(previews);
+    return () => previews.forEach((image) => URL.revokeObjectURL(image.src));
   }, [mediaFiles]);
 
   useEffect(() => {
-    let alive = true;
-
-    Promise.all(
-      editImageItems.map(async (item) => composerImageItemToPreview(item)),
-    ).then((previewImages) => {
-      if (alive) setEditPreviewImages(previewImages);
-    });
-
-    return () => {
-      alive = false;
-    };
+    const previews = editImageItems.map(composerImageItemToPreview);
+    setEditPreviewImages(previews);
+    return () => previews.forEach((image) => { if (image.file) URL.revokeObjectURL(image.src); });
   }, [editImageItems]);
 
   useEffect(() => {
@@ -814,6 +834,7 @@ function App() {
     setStartup(settings.launch_on_startup);
     setArchiveAfterImport(settings.archive_after_import);
     setArchiveAfterExport(settings.archive_after_export);
+    setMatchBlankLinesToImages(settings.match_blank_lines_to_images);
     setPasteIntervalMs(settings.paste_interval_ms);
     setHoverDelay(settings.hover_delay);
     setScrollLines(settings.scroll_lines);
@@ -903,8 +924,10 @@ function App() {
   }
 
   async function loadMore() {
-    if (!page || loadingMore) return;
+    if (!page || !page.has_more || loadingMore || loadMoreInFlightRef.current) return;
+    loadMoreInFlightRef.current = true;
     const requestEpoch = ++requestEpochRef.current;
+    const measurement = startPerformanceMeasurement("page-list-ready");
 
     setLoadingMore(true);
     setError(null);
@@ -918,13 +941,7 @@ function App() {
         search: searchQuery,
       });
       if (requestEpochRef.current !== requestEpoch) return;
-      const nextImageSources = await preloadMessageImageSources(
-        nextPage.messages,
-        imageSources,
-      );
-      if (requestEpochRef.current !== requestEpoch) return;
-      setImageSources(nextImageSources);
-      setPage({
+      commitPage({
         ...nextPage,
         offset: 0,
         messages: [...page.messages, ...nextPage.messages],
@@ -933,6 +950,8 @@ function App() {
       if (requestEpochRef.current !== requestEpoch) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      finishPerformanceMeasurement(measurement);
+      loadMoreInFlightRef.current = false;
       setLoadingMore(false);
     }
   }
@@ -942,12 +961,12 @@ function App() {
     if (preserveListScroll) {
       pendingMessageListScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
     }
-    const { imageSources: nextImageSources, page: nextPage, stats: nextStats } =
-      await loadAppDataWithImages(view, sort, imageSources, searchQuery);
+    const [nextStats, nextPage] = await loadAppData(
+      view, sort, searchQuery, preserveListScroll ? Math.max(PAGE_LIMIT, page?.messages.length ?? 0) : PAGE_LIMIT,
+    );
     if (requestEpochRef.current !== requestEpoch) return;
-    setImageSources(nextImageSources);
     setStats(nextStats);
-    setPage(nextPage);
+    commitPage(nextPage);
   }
 
   function refreshAndroidWidgets() {
@@ -1107,10 +1126,8 @@ function App() {
         offset: 0,
         limit: PAGE_LIMIT,
       });
-      const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
       if (requestEpochRef.current !== requestEpoch) return;
-      setImageSources(nextImageSources);
-      setPage(nextPage);
+      commitPage(nextPage);
       setSettingsNotice(
         result.inserted_messages > 0
           ? `已迁移 ${result.inserted_messages} 条，跳过 ${result.skipped_messages} 条重复`
@@ -1126,17 +1143,15 @@ function App() {
 
   async function refreshPageAfterDataChange(nextStats: LegacyStats) {
     const requestEpoch = ++requestEpochRef.current;
-    setStats(nextStats);
     const nextPage = await listLegacyMessages({
       view,
       sort,
       offset: 0,
       limit: PAGE_LIMIT,
     });
-    const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
     if (requestEpochRef.current !== requestEpoch) return;
-    setImageSources(nextImageSources);
-    setPage(nextPage);
+    setStats(nextStats);
+    commitPage(nextPage);
   }
 
   async function exportDataPackage() {
@@ -1171,8 +1186,14 @@ function App() {
   }
 
   async function exportAndroidDataPackage() {
-    const result = await exportNormalDataZipBytes();
-    await openExportedDataPackage(result.filename, result.bytes, result.export.path);
+    const result = window.ClipStashAndroid?.shareZip
+      ? await exportNormalDataZipFile()
+      : await exportNormalDataZipBytes();
+    if (window.ClipStashAndroid?.shareZip) {
+      window.ClipStashAndroid.shareZip(result.export.path);
+    } else if ("bytes" in result) {
+      await openExportedDataPackage(result.filename, result.bytes as number[], result.export.path);
+    }
     if (archiveAfterExport && result.message_ids.length > 0) {
       const nextStats = await archiveExportedMessages(result.message_ids);
       await refreshPageAfterDataChange(nextStats);
@@ -1249,8 +1270,7 @@ function App() {
       if (!isZipPath(file.name)) {
         throw new Error("导入数据包必须是 .zip 文件");
       }
-      const bytes = await fileToNumberArray(file);
-      const result = await importDataZipBytes(file.name, bytes);
+      const result = await importZipFile(file);
       setDataImportResult(result);
       await refreshPageAfterDataChange(result.stats);
       refreshAndroidWidgets();
@@ -1320,10 +1340,8 @@ function App() {
         offset: 0,
         limit: PAGE_LIMIT,
       });
-      const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
       if (requestEpochRef.current !== requestEpoch) return;
-      setImageSources(nextImageSources);
-      setPage(nextPage);
+      commitPage(nextPage);
       setSettingsNotice("数据目录已迁移，原目录已保留");
       window.setTimeout(() => setSettingsNotice(null), 2400);
     } catch (err) {
@@ -1354,10 +1372,8 @@ function App() {
         offset: 0,
         limit: PAGE_LIMIT,
       });
-      const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
       if (requestEpochRef.current !== requestEpoch) return;
-      setImageSources(nextImageSources);
-      setPage(nextPage);
+      commitPage(nextPage);
       setSettingsNotice(
         result.copied_images > 0 || result.copied_db
           ? `已修复数据目录，补回 ${result.copied_images} 张图片`
@@ -1437,32 +1453,30 @@ function App() {
     const imagesData = (payload.images ?? [])
       .map((image) => base64ToNumberArray(image.data))
       .filter((bytes) => bytes.length > 0);
-    if (!text && imagesData.length === 0) {
+    if (!payload.shareId && !text && imagesData.length === 0) {
       throw new Error("分享内容为空");
     }
 
     const requestEpoch = ++requestEpochRef.current;
-    setAndroidShareError(null);
     setAndroidShareResult(null);
     setShowComposer(false);
     setEditingMessage(null);
     setSearchDraft("");
     setSearchQuery("");
 
-    const result =
-      text && imagesData.length > 0
+    const result = payload.shareId
+      ? { message: await importAndroidShare(payload.shareId) }
+      : text && imagesData.length > 0
         ? await createLegacyMixedMessage(text, imagesData)
         : text
           ? await createLegacyTextMessage(text)
           : await createLegacyImageMessage(imagesData);
 
     const [nextStats, nextPage] = await loadAppData("normal", sort, "");
-    const nextImageSources = await preloadMessageImageSources(nextPage.messages, imageSources);
     if (requestEpochRef.current === requestEpoch) {
       setView("normal");
       setStats(nextStats);
-      setImageSources(nextImageSources);
-      setPage(nextPage);
+      commitPage(nextPage);
     }
     setAndroidShareResult(result.message);
     refreshAndroidWidgets();
@@ -1731,7 +1745,7 @@ function App() {
     setImportQueuePasteArchiveResult(null);
 
     try {
-      const preview = await previewLegacyMessageImportQueue(message.id);
+      const preview = await previewLegacyMessageImportQueue(message.id, matchBlankLinesToImages);
       setImportQueuePreview(preview);
       await pasteImportQueue(preview);
     } catch (err) {
@@ -1754,6 +1768,7 @@ function App() {
         messageId: preview.message_id,
         delayMs: pasteIntervalMs,
         archiveAfterSuccess: archiveAfterImport,
+        matchBlankLinesToImages,
       });
       setImportQueuePasteAllResult(result.paste);
       setImportQueuePasteArchiveResult(result);
@@ -1788,6 +1803,7 @@ function App() {
       className={IS_ANDROID ? "shell shell-android" : "shell"}
       style={{ fontSize: `${14 + fontScale}px` }}
     >
+      <DataTransferProgress />
       <header className="app-topbar">
         <div className="brand-block">
           <span className="app-icon" aria-hidden="true">
@@ -1988,7 +2004,6 @@ function App() {
               loadingMore={loadingMore}
               onLoadMore={loadMore}
               onBlankDoubleClick={() => setShowComposer(true)}
-              imageSources={imageSources}
             />
           )}
 
@@ -2067,6 +2082,7 @@ function App() {
           hoverDelay={hoverDelay}
           openPathError={openPathError}
           pasteIntervalMs={pasteIntervalMs}
+          matchBlankLinesToImages={matchBlankLinesToImages}
           showHotkey={showHotkey}
           releaseCheckError={releaseCheckError}
           releaseCheckResult={releaseCheckResult}
@@ -2097,6 +2113,10 @@ function App() {
           onArchiveAfterImportChange={(checked) => {
             setArchiveAfterImport(checked);
             persistAppSettings({ archive_after_import: checked }).catch(() => undefined);
+          }}
+          onMatchBlankLinesToImagesChange={(checked) => {
+            setMatchBlankLinesToImages(checked);
+            persistAppSettings({ match_blank_lines_to_images: checked }).catch(() => undefined);
           }}
           onCloseToTrayChange={(checked) => {
             setCloseToTray(checked);
@@ -2254,7 +2274,10 @@ function App() {
           title={androidShareError ? "分享保存失败" : "分享已保存"}
         >
           {androidShareError ? (
-            <p>{androidShareError}</p>
+            <>
+              <p>{androidShareError}</p>
+              {androidShareResult && <p>随后已创建 #{androidShareResult.id}。</p>}
+            </>
           ) : (
             androidShareResult && <p>已创建 #{androidShareResult.id}</p>
           )}
@@ -2284,7 +2307,9 @@ function App() {
                 <p>
                   {pastingImportQueue
                     ? "正在自动导入到上一个外部窗口。"
-                    : "将按旧版顺序导入：文字先行，随后依次导入图片。"}
+                    : matchBlankLinesToImages
+                      ? "将按空行匹配图片，未匹配图片会依次追加到末尾。"
+                      : "将按旧版顺序导入：文字先行，随后依次导入图片。"}
                 </p>
                 <p>
                   已准备 {importQueuePreview.item_count} 项，目标窗口使用最近一次激活的外部窗口。
@@ -2441,6 +2466,7 @@ function SettingsDialog({
   migrationError,
   migrationResult,
   messageDoubleClickAction,
+  matchBlankLinesToImages,
   migratingLegacyData,
   movingAppData,
   repairingAppData,
@@ -2466,6 +2492,7 @@ function SettingsDialog({
   onCancelDataImportPreview,
   onConfirmDataImportPreview,
   onMessageDoubleClickActionChange,
+  onMatchBlankLinesToImagesChange,
   onClose,
   onCloseToTrayChange,
   onFontScaleChange,
@@ -2502,6 +2529,7 @@ function SettingsDialog({
   migrationError: string | null;
   migrationResult: AppMigrationResult | null;
   messageDoubleClickAction: MessageDoubleClickAction;
+  matchBlankLinesToImages: boolean;
   migratingLegacyData: boolean;
   movingAppData: boolean;
   repairingAppData: boolean;
@@ -2527,6 +2555,7 @@ function SettingsDialog({
   onCancelDataImportPreview: () => void;
   onConfirmDataImportPreview: () => void;
   onMessageDoubleClickActionChange: (value: MessageDoubleClickAction) => void;
+  onMatchBlankLinesToImagesChange: (checked: boolean) => void;
   onClose: () => void;
   onCloseToTrayChange: (checked: boolean) => void;
   onFontScaleChange: (value: number) => void;
@@ -2580,6 +2609,11 @@ function SettingsDialog({
 
   function changeArchiveAfterImport(checked: boolean) {
     onArchiveAfterImportChange(checked);
+    showAutoSavedNotice();
+  }
+
+  function changeMatchBlankLinesToImages(checked: boolean) {
+    onMatchBlankLinesToImagesChange(checked);
     showAutoSavedNotice();
   }
 
@@ -2723,6 +2757,13 @@ function SettingsDialog({
                   label="快速导入后自动归档"
                   description="导入完成后自动将消息移入已归档"
                   onChange={changeArchiveAfterImport}
+                />
+
+                <SettingToggle
+                  checked={matchBlankLinesToImages}
+                  label="空行与图片匹配导入"
+                  description="每个空行按顺序替换为一张图片，未匹配图片仍追加到末尾"
+                  onChange={changeMatchBlankLinesToImages}
                 />
 
                 <SettingToggle
@@ -3035,30 +3076,7 @@ function HotkeyField({
   );
 }
 
-function MessageList({
-  archivingMessageId,
-  expandedImageMessageIds,
-  hasMore,
-  isAndroid,
-  importingMessageId,
-  listRef,
-  loadingMore,
-  messages,
-  onArchive,
-  onCopyText,
-  onDelete,
-  onEdit,
-  onMessageDoubleClick,
-  onLoadMore,
-  onOpenImportQueue,
-  onBlankDoubleClick,
-  onToggleImages,
-  onPreview,
-  imageSources,
-  previewDelaySeconds,
-  scrollLines,
-  showExternalImport,
-}: {
+type MessageListProps = {
   archivingMessageId: number | null;
   expandedImageMessageIds: number[];
   hasMore: boolean;
@@ -3077,11 +3095,63 @@ function MessageList({
   onBlankDoubleClick: () => void;
   onToggleImages: (messageId: number) => void;
   onPreview: (image: PreviewImage | null) => void;
-  imageSources: Record<string, string>;
   previewDelaySeconds: number;
   scrollLines: number;
   showExternalImport: boolean;
-}) {
+};
+
+export function MessageList({
+  archivingMessageId,
+  expandedImageMessageIds,
+  hasMore,
+  isAndroid,
+  importingMessageId,
+  listRef,
+  loadingMore,
+  messages,
+  onArchive,
+  onCopyText,
+  onDelete,
+  onEdit,
+  onMessageDoubleClick,
+  onLoadMore,
+  onOpenImportQueue,
+  onBlankDoubleClick,
+  onToggleImages,
+  onPreview,
+  previewDelaySeconds,
+  scrollLines,
+  showExternalImport,
+}: MessageListProps) {
+  const virtualized = messages.length > 60;
+  const [focusedId, setFocusedId] = useState<number | null>(null);
+  const getItemKey = useCallback((index: number) => messages[index].id, [messages]);
+  const focusedIndex = useMemo(() => messages.findIndex((message) => message.id === focusedId), [messages, focusedId]);
+  const rangeExtractor = useCallback((range: Parameters<typeof defaultRangeExtractor>[0]) => {
+    const indexes = defaultRangeExtractor(range);
+    if (focusedIndex >= 0 && !indexes.includes(focusedIndex)) indexes.push(focusedIndex);
+    return indexes.sort((a, b) => a - b);
+  }, [focusedIndex]);
+  const virtualizer = useVirtualizer({
+    count: messages.length, getScrollElement: () => listRef.current,
+    getItemKey, estimateSize: () => 180, overscan: 5, gap: 10,
+    enabled: virtualized, rangeExtractor,
+    initialRect: { width: 370, height: 600 },
+    initialOffset: () => listRef.current?.scrollTop ?? 0,
+  });
+  useEffect(() => {
+    const element = listRef.current;
+    if (!virtualized || !element || typeof ResizeObserver === "undefined") return;
+    let width = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth !== width) {
+        width = element.clientWidth;
+        virtualizer.measure();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [virtualized, virtualizer, listRef]);
   const textCopyTimerRef = useRef<number | null>(null);
 
   function clearTextCopyTimer() {
@@ -3108,6 +3178,33 @@ function MessageList({
     }
   }
 
+  const stableArchive = useCommittedCallback(onArchive);
+  const stableDelete = useCommittedCallback(onDelete);
+  const stableEdit = useCommittedCallback(onEdit);
+  const stableMessageDoubleClick = useCommittedCallback(onMessageDoubleClick);
+  const stableOpenImportQueue = useCommittedCallback(onOpenImportQueue);
+  const stableToggleImages = useCommittedCallback(onToggleImages);
+  const stablePreview = useCommittedCallback(onPreview);
+  const stableCopy = useCommittedCallback(scheduleTextCopy);
+  const stableCancelCopy = useCommittedCallback(clearTextCopyTimer);
+  useEffect(() => () => clearTextCopyTimer(), []);
+  function renderCard(message: LegacyMessage) {
+    return <MessageCard key={message.id} message={message}
+      isExpanded={expandedImageMessageIds.includes(message.id)}
+      archivingMessageId={archivingMessageId} importingMessageId={importingMessageId}
+      isAndroid={isAndroid} previewDelaySeconds={previewDelaySeconds}
+      showExternalImport={showExternalImport} onCopyText={stableCopy} onCancelTextCopy={stableCancelCopy}
+      onArchive={stableArchive}
+      onDelete={stableDelete}
+      onEdit={stableEdit}
+      onMessageDoubleClick={stableMessageDoubleClick}
+      onOpenImportQueue={stableOpenImportQueue}
+      onToggleImages={stableToggleImages}
+      onPreview={stablePreview}
+    />;
+  }
+  const requestMore = useCommittedCallback(requestMoreIfNearBottom);
+
   // React 19 在 root 上以 passive:true 绑定合成 wheel 事件，preventDefault() 会被忽略，
   // 导致 scrollLines>1 时原生滚动与手动滚动叠加；改为在列表容器上用非 passive 原生监听，
   // scrollLines===1 时不做拦截、保持原生滚动语义。
@@ -3118,7 +3215,7 @@ function MessageList({
     const handleNativeWheel = (event: globalThis.WheelEvent) => {
       if (scrollLines === 1) {
         window.setTimeout(() => {
-          if (listRef.current) requestMoreIfNearBottom(listRef.current);
+          if (listRef.current) requestMore(listRef.current);
         }, 0);
         return;
       }
@@ -3126,33 +3223,63 @@ function MessageList({
       event.preventDefault();
       if (listRef.current) {
         listRef.current.scrollTop += event.deltaY * scrollLines;
-        requestMoreIfNearBottom(listRef.current);
+        requestMore(listRef.current);
       }
     };
 
     element.addEventListener("wheel", handleNativeWheel, { passive: false });
     return () => element.removeEventListener("wheel", handleNativeWheel);
-  }, [scrollLines]);
+  }, [scrollLines, listRef, requestMore]);
 
   return (
     <section
-      className="message-list"
+      className={`message-list${virtualized ? " message-list-virtual" : ""}`}
+      onFocusCapture={(event) => {
+        const row = (event.target as HTMLElement).closest<HTMLElement>("[data-message-id]");
+        setFocusedId(row ? Number(row.dataset.messageId) : null);
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null);
+      }}
       aria-label="消息列表"
       ref={listRef}
-      onScroll={(event) => requestMoreIfNearBottom(event.currentTarget)}
+      onScroll={(event) => {
+        // A virtual row can unmount without a mouseleave event. Cancel its outstanding preview.
+        if (!isAndroid) {
+          void closeHoverPreviewWindow();
+          stablePreview(null);
+        }
+        requestMoreIfNearBottom(event.currentTarget);
+      }}
       onDoubleClick={(event) => {
-        if (event.target === event.currentTarget) {
+        if (event.target === event.currentTarget || (event.target as HTMLElement).classList.contains("message-virtual-space")) {
           onBlankDoubleClick();
         }
       }}
     >
-      {messages.map((message) => {
-        const isExpanded = expandedImageMessageIds.includes(message.id);
-        const visibleImages = isExpanded ? message.images : message.images.slice(0, 3);
-        const hiddenImageCount = message.images.length - visibleImages.length;
-        const previewImages = buildPreviewImages(message.images, imageSources);
+      {virtualized ? (
+        <div className="message-virtual-space" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((row) => (
+            <div key={row.key} data-index={row.index} data-message-id={messages[row.index].id}
+              ref={virtualizer.measureElement} className="message-virtual-row"
+              style={{ transform: `translateY(${row.start}px)` }}>
+              {renderCard(messages[row.index])}
+            </div>
+          ))}
+        </div>
+      ) : messages.map(renderCard)}
+    </section>
+  );
+}
 
-        return (
+const MessageCard = memo(function MessageCard({
+  message, isExpanded, onCancelTextCopy,
+  archivingMessageId, importingMessageId, isAndroid, onArchive, onCopyText, onDelete, onEdit, onMessageDoubleClick, onOpenImportQueue, onToggleImages, onPreview, previewDelaySeconds, showExternalImport,
+}: Pick<MessageListProps, "archivingMessageId" | "importingMessageId" | "isAndroid" | "onArchive" | "onCopyText" | "onDelete" | "onEdit" | "onMessageDoubleClick" | "onOpenImportQueue" | "onToggleImages" | "onPreview" | "previewDelaySeconds" | "showExternalImport"> & { message: LegacyMessage; isExpanded: boolean; onCancelTextCopy: () => void }) {
+  const visibleImages = isExpanded ? message.images : message.images.slice(0, 3);
+  const hiddenImageCount = message.images.length - visibleImages.length;
+  const previewImages = buildPreviewImages(message.images);
+  return (
           <article
             className="message-card"
             key={message.id}
@@ -3217,8 +3344,8 @@ function MessageList({
               <button
                 type="button"
                 className="message-text message-text-button"
-                onClick={() => scheduleTextCopy(message)}
-                onDoubleClick={clearTextCopyTimer}
+                onClick={() => onCopyText(message)}
+                onDoubleClick={onCancelTextCopy}
               >
                 <span className="message-text-content">{message.text_content}</span>
               </button>
@@ -3239,7 +3366,6 @@ function MessageList({
                       onPreview={onPreview}
                       previewDelaySeconds={previewDelaySeconds}
                       previewImages={previewImages}
-                      src={imageSources[image.path] ?? ""}
                     />
                   ))}
                 </div>
@@ -3255,11 +3381,8 @@ function MessageList({
               </section>
             )}
           </article>
-        );
-      })}
-    </section>
   );
-}
+});
 
 function EditMessageDialog({
   canSplit,
@@ -3685,8 +3808,12 @@ function ComposerImageTile({
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
 }) {
+  const thumbnail = useThumbnail(item.kind === "existing" ? item.image : null);
+  const previewRequestRef = useRef(0);
+  useEffect(() => () => clearPreviewTimer(), []);
   const previewTimerRef = useRef<number | null>(null);
   const previewImage = previewImages[index] ?? null;
+  const tileSrc = item.kind === "existing" ? thumbnail.src : previewImage?.src;
   const filename = composerImageItemFilename(item);
   const title =
     item.kind === "file"
@@ -3694,6 +3821,7 @@ function ComposerImageTile({
       : `${item.image.filename} · ${item.image.path}`;
 
   function clearPreviewTimer() {
+    previewRequestRef.current += 1;
     if (previewTimerRef.current !== null) {
       window.clearTimeout(previewTimerRef.current);
       previewTimerRef.current = null;
@@ -3701,7 +3829,7 @@ function ComposerImageTile({
   }
 
   function showPreview(target: HTMLButtonElement) {
-    if (!previewImage?.src) return;
+    if (!previewImage || (item.kind === "existing" ? !item.image.exists : !tileSrc)) return;
 
     clearPreviewTimer();
     const img = target.querySelector("img");
@@ -3721,9 +3849,12 @@ function ComposerImageTile({
       return;
     }
 
+    const request = previewRequestRef.current;
     previewTimerRef.current = window.setTimeout(() => {
       previewTimerRef.current = null;
-      showHoverPreviewWindow(nextPreview, anchor).catch(() => onPreview(nextPreview));
+      showHoverPreviewWindow(nextPreview, anchor).catch(() => {
+        if (request === previewRequestRef.current) onPreview(nextPreview);
+      });
     }, Math.max(0, previewDelaySeconds * 1000));
   }
 
@@ -3743,7 +3874,7 @@ function ComposerImageTile({
   }
 
   return (
-    <div className="composer-image-tile-wrap">
+    <div className="composer-image-tile-wrap" ref={thumbnail.element}>
       <button
         type="button"
         className="composer-image-tile"
@@ -3760,11 +3891,11 @@ function ComposerImageTile({
         onBlur={isAndroid ? undefined : hidePreview}
         title={title}
       >
-        {previewImage?.src ? (
-          <img alt={filename} src={previewImage.src} />
+        {tileSrc ? (
+          <img alt={filename} src={tileSrc} decoding="async" />
         ) : (
           <span className="composer-image-placeholder">
-            {item.kind === "existing" && !item.image.exists ? "文件缺失" : "无法读取"}
+            {item.kind === "existing" && !item.image.exists ? "文件缺失" : thumbnail.failed ? "无法读取" : "加载中"}
           </span>
         )}
         <span>{filename}</span>
@@ -3790,22 +3921,26 @@ function MessageImageTile({
   onPreview,
   previewDelaySeconds,
   previewImages,
-  src,
 }: {
   image: LegacyMessageImage;
   isAndroid?: boolean;
   onPreview: (image: PreviewImage | null) => void;
   previewDelaySeconds: number;
   previewImages: PreviewImageItem[];
-  src: string;
 }) {
+  const { element, src, failed } = useThumbnail(image);
   const [broken, setBroken] = useState(false);
   const previewTimerRef = useRef<number | null>(null);
-  const canRenderImage = image.exists && !broken;
+  const previewRequestRef = useRef(0);
+  useEffect(() => { setBroken(false); }, [src]);
+  useEffect(() => () => clearPreviewTimer(), []);
+  const imageFailed = failed || broken;
+  const canRenderImage = image.exists && !imageFailed;
   const imageSrc = canRenderImage ? src : "";
   const previewIndex = previewImages.findIndex((item) => item.path === image.path);
 
   function clearPreviewTimer() {
+    previewRequestRef.current += 1;
     if (previewTimerRef.current !== null) {
       window.clearTimeout(previewTimerRef.current);
       previewTimerRef.current = null;
@@ -3827,7 +3962,7 @@ function MessageImageTile({
         naturalWidth,
         naturalHeight,
       ),
-      src: imageSrc,
+      src: "",
       total: previewImages.length,
     };
 
@@ -3835,20 +3970,23 @@ function MessageImageTile({
   }
 
   function showPreview(target: HTMLButtonElement) {
-    if (!imageSrc) return;
+    if (!image.exists) return;
 
     clearPreviewTimer();
     const { anchor, preview } = readImagePreview(target);
+    const request = previewRequestRef.current;
 
     previewTimerRef.current = window.setTimeout(() => {
       previewTimerRef.current = null;
       onPreview({ ...preview, externalWindow: true });
-      showHoverPreviewWindow(preview, anchor).catch(() => onPreview(preview));
+      showHoverPreviewWindow(preview, anchor).catch(() => {
+        if (request === previewRequestRef.current) onPreview(preview);
+      });
     }, Math.max(0, previewDelaySeconds * 1000));
   }
 
   function openPreview(target: HTMLButtonElement) {
-    if (!imageSrc) return;
+    if (!image.exists) return;
 
     clearPreviewTimer();
     const { preview } = readImagePreview(target);
@@ -3861,24 +3999,26 @@ function MessageImageTile({
     onPreview(null);
   }
 
-  if (canRenderImage && imageSrc) {
+  if (image.exists) {
     return (
-      <div className="image-tile" title={image.path}>
+      <div className="image-tile" title={image.path} ref={element}>
         <button
           type="button"
           className="image-preview-action"
+          aria-label={image.filename}
           onClick={isAndroid ? (event) => openPreview(event.currentTarget) : undefined}
           onMouseEnter={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
           onMouseLeave={isAndroid ? undefined : hidePreview}
           onFocus={isAndroid ? undefined : (event) => showPreview(event.currentTarget)}
           onBlur={isAndroid ? undefined : hidePreview}
         >
-          <img
+          {imageSrc ? <img
             alt={image.filename}
             loading="lazy"
+            decoding="async"
             src={imageSrc}
             onError={() => setBroken(true)}
-          />
+          /> : <span className="image-placeholder">{imageFailed ? "无法读取" : "加载中"}</span>}
         </button>
         <span className="image-caption">{image.filename}</span>
       </div>
@@ -3886,16 +4026,51 @@ function MessageImageTile({
   }
 
   return (
-    <div className="image-tile image-tile-missing" title={image.path}>
-      <span className="image-placeholder">{image.exists ? "无法读取" : "文件缺失"}</span>
+    <div className="image-tile image-tile-missing" title={image.path} ref={element}>
+      <span className="image-placeholder">
+        {!image.exists ? "文件缺失" : imageFailed ? "无法读取" : "加载中"}
+      </span>
       <span className="image-caption">{image.filename}</span>
     </div>
   );
 }
 
+let originalReadTask: Promise<void> = Promise.resolve();
+
+function readPreviewOriginal(filename: string, isCurrent: () => boolean) {
+  const result = originalReadTask.then(async () => {
+    if (!isCurrent()) throw new Error("Preview request released");
+    const bytes = await readLegacyImageBytes(filename);
+    if (!isCurrent()) throw new Error("Preview request released");
+    return bytes;
+  });
+  // Keep only the queue tail, never a resolved promise containing a previous original's bytes.
+  originalReadTask = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function useOriginalPreview(image: PreviewImage): { src: string; failed?: boolean } {
+  const [loaded, setLoaded] = useState<{ image: PreviewImage; src: string; failed?: boolean } | null>(null);
+  useEffect(() => {
+    if (image.src) return;
+    let alive = true;
+    let url: string | undefined;
+    readPreviewOriginal(image.filename, () => alive).then((bytes) => {
+      if (!alive) return;
+      url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeTypeFromImagePath(image.filename) }));
+      setLoaded({ image, src: url });
+    }).catch(() => {
+      if (alive) setLoaded({ image, src: "", failed: true });
+    });
+    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
+  }, [image]);
+  return image.src ? { src: image.src } : loaded?.image === image ? loaded : { src: "" };
+}
+
 function HoverImagePreview({ image }: {
   image: PreviewImage;
 }) {
+  const original = useOriginalPreview(image);
   return (
     <aside
       className="hover-preview"
@@ -3912,7 +4087,7 @@ function HoverImagePreview({ image }: {
           : undefined
       }
     >
-      <img alt={image.filename} src={image.src} />
+      {original.src ? <img alt={image.filename} src={original.src} /> : <span>{original.failed ? "无法读取原图" : "加载原图中"}</span>}
     </aside>
   );
 }
@@ -3924,6 +4099,7 @@ function AndroidImagePreview({
   image: PreviewImage;
   onClose: () => void;
 }) {
+  const original = useOriginalPreview(image);
   return (
     <button
       type="button"
@@ -3931,98 +4107,19 @@ function AndroidImagePreview({
       aria-label={`关闭图片预览 ${image.filename}`}
       onClick={onClose}
     >
-      <img alt={image.filename} src={image.src} draggable={false} />
+      {original.src ? <img alt={image.filename} src={original.src} draggable={false} /> : <span>{original.failed ? "无法读取原图" : "加载原图中"}</span>}
     </button>
   );
 }
 
 async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
-  const seq = ++hoverPreviewSeq;
-  const dimensions = await loadImageDimensions(image.src);
-  if (seq !== hoverPreviewSeq) return;
-
-  const position = calculateScreenPreviewPosition(anchor, dimensions.width, dimensions.height);
-  const key = `clipstash.preview.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  localStorage.setItem(
-    key,
-    JSON.stringify({
-      filename: image.filename,
-      src: image.src,
-    }),
-  );
-
-  await closeHoverPreviewWindowInternal();
-  if (seq !== hoverPreviewSeq) {
-    localStorage.removeItem(key);
-    return;
-  }
-  hoverPreviewStorageKey = key;
-
-  const previewWindow = new WebviewWindow("image-preview", {
-    alwaysOnTop: true,
-    decorations: false,
-    focus: false,
-    height: position.height,
-    resizable: false,
-    skipTaskbar: true,
-    title: image.filename,
-    transparent: true,
-    url: `/image-preview.html?key=${encodeURIComponent(key)}`,
-    visible: true,
-    width: position.width,
-    x: position.left,
-    y: position.top,
-  });
-
-  hoverPreviewWindow = previewWindow;
-  previewWindow.once("tauri://destroyed", () => {
-    localStorage.removeItem(key);
-    if (hoverPreviewStorageKey === key) {
-      hoverPreviewStorageKey = null;
-    }
-    if (hoverPreviewWindow === previewWindow) {
-      hoverPreviewWindow = null;
-    }
-  });
+  await showDesktopPreview({ filename: image.filename, path: image.path,
+    file: image.images[image.index]?.file },
+    (width, height) => calculateScreenPreviewPosition(anchor, width, height));
 }
 
 async function closeHoverPreviewWindow() {
-  hoverPreviewSeq += 1;
-  await closeHoverPreviewWindowInternal();
-}
-
-async function closeHoverPreviewWindowInternal() {
-  const existingWindow = hoverPreviewWindow ?? (await WebviewWindow.getByLabel("image-preview"));
-  const existingKey = hoverPreviewStorageKey;
-  hoverPreviewWindow = null;
-  hoverPreviewStorageKey = null;
-  if (existingKey) {
-    localStorage.removeItem(existingKey);
-  }
-  if (existingWindow?.close) {
-    await Promise.resolve(existingWindow.close()).catch(() => undefined);
-  }
-}
-
-function loadImageDimensions(src: string) {
-  return new Promise<{ height: number; width: number }>((resolve, reject) => {
-    const image = new Image();
-    const fallbackTimer = window.setTimeout(() => {
-      resolve({ height: 240, width: 320 });
-    }, 120);
-    image.onload = () => {
-      window.clearTimeout(fallbackTimer);
-      resolve({
-        height: image.naturalHeight || 240,
-        width: image.naturalWidth || 320,
-      });
-    };
-    image.onerror = () => {
-      window.clearTimeout(fallbackTimer);
-      reject();
-    };
-    image.src = src;
-  });
+  await hideDesktopPreview().catch(() => undefined);
 }
 
 function calculateScreenPreviewPosition(
@@ -4167,15 +4264,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
-function buildPreviewImages(images: LegacyMessageImage[], imageSources: Record<string, string>) {
+function buildPreviewImages(images: LegacyMessageImage[]) {
   return images
     .filter((image) => image.exists)
     .map((image) => ({
       filename: image.filename,
       path: image.path,
-      src: imageSources[image.path] ?? "",
-    }))
-    .filter((image) => image.src.length > 0);
+      src: "",
+    }));
 }
 
 function fileToComposerItem(file: File, prefix: string): ComposerImageItem {
@@ -4194,19 +4290,20 @@ function existingImageToComposerItem(image: LegacyMessageImage): ComposerImageIt
   };
 }
 
-async function composerImageItemToPreview(item: ComposerImageItem): Promise<PreviewImageItem> {
+function composerImageItemToPreview(item: ComposerImageItem): PreviewImageItem {
   if (item.kind === "file") {
     return {
       filename: item.file.name,
       path: item.id,
-      src: await fileToDataUrl(item.file),
+      src: URL.createObjectURL(item.file),
+      file: item.file,
     };
   }
 
   return {
     filename: item.image.filename,
     path: item.image.path,
-    src: item.image.exists ? await legacyImageToDataUrl(item.image) : "",
+    src: "",
   };
 }
 
@@ -4305,21 +4402,6 @@ function shiftPreviewImage(current: PreviewImage | null, offset: number) {
   };
 }
 
-async function legacyImageToDataUrl(image: LegacyMessageImage) {
-  const bytes = await readLegacyImageBytes(image.filename);
-  return bytesToDataUrl(bytes, mimeTypeFromImagePath(image.filename));
-}
-
-function bytesToDataUrl(bytes: Uint8Array, mimeType: string) {
-  let binary = "";
-  const chunkSize = 8192;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.slice(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return `data:${mimeType};base64,${window.btoa(binary)}`;
-}
-
 function base64ToNumberArray(value: string) {
   const binary = window.atob(value);
   const bytes = new Array<number>(binary.length);
@@ -4329,57 +4411,58 @@ function base64ToNumberArray(value: string) {
   return bytes;
 }
 
-const MAX_IMAGE_SOURCE_ENTRIES = 300;
-
-async function preloadMessageImageSources(
-  messages: LegacyMessage[],
-  currentSources: Record<string, string>,
-) {
-  const nextSources = new Map(Object.entries(currentSources));
-  const missingImages = messages
-    .flatMap((message) => message.images)
-    .filter((image) => image.exists && !nextSources.has(image.path));
-
-  const decodeImage = async (image: LegacyMessageImage) => {
-    try {
-      nextSources.set(image.path, await legacyImageToDataUrl(image));
-    } catch {
-      // Keep missing entries absent so genuinely broken files still show a stable placeholder.
-    }
-  };
-
-  const decodeConcurrency = 4;
-  for (let offset = 0; offset < missingImages.length; offset += decodeConcurrency) {
-    await Promise.all(missingImages.slice(offset, offset + decodeConcurrency).map(decodeImage));
+async function loadAppData(view: MessageView, sort: SortOrder, search: string, retainedCount = PAGE_LIMIT) {
+  const measurement = startPerformanceMeasurement("page-data-ready");
+  try {
+    return await Promise.all([
+      getLegacyStats(),
+      loadRetainedMessagePage(view, sort, search, retainedCount),
+    ]);
+  } finally {
+    finishPerformanceMeasurement(measurement);
   }
-
-  // Cap the decoded-image cache so browsing a huge archive cannot grow memory without bound.
-  // Map preserves insertion order, so evict the oldest keys first.
-  while (nextSources.size > MAX_IMAGE_SOURCE_ENTRIES) {
-    const oldestKey = nextSources.keys().next().value;
-    if (oldestKey === undefined) break;
-    nextSources.delete(oldestKey);
-  }
-
-  return Object.fromEntries(nextSources);
 }
 
-async function loadAppDataWithImages(
-  view: MessageView,
-  sort: SortOrder,
-  currentSources: Record<string, string>,
-  search: string,
-) {
-  const [stats, page] = await loadAppData(view, sort, search);
-  const imageSources = await preloadMessageImageSources(page.messages, currentSources);
-  return { imageSources, page, stats };
+async function loadRetainedMessagePage(view: MessageView, sort: SortOrder, search: string, count: number) {
+  // The backend caps each query at 100. Rebuild only the prefix the user already loaded.
+  const first = await listLegacyMessages({ view, sort, offset: 0, limit: Math.min(count, 100), search });
+  if (count <= PAGE_LIMIT) return first;
+  let result = first;
+  while (result.has_more && result.messages.length < count) {
+    const next = await listLegacyMessages({ view, sort, offset: result.messages.length,
+      limit: Math.min(count - result.messages.length, 100), search });
+    result = { ...next, offset: 0, messages: [...result.messages, ...next.messages] };
+    if (!next.messages.length) break;
+  }
+  return result;
 }
 
-function loadAppData(view: MessageView, sort: SortOrder, search: string) {
-  return Promise.all([
-    getLegacyStats(),
-    listLegacyMessages({ view, sort, offset: 0, limit: PAGE_LIMIT, search }),
-  ]);
+function startPerformanceMeasurement(name: string): PerformanceMeasurement | null {
+  if (typeof performance === "undefined" || !performance.measure) return null;
+
+  try {
+    return {
+      measure: `clipstash:${name}`,
+      start: performance.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function finishPerformanceMeasurement(measurement: PerformanceMeasurement | null) {
+  if (!measurement || typeof performance === "undefined") return;
+
+  try {
+    // Keep the most recent result for each bounded metric name available to diagnostics.
+    performance.clearMeasures?.(measurement.measure);
+    performance.measure(measurement.measure, {
+      end: performance.now(),
+      start: measurement.start,
+    });
+  } catch {
+    // Performance entries are optional diagnostics and must never block data rendering.
+  }
 }
 
 function getStoredSort(): SortOrder {
@@ -4548,15 +4631,6 @@ async function existingImageToNumberArray(image: LegacyMessageImage) {
     throw new Error(`图片文件不存在，不能保存：${image.filename}`);
   }
   return Array.from(await readLegacyImageBytes(image.filename));
-}
-
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error ?? new Error("读取图片预览失败"));
-    reader.readAsDataURL(file);
-  });
 }
 
 function formatBytes(bytes: number) {

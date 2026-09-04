@@ -2,6 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
+import { installImageUrlMocks } from "./imageUrlMocks";
+
+installImageUrlMocks();
 
 const { invokeMock, isAlwaysOnTopMock, setAlwaysOnTopMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -62,6 +65,7 @@ const defaultAppSettings = {
   main_window_state: null,
   archive_after_import: false,
   archive_after_export: false,
+  match_blank_lines_to_images: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -119,6 +123,7 @@ describe("media create form", () => {
       }
       if (command === "get_legacy_stats") return Promise.resolve(stats);
       if (command === "list_legacy_messages") return Promise.resolve(emptyPage);
+      if (command === "read_image_thumbnail_bytes") return Promise.resolve(new Uint8Array([137, 80, 78, 71]));
       if (command === "create_legacy_image_message") return Promise.resolve(createResult);
       if (command === "create_legacy_mixed_message") {
         return Promise.resolve({

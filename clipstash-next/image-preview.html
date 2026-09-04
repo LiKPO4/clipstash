@@ -34,21 +34,6 @@
   </head>
   <body>
     <img alt="" id="preview-image" />
-    <script>
-      const params = new URLSearchParams(window.location.search);
-      const key = params.get("key");
-      const image = document.getElementById("preview-image");
-
-      if (key) {
-        const rawPayload = localStorage.getItem(key);
-        if (rawPayload) {
-          const payload = JSON.parse(rawPayload);
-          image.alt = payload.filename || "图片预览";
-          image.addEventListener("load", () => image.classList.add("ready"), { once: true });
-          image.src = payload.src || "";
-          document.title = payload.filename || "图片预览";
-        }
-      }
-    </script>
+    <script type="module" src="/src/imagePreview.ts"></script>
   </body>
 </html>

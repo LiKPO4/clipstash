@@ -109,12 +109,13 @@ describe("legacy api command contracts", () => {
   it("maps queued paste arguments to the backend command", async () => {
     invokeMock.mockResolvedValueOnce({ completed_count: 2 });
 
-    await pasteLegacyImportQueue(114, 123456, 250);
+    await pasteLegacyImportQueue(114, 123456, 250, true);
 
     expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue", {
       messageId: 114,
       targetHwnd: 123456,
       delayMs: 250,
+      matchBlankLinesToImages: true,
     });
   });
 
@@ -126,6 +127,7 @@ describe("legacy api command contracts", () => {
       targetHwnd: 123456,
       delayMs: 250,
       archiveAfterSuccess: true,
+      matchBlankLinesToImages: true,
     });
 
     expect(invokeMock).toHaveBeenCalledWith(
@@ -135,6 +137,7 @@ describe("legacy api command contracts", () => {
         targetHwnd: 123456,
         delayMs: 250,
         archiveAfterSuccess: true,
+        matchBlankLinesToImages: true,
       },
     );
   });
@@ -261,23 +264,25 @@ describe("legacy api command contracts", () => {
   it("maps import queue preview arguments to the backend command", async () => {
     invokeMock.mockResolvedValueOnce({ items: [] });
 
-    await previewLegacyMessageImportQueue(114);
+    await previewLegacyMessageImportQueue(114, true);
 
     expect(invokeMock).toHaveBeenCalledWith("preview_legacy_message_import_queue", {
       messageId: 114,
+      matchBlankLinesToImages: true,
     });
   });
 
   it("maps import queue item copy arguments to the backend command", async () => {
     invokeMock.mockResolvedValueOnce({ item_index: 1 });
 
-    await copyLegacyMessageImportQueueItemToClipboard(114, 1);
+    await copyLegacyMessageImportQueueItemToClipboard(114, 1, true);
 
     expect(invokeMock).toHaveBeenCalledWith(
       "copy_legacy_message_import_queue_item_to_clipboard",
       {
         messageId: 114,
         itemIndex: 1,
+        matchBlankLinesToImages: true,
       },
     );
   });
@@ -285,12 +290,13 @@ describe("legacy api command contracts", () => {
   it("maps import queue item paste arguments to the backend command", async () => {
     invokeMock.mockResolvedValueOnce({ item_index: 1 });
 
-    await pasteLegacyImportQueueItem(114, 1, 123456);
+    await pasteLegacyImportQueueItem(114, 1, 123456, true);
 
     expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_item", {
       messageId: 114,
       itemIndex: 1,
       targetHwnd: 123456,
+      matchBlankLinesToImages: true,
     });
   });
 });

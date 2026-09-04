@@ -88,6 +88,7 @@ export type AppSettings = {
   main_window_state: MainWindowState | null;
   archive_after_import: boolean;
   archive_after_export: boolean;
+  match_blank_lines_to_images: boolean;
   paste_interval_ms: number;
   show_hotkey: string;
   capture_hotkey: string;

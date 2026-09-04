@@ -2,6 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
+import { installImageUrlMocks } from "./imageUrlMocks";
+
+installImageUrlMocks();
 
 const { invokeMock, isAlwaysOnTopMock, previewWindowCloseMock, previewWindowMock, setAlwaysOnTopMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -32,6 +35,11 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
       previewWindowMock(label, options);
     }
   },
+}));
+
+vi.mock("../src/desktopPreview", () => ({
+  showDesktopPreview: (...args: unknown[]) => { previewWindowMock(...args); return Promise.resolve(); },
+  hideDesktopPreview: () => { previewWindowCloseMock(); return Promise.resolve(); },
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -294,6 +302,7 @@ const defaultAppSettings = {
   main_window_state: null,
   archive_after_import: false,
   archive_after_export: false,
+  match_blank_lines_to_images: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -368,6 +377,7 @@ describe("edit and delete guarded actions", () => {
           ],
         });
       }
+      if (command === "read_image_thumbnail_bytes") return Promise.resolve(new Uint8Array(tinyPngBytes));
       if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array(tinyPngBytes));
       if (command === "delete_legacy_message") {
         if (failNextDelete) {
@@ -810,8 +820,9 @@ describe("edit and delete guarded actions", () => {
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("read_legacy_image_bytes", {
+      expect(invokeMock).toHaveBeenCalledWith("read_image_thumbnail_bytes", {
         filename: "old.png",
+        expectedPath: message.images[0].path,
       });
       expect(invokeMock).toHaveBeenCalledWith("replace_legacy_message_images", {
         messageId: 10,
@@ -1125,8 +1136,8 @@ describe("edit and delete guarded actions", () => {
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    expect(within(imageGrid).getByRole("button", { name: "one.png" })).toBeTruthy();
-    expect(within(imageGrid).getByRole("button", { name: "two.png" })).toBeTruthy();
+    expect(await within(imageGrid).findByRole("button", { name: "one.png" })).toBeTruthy();
+    expect(await within(imageGrid).findByRole("button", { name: "two.png" })).toBeTruthy();
     expect(within(imageGrid).getByText("文件缺失")).toBeTruthy();
     expect(within(imageGrid).getByText("missing.png")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "four.png" })).toBeNull();
@@ -1137,14 +1148,8 @@ describe("edit and delete guarded actions", () => {
     await user.hover(within(imageGrid).getByRole("button", { name: "one.png" }));
     await waitFor(() => {
       expect(previewWindowMock).toHaveBeenCalledWith(
-        "image-preview",
-        expect.objectContaining({
-          alwaysOnTop: true,
-          decorations: false,
-          height: expect.any(Number),
-          url: expect.stringContaining("/image-preview.html"),
-          width: expect.any(Number),
-        }),
+        expect.objectContaining({ filename: "one.png", path: expect.any(String) }),
+        expect.any(Function),
       );
     });
     await user.unhover(within(imageGrid).getByRole("button", { name: "one.png" }));
@@ -1157,7 +1162,7 @@ describe("edit and delete guarded actions", () => {
     render(<App />);
 
     const imageGrid = await screen.findByLabelText("图片缩略图");
-    fireEvent.click(within(imageGrid).getByRole("button", { name: "old.png" }));
+    fireEvent.click(await within(imageGrid).findByRole("button", { name: "old.png" }));
 
     expect(screen.queryByRole("tooltip", { name: "old.png" })).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
@@ -1226,6 +1231,7 @@ describe("edit and delete guarded actions", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("preview_legacy_message_import_queue", {
         messageId: 10,
+        matchBlankLinesToImages: false,
       });
     });
     expect(await screen.findByText("导入 #10")).toBeTruthy();
@@ -1263,6 +1269,7 @@ describe("edit and delete guarded actions", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("preview_legacy_message_import_queue", {
         messageId: 10,
+        matchBlankLinesToImages: false,
       });
     });
     const alert = await screen.findByRole("alert");
@@ -1494,6 +1501,7 @@ describe("edit and delete guarded actions", () => {
         messageId: 10,
         delayMs: 250,
         archiveAfterSuccess: false,
+        matchBlankLinesToImages: false,
       });
     });
     expect(await screen.findByText("已导入 #10 · 2 项")).toBeTruthy();
@@ -1506,6 +1514,32 @@ describe("edit and delete guarded actions", () => {
     await vi.advanceTimersByTimeAsync(2400);
     await waitFor(() => {
       expect(screen.queryByText("已导入 #10 · 2 项")).toBeNull();
+    });
+  });
+
+  it("uses blank-line image matching for preview and paste when enabled", async () => {
+    const user = userEvent.setup();
+    appSettings = { ...appSettings, match_blank_lines_to_images: true };
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "导入",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("preview_legacy_message_import_queue", {
+        messageId: 10,
+        matchBlankLinesToImages: true,
+      });
+      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_to_recent_window", {
+        messageId: 10,
+        delayMs: 250,
+        archiveAfterSuccess: false,
+        matchBlankLinesToImages: true,
+      });
     });
   });
 
@@ -1526,6 +1560,7 @@ describe("edit and delete guarded actions", () => {
         messageId: 10,
         delayMs: 250,
         archiveAfterSuccess: false,
+        matchBlankLinesToImages: false,
       });
     });
     expect(await screen.findByText("导入队列整队列粘贴失败")).toBeTruthy();
@@ -1552,6 +1587,7 @@ describe("edit and delete guarded actions", () => {
           messageId: 10,
           delayMs: 250,
           archiveAfterSuccess: true,
+          matchBlankLinesToImages: false,
         },
       );
     });
@@ -1582,6 +1618,7 @@ describe("edit and delete guarded actions", () => {
           messageId: 10,
           delayMs: 250,
           archiveAfterSuccess: true,
+          matchBlankLinesToImages: false,
         },
       );
     });

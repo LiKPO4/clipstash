@@ -1,6 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { imageUrlMocks, installImageUrlMocks } from "./imageUrlMocks";
+
+installImageUrlMocks();
 
 const {
   canShareMock,
@@ -23,6 +26,7 @@ const {
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class { onmessage = (_value: unknown) => {}; },
   convertFileSrc: (path: string) => `asset://${path}`,
   invoke: invokeMock,
 }));
@@ -66,6 +70,7 @@ const defaultAppSettings = {
   main_window_state: null,
   archive_after_import: false,
   archive_after_export: false,
+  match_blank_lines_to_images: false,
   message_double_click_action: "edit",
   paste_interval_ms: 250,
   show_hotkey: "Ctrl+Shift+V",
@@ -129,6 +134,7 @@ describe("android shell", () => {
   let androidDownloadAndInstallApkMock: ReturnType<typeof vi.fn>;
   let androidRefreshWidgetsMock: ReturnType<typeof vi.fn>;
   let androidShareZipMock: ReturnType<typeof vi.fn> | null = null;
+  let rejectedThumbnailFilename: string | null = null;
 
   beforeEach(() => {
     vi.resetModules();
@@ -140,6 +146,7 @@ describe("android shell", () => {
     androidDownloadAndInstallApkMock = vi.fn().mockReturnValue(true);
     androidRefreshWidgetsMock = vi.fn();
     androidShareZipMock = null;
+    rejectedThumbnailFilename = null;
     window.ClipStashAndroid = {
       checkForUpdates: androidCheckForUpdatesMock,
       consumePendingUpdate: androidConsumePendingUpdateMock,
@@ -178,6 +185,10 @@ describe("android shell", () => {
         return Promise.resolve(normalPage.messages.find((message) => message.id === messageId));
       }
       if (command === "list_legacy_messages") return Promise.resolve(listedPage);
+      if (command === "read_image_thumbnail_bytes") {
+        if (args?.filename === rejectedThumbnailFilename) return Promise.reject(new Error("缩略图超过尺寸限制"));
+        return Promise.resolve(new Uint8Array([137, 80, 78, 71]));
+      }
       if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array(0));
       if (command === "create_legacy_text_message") return Promise.resolve(createResult);
       if (command === "create_legacy_image_message") {
@@ -201,7 +212,7 @@ describe("android shell", () => {
           ],
         });
       }
-      if (command === "export_normal_data_zip_bytes") {
+      if (command === "export_normal_data_zip_bytes" || command === "export_normal_data_zip_file") {
         return Promise.resolve({
           filename: "clipstash-export-20260616-100000.zip",
           export: {
@@ -213,7 +224,7 @@ describe("android shell", () => {
             skipped_empty_message_count: 0,
             bytes: 512,
           },
-          bytes: [80, 75, 3, 4],
+          ...(command === "export_normal_data_zip_bytes" ? { bytes: [80, 75, 3, 4] } : {}),
           message_ids: [1],
         });
       }
@@ -221,7 +232,10 @@ describe("android shell", () => {
         listedPage = { ...normalPage, total_count: 0, messages: [] };
         return Promise.resolve({ ...stats, normal_count: 0, archived_count: 1 });
       }
-      if (command === "import_data_zip_bytes") {
+      if (command === "begin_zip_upload") return Promise.resolve("test-upload");
+      if (command === "append_zip_upload") return Promise.resolve(4);
+      if (command === "abort_zip_upload") return Promise.resolve();
+      if (command === "finish_zip_upload") {
         return Promise.resolve({
           path: "/tmp/clipstash-import.zip",
           inserted_messages: 1,
@@ -260,7 +274,7 @@ describe("android shell", () => {
 
     await user.click(screen.getByRole("button", { name: "导出" }));
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes", { progress: expect.anything() });
     });
     expect(shareMock).toHaveBeenCalled();
 
@@ -351,17 +365,26 @@ describe("android shell", () => {
     await user.click(reopenedImportButton);
     const input = container.querySelector<HTMLInputElement>('input[type="file"][accept*=".zip"]');
     expect(input).toBeTruthy();
+    const zipFile = new File([new Uint8Array([80, 75, 3, 4])], "clipstash.zip", { type: "application/zip" });
+    Object.defineProperty(zipFile, "slice", { value: (start: number, end: number) => ({
+      arrayBuffer: async () => new Uint8Array([80, 75, 3, 4].slice(start, end)).buffer,
+    }) });
     fireEvent.change(input!, {
       target: {
-        files: [new File([new Uint8Array([80, 75, 3, 4])], "clipstash.zip", { type: "application/zip" })],
+        files: [zipFile],
       },
     });
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("import_data_zip_bytes", {
-        filename: "clipstash.zip",
-        bytes: [80, 75, 3, 4],
+      expect(invokeMock).toHaveBeenCalledWith("finish_zip_upload", {
+        progress: expect.anything(),
+        uploadId: "test-upload",
       });
     });
+    expect(invokeMock).toHaveBeenCalledWith("begin_zip_upload", { filename: "clipstash.zip", size: 4 });
+    expect(invokeMock).toHaveBeenCalledWith("append_zip_upload", expect.any(ArrayBuffer), {
+      headers: { "x-upload-id": "test-upload", "x-upload-offset": "0" },
+    });
+    expect(invokeMock.mock.calls.some(([command]) => command === "import_data_zip_bytes")).toBe(false);
   });
 
   it("opens the exported zip path when android file sharing is unavailable", async () => {
@@ -373,7 +396,7 @@ describe("android shell", () => {
     await user.click(await screen.findByRole("button", { name: "导出" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes", { progress: expect.anything() });
     });
     expect(shareMock).not.toHaveBeenCalled();
     expect(openPathMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
@@ -393,8 +416,9 @@ describe("android shell", () => {
     await user.click(await screen.findByRole("button", { name: "导出" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_file", { progress: expect.anything() });
     });
+    expect(invokeMock.mock.calls.some(([command]) => command === "export_normal_data_zip_bytes")).toBe(false);
     expect(androidShareZipMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
     expect(shareMock).not.toHaveBeenCalled();
     expect(openPathMock).not.toHaveBeenCalledWith("/tmp/clipstash-export.zip");
@@ -435,8 +459,9 @@ describe("android shell", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_bytes");
+      expect(invokeMock).toHaveBeenCalledWith("export_normal_data_zip_file", { progress: expect.anything() });
     });
+    expect(invokeMock.mock.calls.some(([command]) => command === "export_normal_data_zip_bytes")).toBe(false);
     expect(androidShareZipMock).toHaveBeenCalledWith("/tmp/clipstash-export.zip");
   });
 
@@ -450,6 +475,57 @@ describe("android shell", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_legacy_message", { messageId: 1 });
     expect((screen.getByRole("textbox", { name: "消息内容" }) as HTMLTextAreaElement).value)
       .toBe("手机记录");
+  });
+
+  it("imports staged share identifiers sequentially without sending image arrays", async () => {
+    const consumePendingShare = vi.fn()
+      .mockReturnValueOnce(JSON.stringify({ shareId: "first" }))
+      .mockReturnValueOnce(JSON.stringify({ shareId: "second" })).mockReturnValue("");
+    window.ClipStashAndroid = { consumePendingShare };
+    let finishFirst!: (value: unknown) => void;
+    const previous = invokeMock.getMockImplementation()!;
+    const imported: string[] = [];
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "import_android_share") {
+        imported.push(args.shareId);
+        return args.shareId === "first"
+          ? new Promise((resolve) => { finishFirst = resolve; })
+          : Promise.resolve({ ...createdMessage, id: 3 });
+      }
+      return previous(command, args);
+    });
+    const { default: App } = await import("../src/App");
+    render(<App />);
+    await waitFor(() => expect(imported).toEqual(["first"]));
+    finishFirst(createdMessage);
+    await waitFor(() => expect(imported).toEqual(["first", "second"]));
+    expect(await screen.findByText("已创建 #3")).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith("create_legacy_image_message", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("create_legacy_mixed_message", expect.anything());
+  });
+
+  it("continues the share queue after a failed staged import", async () => {
+    window.ClipStashAndroid = { consumePendingShare: vi.fn()
+      .mockReturnValueOnce(JSON.stringify({ shareId: "bad" }))
+      .mockReturnValueOnce(JSON.stringify({ shareId: "good" })).mockReturnValue("") };
+    const previous = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args) => command === "import_android_share"
+      ? args.shareId === "bad" ? Promise.reject(new Error("synthetic share failure")) : Promise.resolve(createdMessage)
+      : previous(command, args));
+    const { default: App } = await import("../src/App");
+    render(<App />);
+    expect(await screen.findByText("synthetic share failure")).toBeTruthy();
+    expect(await screen.findByText("随后已创建 #2。")).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("import_android_share", { shareId: "good" });
+  });
+
+  it("shows native staging errors without writing an empty message", async () => {
+    window.ClipStashAndroid = { consumePendingShare: vi.fn()
+      .mockReturnValueOnce(JSON.stringify({ error: "无法读取分享图片" })).mockReturnValue("") };
+    const { default: App } = await import("../src/App");
+    render(<App />);
+    expect(await screen.findByText("无法读取分享图片")).toBeTruthy();
+    expect(invokeMock.mock.calls.some(([command]) => command === "import_android_share")).toBe(false);
   });
 
   it("creates a message from android shared text", async () => {
@@ -630,10 +706,13 @@ describe("android shell", () => {
     render(<App />);
 
     const image = await screen.findByRole("img", { name: "phone.png" });
+    expect(invokeMock.mock.calls.some(([command]) => command === "read_legacy_image_bytes")).toBe(false);
     await user.click(image.closest("button")!);
 
     const preview = await screen.findByRole("button", { name: "关闭图片预览 phone.png" });
     expect(within(preview).getByRole("img", { name: "phone.png" })).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("read_legacy_image_bytes", { filename: "phone.png" });
+    expect(imageUrlMocks.createObjectURL).toHaveBeenCalledTimes(2);
     expect(webviewWindowGetByLabelMock).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalledWith("copy_legacy_image_to_clipboard", {
       filename: "phone.png",
@@ -645,7 +724,39 @@ describe("android shell", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "关闭图片预览 phone.png" })).toBeNull();
     });
+    expect(imageUrlMocks.revokeObjectURL).toHaveBeenCalledTimes(1);
     expect(webviewWindowGetByLabelMock).not.toHaveBeenCalled();
+  });
+
+  it("opens an existing editor image from its original when its thumbnail is rejected", async () => {
+    const filename = "large-original.png";
+    rejectedThumbnailFilename = filename;
+    listedPage = {
+      ...normalPage,
+      messages: [{
+        ...normalPage.messages[0],
+        images: [{
+          id: 11,
+          filename,
+          path: `/data/user/0/com.clipstash.next/files/images/${filename}`,
+          exists: true,
+        }],
+      }],
+    };
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const card = (await screen.findByText("#1")).closest("article") as HTMLElement;
+    await user.click(within(card).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 1" });
+    expect(await within(dialog).findByText("无法读取")).toBeTruthy();
+    expect(invokeMock.mock.calls.some(([command]) => command === "read_legacy_image_bytes")).toBe(false);
+
+    await user.click(dialog.querySelector<HTMLButtonElement>(".composer-image-tile")!);
+    const preview = await screen.findByRole("button", { name: `关闭图片预览 ${filename}` });
+    expect(within(preview).getByRole("img", { name: filename })).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("read_legacy_image_bytes", { filename });
   });
 
   it("removes composer images without touching the desktop preview window on Android", async () => {
