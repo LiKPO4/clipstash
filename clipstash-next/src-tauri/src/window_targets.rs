@@ -42,12 +42,20 @@ pub fn last_external_window_target() -> Option<ExternalWindowTarget> {
 fn verify_target_identity(
     target: &ExternalWindowTarget,
     expected_process_id: u32,
-    _expected_title: &str,
+    expected_title: &str,
 ) -> Result<(), String> {
     if target.process_id != expected_process_id {
         return Err(format!(
             "目标窗口已变化，请重新切换到目标窗口后再试（期望 pid={expected_process_id}，实际 pid={}）：hwnd={}",
             target.process_id, target.hwnd
+        ));
+    }
+    let expected = expected_title.trim();
+    let actual = target.title.trim();
+    if !expected.is_empty() && !actual.is_empty() && expected != actual {
+        return Err(format!(
+            "目标窗口标题已变化，请重新切换到目标窗口后再试（期望“{expected}”，实际“{actual}”）：hwnd={}",
+            target.hwnd
         ));
     }
     Ok(())
@@ -379,7 +387,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verify_target_identity_rejects_changed_pid_but_allows_title_changes() {
+    fn verify_target_identity_rejects_changed_pid_and_mismatched_title() {
         let target = ExternalWindowTarget {
             hwnd: 123,
             process_id: 456,
@@ -395,8 +403,14 @@ mod tests {
             .expect_err("changed pid must be rejected");
         assert!(pid_changed.contains("目标窗口已变化"));
 
-        verify_target_identity(&target, 456, "其他窗口")
-            .expect("dynamic window title changes must not block validation");
+        let title_changed = verify_target_identity(&target, 456, "其他窗口")
+            .expect_err("mismatched non-empty title must be rejected");
+        assert!(title_changed.contains("目标窗口标题已变化"));
+
+        verify_target_identity(&target, 456, "")
+            .expect("an empty expected title must not block validation");
+        verify_target_identity(&target, 456, "   ")
+            .expect("a blank expected title must not block validation");
 
         let empty_title = ExternalWindowTarget {
             title: String::new(),
