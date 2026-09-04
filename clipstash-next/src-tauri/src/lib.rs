@@ -119,39 +119,51 @@ fn migrate_legacy_data() -> Result<app_data::AppMigrationResult, String> {
 }
 
 #[tauri::command(async)]
-fn export_normal_data_zip(
+async fn export_normal_data_zip(
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataExportResult, String> {
     let Some(output_path) = pick_save_zip_file_with_windows_dialog()? else {
         return Err("已取消导出数据".to_string());
     };
-    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        data_transfer::export_normal_data_zip_to_path(output_path)
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            data_transfer::export_normal_data_zip_to_path(output_path)
+        })
     })
+    .await
+    .map_err(|err| format!("数据导出任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]
-fn export_normal_data_zip_bytes(
+async fn export_normal_data_zip_bytes(
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataExportBytesResult, String> {
-    transfer_progress::run(
-        progress.map(|id| id.channel_on(webview)),
-        data_transfer::export_normal_data_zip_to_temp_bytes,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(
+            progress.map(|id| id.channel_on(webview)),
+            data_transfer::export_normal_data_zip_to_temp_bytes,
+        )
+    })
+    .await
+    .map_err(|err| format!("数据导出任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]
-fn export_normal_data_zip_file(
+async fn export_normal_data_zip_file(
     app: AppHandle,
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataExportFileResult, String> {
     let root = app.path().app_cache_dir().map_err(|e| e.to_string())?;
-    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        data_transfer::export_normal_data_zip_to_temp_file(root.join("ClipStash Next Exports"))
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            data_transfer::export_normal_data_zip_to_temp_file(root.join("ClipStash Next Exports"))
+        })
     })
+    .await
+    .map_err(|err| format!("数据导出任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]
@@ -160,52 +172,68 @@ fn archive_exported_messages(message_ids: Vec<i64>) -> Result<app_data::AppStats
 }
 
 #[tauri::command(async)]
-fn import_data_zip(
+async fn import_data_zip(
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataImportResult, String> {
     let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
         return Err("已取消导入数据".to_string());
     };
-    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        data_transfer::import_data_zip_from_path(zip_path)
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            data_transfer::import_data_zip_from_path(zip_path)
+        })
     })
+    .await
+    .map_err(|err| format!("数据导入任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]
-fn preview_data_zip(
+async fn preview_data_zip(
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataImportPreview, String> {
     let Some(zip_path) = pick_open_zip_file_with_windows_dialog()? else {
         return Err("已取消导入数据".to_string());
     };
-    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        data_transfer::preview_data_zip_from_path(zip_path)
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            data_transfer::preview_data_zip_from_path(zip_path)
+        })
     })
+    .await
+    .map_err(|err| format!("数据导入任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]
-fn import_data_zip_from_path(
+async fn import_data_zip_from_path(
     path: String,
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataImportResult, String> {
-    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            data_transfer::import_data_zip_from_path(std::path::PathBuf::from(path.trim()))
+        })
     })
+    .await
+    .map_err(|err| format!("数据导入任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]
-fn import_data_zip_bytes(
+async fn import_data_zip_bytes(
     filename: String,
     bytes: Vec<u8>,
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<data_transfer::DataImportResult, String> {
-    transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        data_transfer::import_data_zip_from_bytes(filename, bytes)
+    tauri::async_runtime::spawn_blocking(move || {
+        transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            data_transfer::import_data_zip_from_bytes(filename, bytes)
+        })
     })
+    .await
+    .map_err(|err| format!("数据导入任务意外中断：{err}"))?
 }
 
 #[tauri::command(async)]

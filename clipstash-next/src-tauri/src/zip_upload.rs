@@ -230,7 +230,7 @@ pub fn abort_zip_upload(upload_id: String) -> Result<(), String> {
 }
 
 #[tauri::command(async)]
-pub fn finish_zip_upload(
+pub async fn finish_zip_upload(
     upload_id: String,
     webview: tauri::Webview,
     progress: Option<tauri::ipc::JavaScriptChannelId>,
@@ -241,9 +241,14 @@ pub fn finish_zip_upload(
         .remove(&upload_id)
         .ok_or("导入暂存不存在或已结束")?;
     upload.finish()?;
-    crate::transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
-        crate::data_transfer::import_data_zip_from_path(upload.path.clone())
+    tauri::async_runtime::spawn_blocking(move || {
+        let import_path = upload.path.clone();
+        crate::transfer_progress::run(progress.map(|id| id.channel_on(webview)), || {
+            crate::data_transfer::import_data_zip_from_path(import_path)
+        })
     })
+    .await
+    .map_err(|err| format!("数据导入任务意外中断：{err}"))?
 }
 
 #[cfg(test)]

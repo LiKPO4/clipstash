@@ -52,24 +52,42 @@ fn oriented_dimensions(mut decoder: impl ImageDecoder) -> Result<(u32, u32), Str
     )
 }
 
+fn grant_file_scope(
+    already_allowed: bool,
+    allow: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if already_allowed {
+        return Ok(());
+    }
+    allow()
+}
+
+fn grant_asset_file_scope(scope: &tauri::scope::fs::Scope, path: &Path) -> Result<(), String> {
+    grant_file_scope(scope.is_allowed(path), || {
+        scope.allow_file(path).map_err(|e| e.to_string())
+    })
+}
+
 #[tauri::command(async)]
-pub fn prepare_image_preview(
+pub async fn prepare_image_preview(
     app: tauri::AppHandle,
     filename: String,
     expected_path: String,
 ) -> Result<PreviewSource, String> {
-    let data_dir = app_data::ready_app_data_dir_path()?;
-    let (_, path) = validate_current_image_path(&data_dir, &filename, &expected_path)?;
-    let (width, height) = dimensions(&path)?;
-    app.asset_protocol_scope()
-        .allow_file(&path)
-        .map_err(|e| e.to_string())?;
-    Ok(PreviewSource {
-        path: path.to_string_lossy().into_owned(),
-        width,
-        height,
-        lease: None,
+    tauri::async_runtime::spawn_blocking(move || {
+        let data_dir = app_data::ready_app_data_dir_path()?;
+        let (_, path) = validate_current_image_path(&data_dir, &filename, &expected_path)?;
+        let (width, height) = dimensions(&path)?;
+        grant_asset_file_scope(&app.asset_protocol_scope(), &path)?;
+        Ok(PreviewSource {
+            path: path.to_string_lossy().into_owned(),
+            width,
+            height,
+            lease: None,
+        })
     })
+    .await
+    .map_err(|err| format!("图片预览任务意外中断：{err}"))?
 }
 
 fn save_upload(root: &Path, bytes: &[u8]) -> Result<PreviewSource, String> {
@@ -118,11 +136,13 @@ pub async fn prepare_preview_upload(
     let root = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let source = save_upload(&root, &bytes)?;
-        if let Err(err) = app.asset_protocol_scope().allow_file(&source.path) {
+        if let Err(err) =
+            grant_asset_file_scope(&app.asset_protocol_scope(), Path::new(&source.path))
+        {
             if let Some(lease) = &source.lease {
                 let _ = release_preview_upload(lease.clone());
             }
-            return Err(err.to_string());
+            return Err(err);
         }
         Ok(source)
     })
@@ -186,5 +206,27 @@ mod tests {
         release_preview_upload(second.lease.unwrap()).unwrap();
         assert!(!Path::new(&second.path).exists());
         fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn grant_file_scope_skips_allow_when_already_allowed_and_propagates_errors() {
+        let mut allow_calls = 0;
+        grant_file_scope(true, || {
+            allow_calls += 1;
+            Err("must not run".into())
+        })
+        .expect("already allowed must succeed without extending the scope");
+        assert_eq!(allow_calls, 0, "already allowed must not call allow");
+
+        grant_file_scope(false, || {
+            allow_calls += 1;
+            Ok(())
+        })
+        .expect("out-of-scope file must be granted");
+        assert_eq!(allow_calls, 1);
+
+        let err = grant_file_scope(false, || Err("grant failed".into()))
+            .expect_err("allow failure must propagate");
+        assert_eq!(err, "grant failed");
     }
 }
