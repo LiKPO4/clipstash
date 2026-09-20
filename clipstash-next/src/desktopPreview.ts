@@ -75,7 +75,12 @@ async function createPreviewWindow(onDestroyed: () => void): Promise<PreviewWind
           .catch(() => cancelLoad());
       });
     },
-    show: () => win.show(),
+    show: async () => {
+      await win.show();
+      // Windows 上创建时声明的置顶会在前台应用（尤其全屏窗口）面前失去效果，
+      // 每次 show 后重新声明置顶，把预览窗口提到 topmost 组最前，否则会被盖住。
+      await win.setAlwaysOnTop(true).catch(() => undefined);
+    },
   };
 }
 

@@ -3,7 +3,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   callbacks: new Map<string, (event: { payload: any }) => void>(),
   invoke: vi.fn(), emit: vi.fn(), create: vi.fn(), show: vi.fn(), hide: vi.fn(),
-  close: vi.fn(), size: vi.fn(), position: vi.fn(), title: vi.fn(), autoLoad: true,
+  close: vi.fn(), size: vi.fn(), position: vi.fn(), title: vi.fn(), alwaysOnTop: vi.fn(), autoLoad: true,
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke, convertFileSrc: (path: string) => `asset://${path}` }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -23,6 +23,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
     once = vi.fn(async () => () => undefined);
     show = mocks.show; hide = mocks.hide; close = mocks.close;
     setSize = mocks.size; setPosition = mocks.position; setTitle = mocks.title;
+    setAlwaysOnTop = mocks.alwaysOnTop;
   },
 }));
 const position = (width: number, height: number) => ({ left: 10, top: 20, width, height });
@@ -31,7 +32,7 @@ beforeEach(() => {
   vi.resetModules();
   mocks.callbacks.clear();
   for (const value of Object.values(mocks)) if (vi.isMockFunction(value)) value.mockReset();
-  for (const command of [mocks.show, mocks.hide, mocks.close, mocks.size, mocks.position, mocks.title]) command.mockResolvedValue(undefined);
+  for (const command of [mocks.show, mocks.hide, mocks.close, mocks.size, mocks.position, mocks.title, mocks.alwaysOnTop]) command.mockResolvedValue(undefined);
   mocks.autoLoad = true;
   mocks.invoke.mockResolvedValue({ path: source.path, width: 640, height: 480, lease: null });
   mocks.emit.mockImplementation(async (_label, event, payload) => {
@@ -54,6 +55,7 @@ describe("desktop preview protocol", () => {
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(mocks.create).toHaveBeenCalledWith("image-preview", expect.objectContaining({ visible: false, focus: false, focusable: false }));
     expect(mocks.show).toHaveBeenCalledTimes(2);
+    expect(mocks.alwaysOnTop).toHaveBeenCalledWith(true);
     expect(mocks.close).not.toHaveBeenCalled();
     expect(mocks.invoke.mock.calls.every(([command]) => command === "prepare_image_preview")).toBe(true);
     expect(mocks.emit).toHaveBeenCalledWith("image-preview", "clipstash-preview-load", expect.objectContaining({ src: expect.stringMatching(/^asset:\/\//) }));
