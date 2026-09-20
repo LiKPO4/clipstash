@@ -1651,6 +1651,31 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("get_legacy_stats")).toBe(1);
     expect(commandCallCount("list_legacy_messages")).toBe(1);
   });
+
+  it("resumes the hover preview after scrolling stops with the pointer over an image", async () => {
+    const matchesSpy = vi
+      .spyOn(HTMLElement.prototype, "matches")
+      .mockImplementation(function (this: HTMLElement, selector: string) {
+        return selector === ":hover";
+      });
+
+    try {
+      render(<App />);
+      await screen.findByText("#10");
+
+      const list = document.querySelector(".message-list") as HTMLElement;
+      fireEvent.scroll(list);
+
+      await waitFor(
+        () => {
+          expect(previewWindowMock).toHaveBeenCalled();
+        },
+        { timeout: 3000 },
+      );
+    } finally {
+      matchesSpy.mockRestore();
+    }
+  });
 });
 
 function commandCallCount(command: string) {

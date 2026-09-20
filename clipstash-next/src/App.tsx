@@ -230,6 +230,7 @@ type PerformanceMeasurement = {
 const MESSAGE_DOUBLE_CLICK_DELAY_MS = 220;
 const MESSAGE_LONG_PRESS_DELAY_MS = 500;
 const MESSAGE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
+const SCROLL_HOVER_RESUME_DELAY_MS = 150;
 
 function App() {
   return <ThumbnailProvider><AppContent /></ThumbnailProvider>;
@@ -4245,6 +4246,30 @@ function MessageImageTile({
   const canRenderImage = image.exists && !imageFailed;
   const imageSrc = canRenderImage ? src : "";
   const previewIndex = previewImages.findIndex((item) => item.path === image.path);
+  const showPreviewRef = useRef(showPreview);
+  useEffect(() => { showPreviewRef.current = showPreview; });
+
+  // 列表滚动会主动关闭悬停预览，且滚动不会触发 mouseenter——
+  // 滚动停止后鼠标若恰好停在图片上，按 CSS :hover 状态恢复预览。
+  useEffect(() => {
+    if (isAndroid || !canRenderImage) return;
+    let resumeTimer = 0;
+    const handleScroll = () => {
+      if (resumeTimer) window.clearTimeout(resumeTimer);
+      resumeTimer = window.setTimeout(() => {
+        resumeTimer = 0;
+        const button = element.current?.querySelector<HTMLButtonElement>(
+          "button.image-preview-action",
+        );
+        if (button?.matches(":hover")) showPreviewRef.current(button);
+      }, SCROLL_HOVER_RESUME_DELAY_MS);
+    };
+    window.addEventListener("scroll", handleScroll, true);
+    return () => {
+      window.removeEventListener("scroll", handleScroll, true);
+      if (resumeTimer) window.clearTimeout(resumeTimer);
+    };
+  }, [isAndroid, canRenderImage, element]);
 
   function clearPreviewTimer() {
     previewRequestRef.current += 1;
@@ -4319,7 +4344,7 @@ function MessageImageTile({
 
   if (image.exists) {
     return (
-      <div className="image-tile" title={image.path} ref={element}>
+      <div className="image-tile" ref={element}>
         <button
           type="button"
           className="image-preview-action"
@@ -4344,7 +4369,7 @@ function MessageImageTile({
   }
 
   return (
-    <div className="image-tile image-tile-missing" title={image.path} ref={element}>
+    <div className="image-tile image-tile-missing" ref={element}>
       <span className="image-placeholder">
         {!image.exists ? "文件缺失" : imageFailed ? "无法读取" : "加载中"}
       </span>
