@@ -2,14 +2,14 @@ use crate::{
     legacy_image_files::{
         next_image_filename, remove_old_message_image_files, save_image_file, sniff_image_extension,
     },
-    legacy_model::LegacyMessage,
-    legacy_query::read_legacy_message_by_id,
+    legacy_model::{LegacyMessage, MergeDirection, MessageView, SortOrder},
+    legacy_query::{read_legacy_message_by_id, view_where_sql},
     legacy_schema::{configure_connection, ensure_legacy_schema},
     legacy_write_precheck::validate_replace_images_request,
     legacy_write_validation::validate_images_data,
 };
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::Path};
 
 pub(crate) fn create_text_message_for_path(
@@ -153,6 +153,140 @@ pub(crate) fn split_message_for_path(
         .into_iter()
         .map(|id| read_legacy_message_by_id(&conn, &images_dir, id))
         .collect()
+}
+
+pub(crate) fn merge_message_with_neighbor_for_path(
+    db_path: &Path,
+    message_id: i64,
+    direction: MergeDirection,
+    view: MessageView,
+    sort: SortOrder,
+) -> Result<(LegacyMessage, i64), String> {
+    if message_id <= 0 {
+        return Err("合并消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("合并消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("合并消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+    let mut conn =
+        Connection::open(db_path).map_err(|err| format!("打开数据库准备合并失败：{err}"))?;
+    configure_connection(&conn)?;
+    ensure_legacy_schema(&conn)?;
+    let anchor = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
+    let neighbor_id = find_neighbor_message_id(&conn, &anchor, direction, view, sort)?;
+    let neighbor = read_legacy_message_by_id(&conn, &images_dir, neighbor_id)?;
+
+    // 合并后的内容顺序与显示顺序一致：向上合并时邻居内容在前，向下合并时邻居内容在后。
+    let (first, second) = match direction {
+        MergeDirection::Up => (&neighbor, &anchor),
+        MergeDirection::Down => (&anchor, &neighbor),
+    };
+    let merged_text = merge_text_contents(
+        first.text_content.as_deref(),
+        second.text_content.as_deref(),
+    );
+    let mut merged_filenames = Vec::with_capacity(first.images.len() + second.images.len());
+    merged_filenames.extend(first.images.iter().map(|image| image.filename.clone()));
+    merged_filenames.extend(second.images.iter().map(|image| image.filename.clone()));
+
+    // 图片文件被保留的消息继续引用，不移动、不删除；只重排关联行保证显示顺序。
+    let merge_result = (|| {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启消息合并事务失败：{err}"))?;
+        tx.execute(
+            "DELETE FROM message_images WHERE message_id = ?",
+            params![anchor.id],
+        )
+        .map_err(|err| format!("重排合并消息图片关联失败：{err}"))?;
+        for filename in &merged_filenames {
+            tx.execute(
+                "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
+                params![anchor.id, filename],
+            )
+            .map_err(|err| format!("关联合并消息图片失败：{err}"))?;
+        }
+        tx.execute(
+            "UPDATE messages SET text_content = ? WHERE id = ?",
+            params![merged_text, anchor.id],
+        )
+        .map_err(|err| format!("更新合并消息文字失败：{err}"))?;
+        tx.execute(
+            "DELETE FROM message_images WHERE message_id = ?",
+            params![neighbor.id],
+        )
+        .map_err(|err| format!("删除被合并消息图片关联失败：{err}"))?;
+        let deleted = tx
+            .execute("DELETE FROM messages WHERE id = ?", params![neighbor.id])
+            .map_err(|err| format!("删除被合并消息失败：{err}"))?;
+        if deleted == 0 {
+            return Err(format!("合并消息失败，被合并消息不存在：{}", neighbor.id));
+        }
+        tx.commit()
+            .map_err(|err| format!("提交消息合并事务失败：{err}"))
+    })();
+    merge_result?;
+
+    let merged = read_legacy_message_by_id(&conn, &images_dir, anchor.id)?;
+    Ok((merged, neighbor.id))
+}
+
+fn merge_text_contents(first: Option<&str>, second: Option<&str>) -> Option<String> {
+    let first = first.map(str::trim).filter(|text| !text.is_empty());
+    let second = second.map(str::trim).filter(|text| !text.is_empty());
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}\n{second}")),
+        (Some(first), None) => Some(first.to_string()),
+        (None, Some(second)) => Some(second.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// 在当前视图和排序下找到显示顺序中紧邻的消息 id。
+fn find_neighbor_message_id(
+    conn: &Connection,
+    anchor: &LegacyMessage,
+    direction: MergeDirection,
+    view: MessageView,
+    sort: SortOrder,
+) -> Result<i64, String> {
+    let where_sql = view_where_sql(view);
+    let sort_expr = match view {
+        MessageView::Normal => "created_at",
+        MessageView::Archived => "COALESCE(archived_at, created_at)",
+    };
+    let anchor_sort_value = match view {
+        MessageView::Normal => anchor.created_at.clone(),
+        MessageView::Archived => anchor
+            .archived_at
+            .clone()
+            .unwrap_or_else(|| anchor.created_at.clone()),
+    };
+    // 显示顺序：newest 降序、oldest 升序；“下方”沿显示顺序前进，“上方”相反。
+    let (compare_op, order_dir, label) = match (direction, sort) {
+        (MergeDirection::Down, SortOrder::Newest) => ("<", "DESC", "下方"),
+        (MergeDirection::Up, SortOrder::Newest) => (">", "ASC", "上方"),
+        (MergeDirection::Down, SortOrder::Oldest) => (">", "ASC", "下方"),
+        (MergeDirection::Up, SortOrder::Oldest) => ("<", "DESC", "上方"),
+    };
+    let sql = format!(
+        "SELECT id FROM messages \
+         WHERE {where_sql} \
+           AND ({sort_expr} {compare_op} ?1 OR ({sort_expr} = ?1 AND id {compare_op} ?2)) \
+         ORDER BY {sort_expr} {order_dir}, id {order_dir} \
+         LIMIT 1"
+    );
+    conn.query_row(&sql, params![anchor_sort_value, anchor.id], |row| {
+        row.get::<_, i64>(0)
+    })
+    .optional()
+    .map_err(|err| format!("查找相邻消息失败：{err}"))?
+    .ok_or_else(|| format!("合并消息失败，{label}没有相邻消息"))
 }
 
 pub(crate) fn replace_message_images_for_path(
@@ -453,4 +587,273 @@ fn create_message_with_image_reader(
     };
 
     read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use crate::legacy_test_support::tiny_png_bytes;
+    use rusqlite::Connection;
+    use std::{env, fs, path::PathBuf, process};
+
+    struct MergeFixture {
+        db_path: PathBuf,
+        images_dir: PathBuf,
+    }
+
+    fn create_fixture(name: &str) -> MergeFixture {
+        let data_dir =
+            env::temp_dir().join(format!("clipstash-next-merge-{name}-{}", process::id()));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create merge fixture dir");
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("open merge fixture db");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            ",
+        )
+        .expect("seed merge schema");
+        drop(conn);
+        MergeFixture {
+            db_path,
+            images_dir: data_dir.join("images"),
+        }
+    }
+
+    fn seed_message(
+        fixture: &MergeFixture,
+        id: i64,
+        text: Option<&str>,
+        created_at: &str,
+        archived: i64,
+        archived_at: Option<&str>,
+    ) {
+        let conn = Connection::open(&fixture.db_path).expect("reopen fixture db");
+        conn.execute(
+            "INSERT INTO messages (id, text_content, created_at, archived, archived_at) VALUES (?, ?, ?, ?, ?)",
+            params![id, text, created_at, archived, archived_at],
+        )
+        .expect("seed merge message");
+    }
+
+    fn seed_image(fixture: &MergeFixture, message_id: i64, filename: &str) {
+        fs::write(fixture.images_dir.join(filename), tiny_png_bytes())
+            .expect("write fixture image");
+        let conn = Connection::open(&fixture.db_path).expect("reopen fixture db");
+        conn.execute(
+            "INSERT INTO message_images (message_id, image_filename) VALUES (?, ?)",
+            params![message_id, filename],
+        )
+        .expect("seed fixture image row");
+    }
+
+    fn message_count(fixture: &MergeFixture) -> i64 {
+        let conn = Connection::open(&fixture.db_path).expect("reopen fixture db");
+        conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .expect("count messages")
+    }
+
+    #[test]
+    fn merges_down_with_next_message_in_display_order() {
+        let fixture = create_fixture("down");
+        // newest 视图显示顺序：#3、#2、#1；#2 下方相邻是 #1。
+        seed_message(&fixture, 1, Some("one"), "2026-07-01 10:00:00", 0, None);
+        seed_message(&fixture, 2, Some("two"), "2026-07-02 10:00:00", 0, None);
+        seed_message(&fixture, 3, Some("three"), "2026-07-03 10:00:00", 0, None);
+        seed_image(&fixture, 2, "two-a.png");
+        seed_image(&fixture, 2, "two-b.png");
+        seed_image(&fixture, 1, "one-a.png");
+
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            2,
+            MergeDirection::Down,
+            MessageView::Normal,
+            SortOrder::Newest,
+        )
+        .expect("merge down");
+
+        assert_eq!(removed_id, 1);
+        assert_eq!(merged.id, 2);
+        assert_eq!(merged.created_at, "2026-07-02 10:00:00");
+        assert_eq!(merged.text_content.as_deref(), Some("two\none"));
+        let filenames = merged
+            .images
+            .iter()
+            .map(|image| image.filename.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(filenames, vec!["two-a.png", "two-b.png", "one-a.png"]);
+        assert!(merged.images.iter().all(|image| image.exists));
+        assert_eq!(message_count(&fixture), 2);
+    }
+
+    #[test]
+    fn merges_up_with_previous_message_in_display_order() {
+        let fixture = create_fixture("up");
+        seed_message(&fixture, 1, Some("one"), "2026-07-01 10:00:00", 0, None);
+        seed_message(&fixture, 2, Some("two"), "2026-07-02 10:00:00", 0, None);
+
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            1,
+            MergeDirection::Up,
+            MessageView::Normal,
+            SortOrder::Newest,
+        )
+        .expect("merge up");
+
+        // newest 视图显示顺序：#2、#1；#1 上方相邻是 #2，邻居内容在前。
+        assert_eq!(removed_id, 2);
+        assert_eq!(merged.id, 1);
+        assert_eq!(merged.text_content.as_deref(), Some("two\none"));
+        assert_eq!(message_count(&fixture), 1);
+    }
+
+    #[test]
+    fn honors_oldest_sort_when_finding_neighbor() {
+        let fixture = create_fixture("oldest");
+        seed_message(&fixture, 1, Some("one"), "2026-07-01 10:00:00", 0, None);
+        seed_message(&fixture, 2, Some("two"), "2026-07-02 10:00:00", 0, None);
+
+        // oldest 视图显示顺序：#1、#2；#2 上方相邻是 #1。
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            2,
+            MergeDirection::Up,
+            MessageView::Normal,
+            SortOrder::Oldest,
+        )
+        .expect("merge up in oldest view");
+
+        assert_eq!(removed_id, 1);
+        assert_eq!(merged.id, 2);
+        assert_eq!(merged.text_content.as_deref(), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn rejects_merge_without_neighbor() {
+        let fixture = create_fixture("edge");
+        seed_message(&fixture, 1, Some("one"), "2026-07-01 10:00:00", 0, None);
+
+        let error = match merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            1,
+            MergeDirection::Down,
+            MessageView::Normal,
+            SortOrder::Newest,
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("merge without neighbor should fail"),
+        };
+
+        assert!(
+            error.contains("下方没有相邻消息"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(message_count(&fixture), 1);
+    }
+
+    #[test]
+    fn merge_skips_messages_outside_current_view() {
+        let fixture = create_fixture("view");
+        seed_message(&fixture, 1, Some("one"), "2026-07-01 10:00:00", 0, None);
+        seed_message(&fixture, 2, Some("two"), "2026-07-02 10:00:00", 0, None);
+        seed_message(
+            &fixture,
+            3,
+            Some("archived"),
+            "2026-07-03 10:00:00",
+            1,
+            None,
+        );
+
+        // newest 普通视图显示顺序：#2、#1；#3 已归档，不能成为普通视图的合并邻居。
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            2,
+            MergeDirection::Down,
+            MessageView::Normal,
+            SortOrder::Newest,
+        )
+        .expect("merge down in normal view");
+
+        assert_eq!(removed_id, 1);
+        assert_eq!(merged.id, 2);
+        assert_eq!(merged.text_content.as_deref(), Some("two\none"));
+        assert_eq!(message_count(&fixture), 2);
+    }
+
+    #[test]
+    fn archived_view_orders_neighbors_by_archived_at() {
+        let fixture = create_fixture("archived");
+        seed_message(
+            &fixture,
+            1,
+            Some("one"),
+            "2026-07-01 10:00:00",
+            1,
+            Some("2026-07-05 10:00:00"),
+        );
+        seed_message(
+            &fixture,
+            2,
+            Some("two"),
+            "2026-07-02 10:00:00",
+            1,
+            Some("2026-07-04 10:00:00"),
+        );
+
+        // 归档视图按 COALESCE(archived_at, created_at) 降序：#1 在上、#2 在下。
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            2,
+            MergeDirection::Up,
+            MessageView::Archived,
+            SortOrder::Newest,
+        )
+        .expect("merge up in archived view");
+
+        assert_eq!(removed_id, 1);
+        assert_eq!(merged.id, 2);
+        assert!(merged.archived);
+        assert_eq!(merged.text_content.as_deref(), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn merge_keeps_text_and_images_when_one_side_is_empty() {
+        let fixture = create_fixture("empty");
+        seed_message(&fixture, 1, None, "2026-07-01 10:00:00", 0, None);
+        seed_image(&fixture, 1, "one-a.png");
+        seed_message(&fixture, 2, Some("two"), "2026-07-02 10:00:00", 0, None);
+
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture.db_path,
+            2,
+            MergeDirection::Down,
+            MessageView::Normal,
+            SortOrder::Newest,
+        )
+        .expect("merge down with empty neighbor text");
+
+        assert_eq!(removed_id, 1);
+        assert_eq!(merged.text_content.as_deref(), Some("two"));
+        let filenames = merged
+            .images
+            .iter()
+            .map(|image| image.filename.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(filenames, vec!["one-a.png"]);
+    }
 }

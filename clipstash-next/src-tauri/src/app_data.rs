@@ -11,11 +11,12 @@ use crate::{
     },
     legacy_data::{
         LegacyArchiveMessageResult, LegacyCreateTextMessageResult, LegacyDbBackup,
-        LegacyDeleteMessageResult, LegacyImageFilesBackup, LegacyReplaceImagesResult,
-        LegacySplitMessageResult, LegacyUpdateMessageResult, LegacyWriteAudit,
+        LegacyDeleteMessageResult, LegacyImageFilesBackup, LegacyMergeMessageResult,
+        LegacyReplaceImagesResult, LegacySplitMessageResult, LegacyUpdateMessageResult,
+        LegacyWriteAudit,
     },
     legacy_image_files::resolve_legacy_image_path,
-    legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder},
+    legacy_model::{LegacyMessage, LegacyMessagePage, MergeDirection, MessageView, SortOrder},
     legacy_paths::{legacy_data_dir, path_to_string},
     legacy_query::{
         list_legacy_messages_from_dir, list_legacy_messages_from_dir_filtered, query_count,
@@ -24,8 +25,9 @@ use crate::{
     legacy_schema::{configure_connection, ensure_legacy_schema},
     legacy_write_exec::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
-        delete_message_for_path, replace_message_images_for_path, set_message_archived_for_path,
-        split_message_for_path, update_text_message_for_path,
+        delete_message_for_path, merge_message_with_neighbor_for_path,
+        replace_message_images_for_path, set_message_archived_for_path, split_message_for_path,
+        update_text_message_for_path,
     },
     legacy_write_precheck::{read_message_for_update_precheck, validate_replace_images_request},
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
@@ -380,6 +382,24 @@ pub fn split_message(
     Ok(LegacySplitMessageResult {
         original_message_id: message_id,
         messages,
+    })
+}
+
+pub fn merge_message_with_neighbor(
+    message_id: i64,
+    direction: MergeDirection,
+    view: MessageView,
+    sort: SortOrder,
+) -> Result<LegacyMergeMessageResult, String> {
+    let paths = ready_paths()?;
+    let _ = read_message_for_update_precheck(&paths.db_path, message_id)?;
+    let _backup = create_legacy_db_backup_for_path(&paths.db_path)?;
+    let (message, removed_message_id) =
+        merge_message_with_neighbor_for_path(&paths.db_path, message_id, direction, view, sort)?;
+    Ok(LegacyMergeMessageResult {
+        merged_message_id: message.id,
+        removed_message_id,
+        message,
     })
 }
 

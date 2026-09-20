@@ -14,7 +14,9 @@ pub use crate::legacy_clipboard::{
 };
 #[allow(unused_imports)]
 pub use crate::legacy_model::LegacyMessageImage;
-pub use crate::legacy_model::{LegacyMessage, LegacyMessagePage, MessageView, SortOrder};
+pub use crate::legacy_model::{
+    LegacyMessage, LegacyMessagePage, MergeDirection, MessageView, SortOrder,
+};
 use crate::legacy_paths::legacy_data_dir;
 #[cfg(test)]
 use crate::legacy_query::list_legacy_messages_from_dir;
@@ -70,6 +72,13 @@ pub struct LegacyArchiveMessageResult {
 pub struct LegacySplitMessageResult {
     pub original_message_id: i64,
     pub messages: Vec<LegacyMessage>,
+}
+
+#[derive(Serialize)]
+pub struct LegacyMergeMessageResult {
+    pub merged_message_id: i64,
+    pub removed_message_id: i64,
+    pub message: LegacyMessage,
 }
 
 pub fn read_legacy_stats() -> Result<LegacyStats, String> {

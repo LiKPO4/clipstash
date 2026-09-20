@@ -14,6 +14,13 @@ pub enum SortOrder {
     Oldest,
 }
 
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeDirection {
+    Up,
+    Down,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct LegacyMessageImage {
     pub id: i64,

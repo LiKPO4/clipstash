@@ -523,6 +523,16 @@ fn split_legacy_message(
 }
 
 #[tauri::command(async)]
+fn merge_legacy_message_with_neighbor(
+    message_id: i64,
+    direction: legacy_data::MergeDirection,
+    view: legacy_data::MessageView,
+    sort: legacy_data::SortOrder,
+) -> Result<legacy_data::LegacyMergeMessageResult, String> {
+    app_data::merge_message_with_neighbor(message_id, direction, view, sort)
+}
+
+#[tauri::command(async)]
 fn delete_legacy_message(
     message_id: i64,
 ) -> Result<legacy_data::LegacyDeleteMessageResult, String> {
@@ -1352,6 +1362,7 @@ pub fn run() {
             set_legacy_message_archived,
             set_launch_on_startup,
             split_legacy_message,
+            merge_legacy_message_with_neighbor,
             stage_legacy_message_import_to_clipboard,
             update_legacy_message_text,
             update_app_settings,

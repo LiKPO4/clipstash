@@ -29,6 +29,7 @@ import { formatLocalTime } from "./formatTime";
 import { ThumbnailProvider, useThumbnail } from "./useThumbnail";
 import {
   archiveExportedMessages,
+  copyLegacyImageToClipboard,
   copyLegacyMessageTextToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
@@ -47,6 +48,7 @@ import {
   importDataZipFromPath,
   importAndroidShare,
   listLegacyMessages,
+  mergeLegacyMessageWithNeighbor,
   migrateLegacyData,
   moveAppDataToSelectedDir,
   openAppPath,
@@ -83,6 +85,8 @@ import type {
   LegacyImportQueuePasteResult,
   LegacyImportQueuePreview,
   LegacyReplaceImagesResult,
+  LegacyMergeMessageResult,
+  MergeDirection,
   MessageView,
   SortOrder,
 } from "./api/types";
@@ -170,6 +174,12 @@ type EditResult = LegacyCreateTextMessageResult | LegacyReplaceImagesResult;
 type CopyResult = {
   messageId: number;
   textLength: number;
+};
+
+type MessageContextMenuState = {
+  message: LegacyMessage;
+  x: number;
+  y: number;
 };
 
 type ImportQueuePasteAllResult = LegacyImportQueuePasteResult;
@@ -263,6 +273,10 @@ function AppContent() {
   const [archiveResult, setArchiveResult] = useState<LegacyArchiveMessageResult | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
+  const [contextMenu, setContextMenu] = useState<MessageContextMenuState | null>(null);
+  const [mergingMessageId, setMergingMessageId] = useState<number | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeResult, setMergeResult] = useState<LegacyMergeMessageResult | null>(null);
   const [androidShareError, setAndroidShareError] = useState<string | null>(null);
   const [androidShareResult, setAndroidShareResult] = useState<LegacyMessage | null>(null);
   const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
@@ -543,6 +557,17 @@ function AppContent() {
 
     return () => window.clearTimeout(timer);
   }, [copyError, copyResult]);
+
+  useEffect(() => {
+    if (!mergeError && !mergeResult) return;
+
+    const timer = window.setTimeout(() => {
+      setMergeError(null);
+      setMergeResult(null);
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [mergeError, mergeResult]);
 
   useEffect(() => {
     if (!androidShareError && !androidShareResult) return;
@@ -1734,6 +1759,84 @@ function AppContent() {
     }
   }
 
+  function openMessageContextMenu(message: LegacyMessage, x: number, y: number) {
+    setContextMenu({ message, x, y });
+  }
+
+  function closeMessageContextMenu() {
+    setContextMenu(null);
+  }
+
+  async function copyMessageFromContextMenu(message: LegacyMessage) {
+    closeMessageContextMenu();
+    const text = message.text_content?.trim();
+    if (text) {
+      await copyMessageText(message);
+      return;
+    }
+
+    const image = message.images.find((item) => item.exists);
+    if (!image) {
+      setCopyError(null);
+      setCopyResult(null);
+      setCopyError("这条消息没有可复制的内容");
+      return;
+    }
+    if (IS_ANDROID) {
+      setCopyError(null);
+      setCopyResult(null);
+      setCopyError("移动端暂不支持右键复制图片");
+      return;
+    }
+
+    setCopyError(null);
+    setCopyResult(null);
+    try {
+      const result = await copyLegacyImageToClipboard(image.filename);
+      setCopyResult({
+        messageId: message.id,
+        textLength: result.width * result.height,
+      });
+    } catch (err) {
+      setCopyError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function pasteMessageFromContextMenu(message: LegacyMessage) {
+    closeMessageContextMenu();
+    void openImportQueue(message);
+  }
+
+  function splitMessageFromContextMenu(message: LegacyMessage) {
+    closeMessageContextMenu();
+    openEditMessage(message);
+  }
+
+  async function mergeMessageWithNeighbor(message: LegacyMessage, direction: MergeDirection) {
+    if (mergingMessageId !== null) return;
+
+    setMergingMessageId(message.id);
+    setMergeError(null);
+    setMergeResult(null);
+    closeMessageContextMenu();
+
+    try {
+      const result = await mergeLegacyMessageWithNeighbor({
+        messageId: message.id,
+        direction,
+        view,
+        sort,
+      });
+      await refreshAppData();
+      refreshAndroidWidgets();
+      setMergeResult(result);
+    } catch (err) {
+      setMergeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMergingMessageId(null);
+    }
+  }
+
   async function openImportQueue(message: LegacyMessage) {
     if (loadingImportQueueMessageId !== null || pastingImportQueue) return;
 
@@ -1996,6 +2099,7 @@ function AppContent() {
               onCopyText={copyMessageText}
               onToggleImages={toggleImageExpansion}
               onOpenImportQueue={openImportQueue}
+              onMessageContextMenu={openMessageContextMenu}
               onPreview={setPreviewImage}
               showExternalImport={!IS_ANDROID}
               previewDelaySeconds={hoverDelay}
@@ -2017,6 +2121,20 @@ function AppContent() {
             </button>
           )}
         </>
+      )}
+
+      {contextMenu && (
+        <MessageContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          isArchived={contextMenu.message.archived}
+          merging={mergingMessageId === contextMenu.message.id}
+          onClose={closeMessageContextMenu}
+          onCopy={() => void copyMessageFromContextMenu(contextMenu.message)}
+          onPaste={() => pasteMessageFromContextMenu(contextMenu.message)}
+          onSplit={() => splitMessageFromContextMenu(contextMenu.message)}
+          onMerge={(direction) => void mergeMessageWithNeighbor(contextMenu.message, direction)}
+        />
       )}
 
       {previewImage && (
@@ -2231,6 +2349,31 @@ function AppContent() {
             copyResult && (
               <p>{copyResult.textLength} 个字符</p>
             )
+          )}
+        </OperationFeedback>
+      )}
+
+      {(mergeError || mergeResult) && (
+        <OperationFeedback
+          dismissLabel="关闭合并提示"
+          onDismiss={() => {
+            setMergeError(null);
+            setMergeResult(null);
+          }}
+          surface="floating"
+          variant={mergeError ? "error" : "success"}
+          title={
+            mergeError
+              ? "合并失败"
+              : mergeResult
+                ? `已合并 #${mergeResult.merged_message_id} 与 #${mergeResult.removed_message_id}`
+                : ""
+          }
+        >
+          {mergeError ? (
+            <p>{mergeError}</p>
+          ) : (
+            mergeResult && <p>两条消息已合并为 #{mergeResult.merged_message_id}。</p>
           )}
         </OperationFeedback>
       )}
@@ -3092,6 +3235,7 @@ type MessageListProps = {
   onMessageDoubleClick: (message: LegacyMessage) => void;
   onLoadMore: () => void;
   onOpenImportQueue: (message: LegacyMessage) => void;
+  onMessageContextMenu: (message: LegacyMessage, x: number, y: number) => void;
   onBlankDoubleClick: () => void;
   onToggleImages: (messageId: number) => void;
   onPreview: (image: PreviewImage | null) => void;
@@ -3116,6 +3260,7 @@ export function MessageList({
   onMessageDoubleClick,
   onLoadMore,
   onOpenImportQueue,
+  onMessageContextMenu,
   onBlankDoubleClick,
   onToggleImages,
   onPreview,
@@ -3183,6 +3328,7 @@ export function MessageList({
   const stableEdit = useCommittedCallback(onEdit);
   const stableMessageDoubleClick = useCommittedCallback(onMessageDoubleClick);
   const stableOpenImportQueue = useCommittedCallback(onOpenImportQueue);
+  const stableMessageContextMenu = useCommittedCallback(onMessageContextMenu);
   const stableToggleImages = useCommittedCallback(onToggleImages);
   const stablePreview = useCommittedCallback(onPreview);
   const stableCopy = useCommittedCallback(scheduleTextCopy);
@@ -3199,6 +3345,7 @@ export function MessageList({
       onEdit={stableEdit}
       onMessageDoubleClick={stableMessageDoubleClick}
       onOpenImportQueue={stableOpenImportQueue}
+      onMessageContextMenu={stableMessageContextMenu}
       onToggleImages={stableToggleImages}
       onPreview={stablePreview}
     />;
@@ -3274,8 +3421,8 @@ export function MessageList({
 
 const MessageCard = memo(function MessageCard({
   message, isExpanded, onCancelTextCopy,
-  archivingMessageId, importingMessageId, isAndroid, onArchive, onCopyText, onDelete, onEdit, onMessageDoubleClick, onOpenImportQueue, onToggleImages, onPreview, previewDelaySeconds, showExternalImport,
-}: Pick<MessageListProps, "archivingMessageId" | "importingMessageId" | "isAndroid" | "onArchive" | "onCopyText" | "onDelete" | "onEdit" | "onMessageDoubleClick" | "onOpenImportQueue" | "onToggleImages" | "onPreview" | "previewDelaySeconds" | "showExternalImport"> & { message: LegacyMessage; isExpanded: boolean; onCancelTextCopy: () => void }) {
+  archivingMessageId, importingMessageId, isAndroid, onArchive, onCopyText, onDelete, onEdit, onMessageDoubleClick, onMessageContextMenu, onOpenImportQueue, onToggleImages, onPreview, previewDelaySeconds, showExternalImport,
+}: Pick<MessageListProps, "archivingMessageId" | "importingMessageId" | "isAndroid" | "onArchive" | "onCopyText" | "onDelete" | "onEdit" | "onMessageDoubleClick" | "onMessageContextMenu" | "onOpenImportQueue" | "onToggleImages" | "onPreview" | "previewDelaySeconds" | "showExternalImport"> & { message: LegacyMessage; isExpanded: boolean; onCancelTextCopy: () => void }) {
   const visibleImages = isExpanded ? message.images : message.images.slice(0, 3);
   const hiddenImageCount = message.images.length - visibleImages.length;
   const previewImages = buildPreviewImages(message.images);
@@ -3283,6 +3430,11 @@ const MessageCard = memo(function MessageCard({
           <article
             className="message-card"
             key={message.id}
+            onContextMenu={(event) => {
+              if (isAndroid) return;
+              event.preventDefault();
+              onMessageContextMenu(message, event.clientX, event.clientY);
+            }}
             onDoubleClick={(event) => {
               const target = event.target as HTMLElement;
               if (target.closest(".message-actions") || target.closest(".image-expand-action")) {
@@ -4118,6 +4270,101 @@ function useOriginalPreview(image: PreviewImage): { src: string; failed?: boolea
     return () => { alive = false; if (url) URL.revokeObjectURL(url); };
   }, [image]);
   return image.src ? { src: image.src } : loaded?.image === image ? loaded : { src: "" };
+}
+
+function MessageContextMenu({
+  x,
+  y,
+  isArchived,
+  merging,
+  onClose,
+  onCopy,
+  onPaste,
+  onSplit,
+  onMerge,
+}: {
+  x: number;
+  y: number;
+  isArchived: boolean;
+  merging: boolean;
+  onClose: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  onSplit: () => void;
+  onMerge: (direction: MergeDirection) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const rect = menu.getBoundingClientRect();
+    setPosition({
+      left: Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)),
+      top: Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)),
+    });
+  }, [x, y]);
+
+  useEffect(() => {
+    function handlePointerDown(event: globalThis.MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) onClose();
+    }
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    function handleDismiss() {
+      onClose();
+    }
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    // 捕获阶段监听，列表容器滚动也会立即收起菜单。
+    window.addEventListener("scroll", handleDismiss, true);
+    window.addEventListener("resize", handleDismiss);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("scroll", handleDismiss, true);
+      window.removeEventListener("resize", handleDismiss);
+    };
+  }, [onClose]);
+
+  const items: Array<{ key: string; label: string; disabled?: boolean; action: () => void }> = [
+    { key: "copy", label: "复制", action: onCopy },
+  ];
+  if (!isArchived) {
+    items.push({ key: "paste", label: "粘贴", action: onPaste });
+    items.push({ key: "split", label: "拆分", action: onSplit });
+  }
+  items.push(
+    { key: "merge-down", label: "向下合并", disabled: merging, action: () => onMerge("down") },
+    { key: "merge-up", label: "向上合并", disabled: merging, action: () => onMerge("up") },
+  );
+
+  return (
+    <div
+      ref={menuRef}
+      className="message-context-menu"
+      role="menu"
+      aria-label="消息快捷操作"
+      style={{ left: position.left, top: position.top }}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          role="menuitem"
+          className="message-context-menu-item"
+          disabled={item.disabled}
+          onClick={item.action}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function HoverImagePreview({ image }: {

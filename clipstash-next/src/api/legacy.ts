@@ -31,6 +31,7 @@ import type {
   LegacyImportQueuePasteArchiveResult,
   LegacyImportQueuePreview,
   LegacyImportStageResult,
+  LegacyMergeMessageResult,
   LegacyMessage,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
@@ -38,6 +39,7 @@ import type {
   LegacyStats,
   LegacyUpdateMessageResult,
   MessageView,
+  MergeDirection,
   SortOrder,
 } from "./types";
 
@@ -216,6 +218,20 @@ export function splitLegacyMessage(
     messageId,
     textContent,
     imagesData,
+  });
+}
+
+export function mergeLegacyMessageWithNeighbor(params: {
+  messageId: number;
+  direction: MergeDirection;
+  view: MessageView;
+  sort: SortOrder;
+}) {
+  return invoke<LegacyMergeMessageResult>("merge_legacy_message_with_neighbor", {
+    messageId: params.messageId,
+    direction: params.direction,
+    view: params.view,
+    sort: params.sort,
   });
 }
 

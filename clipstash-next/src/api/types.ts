@@ -215,6 +215,14 @@ export type LegacySplitMessageResult = {
   messages: LegacyMessage[];
 };
 
+export type MergeDirection = "up" | "down";
+
+export type LegacyMergeMessageResult = {
+  merged_message_id: number;
+  removed_message_id: number;
+  message: LegacyMessage;
+};
+
 export type LegacyCopyImageResult = {
   filename: string;
   path: string;
