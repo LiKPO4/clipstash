@@ -29,7 +29,6 @@ import { formatLocalTime } from "./formatTime";
 import { ThumbnailProvider, useThumbnail } from "./useThumbnail";
 import {
   archiveExportedMessages,
-  copyLegacyImageToClipboard,
   copyLegacyMessageTextToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
@@ -62,6 +61,7 @@ import {
   setLegacyMessageArchived,
   setLaunchOnStartup,
   splitLegacyMessage,
+  stageLegacyMessageImportToClipboard,
   previewLegacyMessageImportQueue,
   updateLegacyMessageText,
   updateAppSettings,
@@ -85,6 +85,7 @@ import type {
   LegacyImportQueuePasteResult,
   LegacyImportQueuePreview,
   LegacyReplaceImagesResult,
+  LegacySplitMessageResult,
   LegacyMergeMessageResult,
   MergeDirection,
   MessageView,
@@ -174,6 +175,8 @@ type EditResult = LegacyCreateTextMessageResult | LegacyReplaceImagesResult;
 type CopyResult = {
   messageId: number;
   textLength: number;
+  stagedKind?: "text" | "image";
+  imageFilename?: string | null;
 };
 
 type MessageContextMenuState = {
@@ -277,6 +280,9 @@ function AppContent() {
   const [mergingMessageId, setMergingMessageId] = useState<number | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeResult, setMergeResult] = useState<LegacyMergeMessageResult | null>(null);
+  const [splittingMessageId, setSplittingMessageId] = useState<number | null>(null);
+  const [splitError, setSplitError] = useState<string | null>(null);
+  const [splitResult, setSplitResult] = useState<LegacySplitMessageResult | null>(null);
   const [androidShareError, setAndroidShareError] = useState<string | null>(null);
   const [androidShareResult, setAndroidShareResult] = useState<LegacyMessage | null>(null);
   const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
@@ -559,15 +565,17 @@ function AppContent() {
   }, [copyError, copyResult]);
 
   useEffect(() => {
-    if (!mergeError && !mergeResult) return;
+    if (!mergeError && !mergeResult && !splitError && !splitResult) return;
 
     const timer = window.setTimeout(() => {
       setMergeError(null);
       setMergeResult(null);
+      setSplitError(null);
+      setSplitResult(null);
     }, 2400);
 
     return () => window.clearTimeout(timer);
-  }, [mergeError, mergeResult]);
+  }, [mergeError, mergeResult, splitError, splitResult]);
 
   useEffect(() => {
     if (!androidShareError && !androidShareResult) return;
@@ -1769,33 +1777,17 @@ function AppContent() {
 
   async function copyMessageFromContextMenu(message: LegacyMessage) {
     closeMessageContextMenu();
-    const text = message.text_content?.trim();
-    if (text) {
-      await copyMessageText(message);
-      return;
-    }
-
-    const image = message.images.find((item) => item.exists);
-    if (!image) {
-      setCopyError(null);
-      setCopyResult(null);
-      setCopyError("这条消息没有可复制的内容");
-      return;
-    }
-    if (IS_ANDROID) {
-      setCopyError(null);
-      setCopyResult(null);
-      setCopyError("移动端暂不支持右键复制图片");
-      return;
-    }
-
     setCopyError(null);
     setCopyResult(null);
+
+    // 复制整条消息：文字消息写文字进剪贴板，纯图片消息写图片进剪贴板。
     try {
-      const result = await copyLegacyImageToClipboard(image.filename);
+      const result = await stageLegacyMessageImportToClipboard(message.id);
       setCopyResult({
-        messageId: message.id,
-        textLength: result.width * result.height,
+        messageId: result.message_id,
+        textLength: result.text_length,
+        stagedKind: result.staged_kind,
+        imageFilename: result.first_image_filename,
       });
     } catch (err) {
       setCopyError(err instanceof Error ? err.message : String(err));
@@ -1807,9 +1799,35 @@ function AppContent() {
     void openImportQueue(message);
   }
 
-  function splitMessageFromContextMenu(message: LegacyMessage) {
+  async function splitMessageFromContextMenu(message: LegacyMessage) {
     closeMessageContextMenu();
-    openEditMessage(message);
+    if (splittingMessageId !== null) return;
+
+    setSplittingMessageId(message.id);
+    setSplitError(null);
+    setSplitResult(null);
+
+    try {
+      // 直接按消息现有内容拆分：非空行逐行成条，现有图片按原顺序一对一分配。
+      const imagesData: number[][] = [];
+      for (const image of message.images) {
+        if (!image.exists) continue;
+        const bytes = await readLegacyImageBytes(image.filename);
+        imagesData.push(Array.from(bytes));
+      }
+      const result = await splitLegacyMessage(
+        message.id,
+        message.text_content ?? "",
+        imagesData,
+      );
+      await refreshAppData();
+      refreshAndroidWidgets();
+      setSplitResult(result);
+    } catch (err) {
+      setSplitError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSplittingMessageId(null);
+    }
   }
 
   async function mergeMessageWithNeighbor(message: LegacyMessage, direction: MergeDirection) {
@@ -2128,11 +2146,12 @@ function AppContent() {
           x={contextMenu.x}
           y={contextMenu.y}
           isArchived={contextMenu.message.archived}
+          canSplit={splitMessageLines(contextMenu.message.text_content ?? "").length >= 2}
           merging={mergingMessageId === contextMenu.message.id}
           onClose={closeMessageContextMenu}
           onCopy={() => void copyMessageFromContextMenu(contextMenu.message)}
           onPaste={() => pasteMessageFromContextMenu(contextMenu.message)}
-          onSplit={() => splitMessageFromContextMenu(contextMenu.message)}
+          onSplit={() => void splitMessageFromContextMenu(contextMenu.message)}
           onMerge={(direction) => void mergeMessageWithNeighbor(contextMenu.message, direction)}
         />
       )}
@@ -2347,8 +2366,37 @@ function AppContent() {
             <p>{copyError}</p>
           ) : (
             copyResult && (
-              <p>{copyResult.textLength} 个字符</p>
+              <p>
+                {copyResult.stagedKind === "image"
+                  ? `已按图片复制${copyResult.imageFilename ? `：${copyResult.imageFilename}` : ""}`
+                  : `${copyResult.textLength} 个字符`}
+              </p>
             )
+          )}
+        </OperationFeedback>
+      )}
+
+      {(splitError || splitResult) && (
+        <OperationFeedback
+          dismissLabel="关闭拆分提示"
+          onDismiss={() => {
+            setSplitError(null);
+            setSplitResult(null);
+          }}
+          surface="floating"
+          variant={splitError ? "error" : "success"}
+          title={
+            splitError
+              ? "拆分失败"
+              : splitResult
+                ? `已拆分 #${splitResult.original_message_id} 为 ${splitResult.messages.length} 条`
+                : ""
+          }
+        >
+          {splitError ? (
+            <p>{splitError}</p>
+          ) : (
+            splitResult && <p>原消息已按非空行拆开，图片按顺序分配。</p>
           )}
         </OperationFeedback>
       )}
@@ -4276,6 +4324,7 @@ function MessageContextMenu({
   x,
   y,
   isArchived,
+  canSplit,
   merging,
   onClose,
   onCopy,
@@ -4286,6 +4335,7 @@ function MessageContextMenu({
   x: number;
   y: number;
   isArchived: boolean;
+  canSplit: boolean;
   merging: boolean;
   onClose: () => void;
   onCopy: () => void;
@@ -4334,7 +4384,12 @@ function MessageContextMenu({
   ];
   if (!isArchived) {
     items.push({ key: "paste", label: "粘贴", action: onPaste });
-    items.push({ key: "split", label: "拆分", action: onSplit });
+    items.push({
+      key: "split",
+      label: "拆分",
+      disabled: !canSplit,
+      action: onSplit,
+    });
   }
   items.push(
     { key: "merge-down", label: "向下合并", disabled: merging, action: () => onMerge("down") },

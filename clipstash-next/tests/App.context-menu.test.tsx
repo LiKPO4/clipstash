@@ -74,6 +74,15 @@ const message = {
   images: [image],
 };
 
+const splittableMessage = {
+  id: 10,
+  text_content: "第一行\n第二行",
+  created_at: "2026-06-08 17:10:00",
+  archived: false,
+  archived_at: null,
+  images: [image],
+};
+
 const neighborMessage = {
   id: 9,
   text_content: "上一条",
@@ -120,6 +129,22 @@ const mergeResult = {
   },
 };
 
+const stageResult = {
+  message_id: 10,
+  staged_kind: "text",
+  text_length: 3,
+  image_count: 1,
+  first_image_filename: "old.png",
+  copied_image: null,
+};
+
+const tinyPngBytes = [
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1,
+  0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65,
+  84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1, 13, 10, 45, 180, 0, 0, 0, 0, 73,
+  69, 78, 68, 174, 66, 96, 130,
+];
+
 const importQueuePreview = {
   message_id: 10,
   item_count: 1,
@@ -138,6 +163,7 @@ const importQueuePreview = {
 
 describe("message card context menu", () => {
   let appSettings = { ...defaultAppSettings };
+  let normalMessages = [message, neighborMessage];
 
   function cardOf(id: number) {
     const title = screen.getByText(`#${id}`);
@@ -151,6 +177,7 @@ describe("message card context menu", () => {
 
   beforeEach(() => {
     appSettings = { ...defaultAppSettings };
+    normalMessages = [message, neighborMessage];
     isAlwaysOnTopMock.mockResolvedValue(false);
     setAlwaysOnTopMock.mockResolvedValue(undefined);
     invokeMock.mockReset();
@@ -173,19 +200,34 @@ describe("message card context menu", () => {
             messages: [archivedMessage],
           });
         }
-        const messages = [message, neighborMessage].slice(offset, offset + limit);
+        const messages = normalMessages.slice(offset, offset + limit);
         return Promise.resolve({
           view: "normal",
           sort: "newest",
           offset,
           limit,
-          total_count: 2,
+          total_count: normalMessages.length,
           has_more: false,
           messages,
         });
       }
       if (command === "merge_legacy_message_with_neighbor") {
         return Promise.resolve(mergeResult);
+      }
+      if (command === "stage_legacy_message_import_to_clipboard") {
+        return Promise.resolve(stageResult);
+      }
+      if (command === "read_legacy_image_bytes") {
+        return Promise.resolve(new Uint8Array(tinyPngBytes));
+      }
+      if (command === "split_legacy_message") {
+        return Promise.resolve({
+          original_message_id: args?.messageId,
+          messages: [
+            { ...message, id: 21, text_content: "第一行", images: [image] },
+            { ...message, id: 22, text_content: "第二行", images: [] },
+          ],
+        });
       }
       if (command === "copy_legacy_message_text_to_clipboard") {
         return Promise.resolve({ message_id: message.id, text_length: 3 });
@@ -229,7 +271,7 @@ describe("message card context menu", () => {
     expect(labels).toEqual(["复制", "粘贴", "拆分", "向下合并", "向上合并"]);
   });
 
-  it("copies the message text from the context menu", async () => {
+  it("copies the whole message via clipboard staging", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("#10");
@@ -238,7 +280,7 @@ describe("message card context menu", () => {
     await user.click(within(menu).getByRole("menuitem", { name: "复制" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("copy_legacy_message_text_to_clipboard", {
+      expect(invokeMock).toHaveBeenCalledWith("stage_legacy_message_import_to_clipboard", {
         messageId: 10,
       });
     });
@@ -269,7 +311,8 @@ describe("message card context menu", () => {
     });
   });
 
-  it("opens the editor for splitting from the context menu", async () => {
+  it("splits the message directly without opening the editor", async () => {
+    normalMessages = [splittableMessage, neighborMessage];
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("#10");
@@ -277,7 +320,25 @@ describe("message card context menu", () => {
     const menu = await openMenu(10);
     await user.click(within(menu).getByRole("menuitem", { name: "拆分" }));
 
-    expect(await screen.findByRole("dialog", { name: "编辑消息 10" })).toBeTruthy();
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("split_legacy_message", {
+        messageId: 10,
+        textContent: "第一行\n第二行",
+        imagesData: [expect.any(Array)],
+      });
+    });
+    expect(await screen.findByText("已拆分 #10 为 2 条")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+  });
+
+  it("disables split for messages without two non-empty lines", async () => {
+    render(<App />);
+    await screen.findByText("#10");
+
+    const menu = await openMenu(10);
+    const splitItem = within(menu).getByRole("menuitem", { name: "拆分" });
+
+    expect((splitItem as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("merges the message into the next one downward", async () => {
@@ -354,13 +415,13 @@ describe("message card context menu", () => {
       if (command === "list_legacy_messages") {
         const offset = Number(args?.offset ?? 0);
         const limit = Number(args?.limit ?? 30);
-        const messages = [message, neighborMessage].slice(offset, offset + limit);
+        const messages = normalMessages.slice(offset, offset + limit);
         return Promise.resolve({
           view: "normal",
           sort: "newest",
           offset,
           limit,
-          total_count: 2,
+          total_count: normalMessages.length,
           has_more: false,
           messages,
         });
