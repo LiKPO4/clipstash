@@ -660,6 +660,44 @@ describe("android shell", () => {
     });
   });
 
+  it("opens the quick action menu on long press and copies via the bridge", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const card = (await screen.findByText("#1")).closest("article") as HTMLElement;
+    fireEvent.touchStart(card, { touches: [{ clientX: 24, clientY: 24 }] });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 560));
+    });
+
+    const menu = await screen.findByRole("menu", { name: "消息快捷操作" });
+    const labels = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent);
+    expect(labels).toEqual(["复制", "粘贴", "拆分", "向下合并", "向上合并"]);
+
+    await user.click(within(menu).getByRole("menuitem", { name: "复制" }));
+    expect(androidCopyTextMock).toHaveBeenCalledWith("手机记录");
+    expect(await screen.findByText("已复制 #1")).toBeTruthy();
+
+    fireEvent.touchEnd(card, { touches: [] });
+  });
+
+  it("does not open the quick action menu on a quick tap", async () => {
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    const card = (await screen.findByText("#1")).closest("article") as HTMLElement;
+    fireEvent.touchStart(card, { touches: [{ clientX: 24, clientY: 24 }] });
+    fireEvent.touchEnd(card, { touches: [] });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 560));
+    });
+
+    expect(screen.queryByRole("menu", { name: "消息快捷操作" })).toBeNull();
+  });
+
   it("consumes a pending native update result when the WebView event is missed", async () => {
     androidConsumePendingUpdateMock
       .mockReturnValueOnce("")

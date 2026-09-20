@@ -228,6 +228,8 @@ type PerformanceMeasurement = {
 // 预览窗口创建代次：close 时递增；show 的异步流程每次 await 后校验，代次过期则放弃创建，
 // 避免鼠标已移开（或已按 Escape）后异步流程仍把窗口创建出来造成残留。
 const MESSAGE_DOUBLE_CLICK_DELAY_MS = 220;
+const MESSAGE_LONG_PRESS_DELAY_MS = 500;
+const MESSAGE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 
 function App() {
   return <ThumbnailProvider><AppContent /></ThumbnailProvider>;
@@ -1777,10 +1779,22 @@ function AppContent() {
 
   async function copyMessageFromContextMenu(message: LegacyMessage) {
     closeMessageContextMenu();
+    if (IS_ANDROID) {
+      // Android 桥只支持写文字，纯图片消息暂不能整条复制。
+      const text = message.text_content?.trim();
+      if (!text) {
+        setCopyError(null);
+        setCopyResult(null);
+        setCopyError("移动端暂不支持复制纯图片消息");
+        return;
+      }
+      await copyMessageText(message);
+      return;
+    }
+
+    // 桌面复制整条消息：文字消息写文字进剪贴板，纯图片消息写图片进剪贴板。
     setCopyError(null);
     setCopyResult(null);
-
-    // 复制整条消息：文字消息写文字进剪贴板，纯图片消息写图片进剪贴板。
     try {
       const result = await stageLegacyMessageImportToClipboard(message.id);
       setCopyResult({
@@ -3474,15 +3488,84 @@ const MessageCard = memo(function MessageCard({
   const visibleImages = isExpanded ? message.images : message.images.slice(0, 3);
   const hiddenImageCount = message.images.length - visibleImages.length;
   const previewImages = buildPreviewImages(message.images);
+  const longPressRef = useRef<{ timer: number | null; triggered: boolean; x: number; y: number }>({
+    timer: null,
+    triggered: false,
+    x: 0,
+    y: 0,
+  });
+
+  function clearLongPressTimer() {
+    const state = longPressRef.current;
+    if (state.timer !== null) {
+      window.clearTimeout(state.timer);
+      state.timer = null;
+    }
+  }
+
+  // Android 没有右键，长按消息卡片弹出快捷操作菜单。
+  function handleCardTouchStart(event: React.TouchEvent<HTMLElement>) {
+    if (!isAndroid) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    const state = longPressRef.current;
+    state.triggered = false;
+    state.x = touch.clientX;
+    state.y = touch.clientY;
+    clearLongPressTimer();
+    state.timer = window.setTimeout(() => {
+      state.timer = null;
+      state.triggered = true;
+      // 长按默认会触发文字选择，弹菜单时清掉选区。
+      window.getSelection()?.removeAllRanges();
+      onMessageContextMenu(message, state.x, state.y);
+    }, MESSAGE_LONG_PRESS_DELAY_MS);
+  }
+
+  function handleCardTouchMove(event: React.TouchEvent<HTMLElement>) {
+    if (!isAndroid) return;
+    const state = longPressRef.current;
+    if (state.timer === null) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    if (
+      Math.hypot(touch.clientX - state.x, touch.clientY - state.y) >
+      MESSAGE_LONG_PRESS_MOVE_THRESHOLD_PX
+    ) {
+      clearLongPressTimer();
+    }
+  }
+
+  function handleCardTouchEnd(event: React.TouchEvent<HTMLElement>) {
+    if (!isAndroid) return;
+    const hadTriggered = longPressRef.current.triggered;
+    clearLongPressTimer();
+    longPressRef.current.triggered = false;
+    if (hadTriggered) {
+      // 长按菜单已打开，吞掉随后合成的 click，避免误触卡片文字复制。
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
+  function handleCardTouchCancel() {
+    if (!isAndroid) return;
+    clearLongPressTimer();
+    longPressRef.current.triggered = false;
+  }
+
   return (
           <article
             className="message-card"
             key={message.id}
             onContextMenu={(event) => {
-              if (isAndroid) return;
               event.preventDefault();
               onMessageContextMenu(message, event.clientX, event.clientY);
             }}
+            onTouchStart={handleCardTouchStart}
+            onTouchMove={handleCardTouchMove}
+            onTouchEnd={handleCardTouchEnd}
+            onTouchCancel={handleCardTouchCancel}
             onDoubleClick={(event) => {
               const target = event.target as HTMLElement;
               if (target.closest(".message-actions") || target.closest(".image-expand-action")) {
@@ -4357,8 +4440,14 @@ function MessageContextMenu({
   }, [x, y]);
 
   useEffect(() => {
+    function isOutside(target: EventTarget | null) {
+      return !menuRef.current || !menuRef.current.contains(target as Node);
+    }
     function handlePointerDown(event: globalThis.MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) onClose();
+      if (isOutside(event.target)) onClose();
+    }
+    function handleTouchStart(event: globalThis.TouchEvent) {
+      if (isOutside(event.target)) onClose();
     }
     function handleKeyDown(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -4367,12 +4456,14 @@ function MessageContextMenu({
       onClose();
     }
     window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("touchstart", handleTouchStart, { passive: true });
     window.addEventListener("keydown", handleKeyDown);
     // 捕获阶段监听，列表容器滚动也会立即收起菜单。
     window.addEventListener("scroll", handleDismiss, true);
     window.addEventListener("resize", handleDismiss);
     return () => {
       window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("touchstart", handleTouchStart);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("scroll", handleDismiss, true);
       window.removeEventListener("resize", handleDismiss);
