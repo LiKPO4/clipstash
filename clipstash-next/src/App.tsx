@@ -3536,6 +3536,7 @@ function MessageComposerDialog({
 }) {
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const formId = `${textAreaId}-form`;
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -3551,6 +3552,13 @@ function MessageComposerDialog({
     const height = readTextAreaHeight(event.currentTarget);
     if (Number.isFinite(height) && height > 0) {
       onTextAreaHeightCommit(height);
+    }
+  }
+
+  function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      formRef.current?.requestSubmit();
     }
   }
 
@@ -3595,6 +3603,7 @@ function MessageComposerDialog({
         className={`edit-dialog composer-dialog edit-message-dialog${isAndroid ? " composer-dialog-android" : ""}`}
         role="dialog"
         onDragOver={handleDragOver}
+        onKeyDown={handleDialogKeyDown}
         onDrop={handleDrop}
         onClick={(event) => event.stopPropagation()}
       >
@@ -3644,7 +3653,7 @@ function MessageComposerDialog({
           )}
         </header>
 
-        <form id={formId} className="text-create-form" onSubmit={onSubmit}>
+        <form ref={formRef} id={formId} className="text-create-form" onSubmit={onSubmit}>
           <section className="message-composer-box">
             <textarea
               ref={textAreaRef}

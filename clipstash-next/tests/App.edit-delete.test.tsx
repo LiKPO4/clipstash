@@ -594,6 +594,30 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
 
+  it("saves the edited message with Ctrl+S from the editor", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    const textarea = within(dialog).getByLabelText("消息内容");
+    await user.clear(textarea);
+    await user.type(textarea, "快捷键保存");
+    await user.keyboard("{Control>}s{/Control}");
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_legacy_message_text", {
+        messageId: 10,
+        textContent: "快捷键保存",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
+  });
+
   it("splits non-empty lines and sends editor images in order", async () => {
     listedMessages = [
       {
