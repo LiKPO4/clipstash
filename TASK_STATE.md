@@ -2,6 +2,7 @@
 
 ## 当前目标
 
+- 2026-09-20 右键菜单功能已提交（18ff481 小组件 busy_timeout 修复、c29e2b5 编辑器 Ctrl+S 保存、c0c83f7 消息卡片右键菜单）。桌面端右键消息卡片弹出自定义菜单：复制（文字，纯图片消息回退复制第一张图）、粘贴（走导入队列粘贴到最近窗口）、拆分（打开编辑器）、向上/向下合并（新 Rust command `merge_legacy_message_with_neighbor`：按当前视图+排序找真实相邻消息，文字换行连接、图片按内容顺序重排关联行、删除被合并消息并保留写前备份；归档视图只显示复制+合并）。Android 不绑定右键。验证：前端 146 passed / 9 skipped（含 9 个新菜单测试）、Rust 101 passed / 20 ignored（含 7 个合并测试）、fmt、生产构建、Kotlin arm64 release 编译与 JVM 单测全部通过。待真机验收菜单视觉与合并手感。
 - 八阶段性能优化已拆分提交（470a4f2..f5adbbb 共 5 个提交），审查整改也已提交（2c46f15、5b09700、cdf0cbd）。详细证据、限制与分阶段回滚见 PERFORMANCE_PLAN.md 文末最终验收。
 - 2026-09-04 审查整改：重量级导入/导出/上传/预览命令改 spawn_blocking；asset scope 授权前 is_allowed 去重；粘贴目标校验恢复非空标题比对；深列表刷新改 4 路并发批查询；消息/编辑器磁贴回退预览按原图真实尺寸。遗留：prepare_preview_upload 的 ≤128MiB bytes.clone 受 tauri raw-body 借用模型限制仍在 worker 上（毫秒级）。
 - 整改后验证：前端 136 passed / 9 skipped，生产构建通过；Rust 94 passed / 20 ignored、fmt 通过。
