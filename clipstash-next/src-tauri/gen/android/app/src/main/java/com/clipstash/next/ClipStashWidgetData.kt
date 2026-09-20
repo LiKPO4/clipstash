@@ -47,7 +47,7 @@ object ClipStashWidgetData {
         null,
         SQLiteDatabase.OPEN_READONLY,
       ).use { db ->
-        db.execSQL("PRAGMA busy_timeout=3000")
+        db.applyBusyTimeout()
         val count = queryNormalCount(db)
         if (count <= 0) {
           return ClipStashWidgetState(
@@ -82,7 +82,7 @@ object ClipStashWidgetData {
         null,
         SQLiteDatabase.OPEN_READWRITE,
       ).use { db ->
-        db.execSQL("PRAGMA busy_timeout=3000")
+        db.applyBusyTimeout()
         val updated = db.execArchiveMessage(messageId)
         updated > 0
       }
@@ -151,6 +151,12 @@ object ClipStashWidgetData {
       }
     }
     return items
+  }
+
+  // execSQL 不能执行带结果行的语句，busy_timeout 赋值会返回一行导致抛异常，
+  // 这里改用 rawQuery 设置超时。
+  private fun SQLiteDatabase.applyBusyTimeout() {
+    rawQuery("PRAGMA busy_timeout=3000", emptyArray()).close()
   }
 
   private fun SQLiteDatabase.execArchiveMessage(messageId: Long): Int {
