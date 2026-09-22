@@ -594,6 +594,54 @@ describe("edit and delete guarded actions", () => {
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });
 
+  it("keeps the editor open when a text selection drag ends on the backdrop", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    const backdrop = container.querySelector(".preview-backdrop") as HTMLElement;
+    const textarea = within(dialog).getByLabelText("消息内容");
+
+    fireEvent.mouseDown(textarea);
+    fireEvent.mouseUp(backdrop);
+    fireEvent.click(backdrop);
+
+    expect(screen.getByRole("dialog", { name: "编辑消息 10" })).toBeTruthy();
+
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
+  });
+
+  it("keeps the settings dialog open when a drag inside ends on the backdrop", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    const backdrop = container.querySelector(".preview-backdrop") as HTMLElement;
+    const hotkeyInput = within(dialog).getByLabelText("呼出界面快捷键");
+
+    fireEvent.mouseDown(hotkeyInput);
+    fireEvent.mouseUp(backdrop);
+    fireEvent.click(backdrop);
+
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeTruthy();
+
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "设置" })).toBeNull();
+    });
+  });
+
   it("saves the edited message with Ctrl+S from the editor", async () => {
     const user = userEvent.setup();
     render(<App />);

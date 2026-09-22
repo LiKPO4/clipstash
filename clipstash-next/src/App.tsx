@@ -2653,6 +2653,24 @@ function OperationFeedback({
   );
 }
 
+/** 遮罩关闭守卫：按下与松开都必须落在遮罩本身，避免弹窗内拖选文本把松开位置当成点击外部。 */
+function useBackdropDismiss(onDismiss: () => void) {
+  const pressedOnBackdrop = useRef(false);
+
+  return {
+    onMouseDown(event: MouseEvent<HTMLDivElement>) {
+      pressedOnBackdrop.current = event.target === event.currentTarget;
+    },
+    onClick(event: MouseEvent<HTMLDivElement>) {
+      const shouldDismiss = pressedOnBackdrop.current && event.target === event.currentTarget;
+      pressedOnBackdrop.current = false;
+      if (shouldDismiss) {
+        onDismiss();
+      }
+    },
+  };
+}
+
 function SettingsDialog({
   archiveAfterExport,
   archiveAfterImport,
@@ -2780,6 +2798,8 @@ function SettingsDialog({
   onStartupChange: (checked: boolean) => void;
   onStartupPersistChange: (checked: boolean) => void;
 }) {
+  const backdropDismiss = useBackdropDismiss(onClose);
+
   function showAutoSavedNotice(message = "设置已自动保存到本机") {
     onSettingsNotice(message);
     window.setTimeout(() => onSettingsNotice(null), 1800);
@@ -2854,7 +2874,7 @@ function SettingsDialog({
   }
 
   return (
-    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
+    <div className="preview-backdrop edit-backdrop" role="presentation" {...backdropDismiss}>
       <section
         aria-label="设置"
         aria-modal="true"
@@ -3818,6 +3838,7 @@ function MessageComposerDialog({
   textDraft: string;
   title: string;
 }) {
+  const backdropDismiss = useBackdropDismiss(handleClose);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const formId = `${textAreaId}-form`;
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -3880,7 +3901,7 @@ function MessageComposerDialog({
   }
 
   return (
-    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={handleClose}>
+    <div className="preview-backdrop edit-backdrop" role="presentation" {...backdropDismiss}>
       <section
         aria-label={dialogLabel}
         aria-modal="true"
@@ -4027,8 +4048,10 @@ function DeleteMessageDialog({
   onConfirmChange: (confirmed: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const backdropDismiss = useBackdropDismiss(onClose);
+
   return (
-    <div className="preview-backdrop edit-backdrop" role="presentation" onClick={onClose}>
+    <div className="preview-backdrop edit-backdrop" role="presentation" {...backdropDismiss}>
       <section
         aria-label={`删除消息 ${message.id}`}
         aria-modal="true"
