@@ -2,6 +2,7 @@
 
 ## 当前目标
 
+- 2026-09-22 已发布 `v2.2.3`（发布提交 `c6c0872`，CI run 35692984047 双 job 成功：build 14m40s、android 36m49s）：含桌面拖选误关修复（`3d6ce90`）、悬停预览 z 序修复（`6c49bfb`）、滚动后悬停预览恢复与移除路径 tooltip（`05459ff`）、Android 长按消息卡片菜单（`7c758a2`）等 8 个此前未随 v2.2.2 发布的提交。发布前验证：前端 152 passed / 9 skipped、`npm run build`、`cargo fmt -- --check`、Rust 101 passed / 20 ignored、旧库只读校验（normal=5 archived=112 joined_images=130 orphan_images=0）、本地 `npm run tauri build` 通过。发布产物已核验：APK `versionName=2.2.3`、`versionCode=2002003`、V2 签名证书 SHA-256 指纹 `618f5a7ea16d97038d20c13712955e7f117f05db4b093d74240d30a6ed343b9a` 与正式证书一致；NSIS `ProductVersion=2.2.3`。Release：`https://github.com/LiKPO4/clipstash/releases/tag/v2.2.3`。注意本机安装的应用与桌面安装包目前仍是 2.2.2（本机为手工覆盖构建），未随本次发布更新。
 - 2026-09-22 修复编辑弹窗拖选文本误关（提交 `3d6ce90`）：根因是遮罩用 `onClick` 关闭弹窗，拖选结束时 `mousedown` 在 textarea、`mouseup` 落在遮罩上，浏览器把 click 派发到两者的公共祖先（即遮罩本身），内层 `stopPropagation` 不在事件路径上拦不住，于是被当成「点击外部」关闭。新增 `useBackdropDismiss`（按下与松开都必须落在遮罩本身才关闭），接入编辑、设置、删除三个弹窗。验证：前端 152 passed / 9 skipped（含 2 个新回归测试，临时还原旧写法时确认会失败）、`npm run build`、`cargo fmt -- --check` 通过；本轮未改 Rust，未跑 `cargo test`。已用 `npm run tauri build` 构建 2.2.2（版本号未变），手工替换 `D:\software\ClipStash Next\clipstash-next.exe`（旧版备份 `clipstash-next.exe.bak-2.2.1`），桌面 NSIS/MSI 同步为 12:43 构建，GitHub Release 资产未改动；用户确认后提交。
 - 2026-09-20 悬停预览失效真正根因确认并修复（提交 `6c49bfb`）：用系统级鼠标模拟 + 窗口枚举 + 页面 debug 面板在本机 dev 实测，预览链路（prepared→configured→loaded→shown）完全正常、位置正确，**但预览窗口 z 序被前台的全屏游戏等 topmost 窗口压住**——Windows 下创建时声明的置顶对非活跃窗口会失效。修复：`show()` 后调用 `setAlwaysOnTop(true)` 重新声明置顶，实测强制提升后预览正常显示，连续三轮真实悬停（含窗口复用）全部正常。用户中途看到的"透明空窗口"是调试期间 vite 热重载的瞬时中间态，非稳定问题。之前 05459ff 的滚动恢复修复保留（是真实存在的补充场景），title tooltip 移除保留。前端 150 passed / 9 skipped。Windows 安装包已于 14:24 重新覆盖 Release v2.2.2 并同步桌面副本。调试结论：本机复现环境含全屏置顶游戏窗口，与用户日常使用环境一致。
 - 2026-09-20 修复悬停预览偶发失效（提交 `05459ff`）：根因是列表滚动会主动关闭预览，而滚动后浏览器只更新 CSS :hover、不派发 mouseenter，图片恰好停在鼠标下时预览不再出现（原生 title tooltip 却照常显示）。修复为滚动停止 150ms 后按 :hover 状态恢复预览，并移除图片 tile 的原始路径 `title`（截图里的 `\\?\D:\...` tooltip 来源）。验证：前端 150 passed / 9 skipped。已本地重构建 Windows NSIS/MSI 覆盖 Release v2.2.2 资产并同步桌面副本。
@@ -488,4 +489,4 @@
 
 ## 下一步
 
-- 下一步最小行动：决定含拖选误关修复的 2.2.2 是否要同步到 GitHub Release 资产，或等下一个版本号一起发布（当前 Release v2.2.2 资产不含此修复）。其余待办仍是真机验收项：Android 分享 JPEG 新建消息后落盘文件名为 `.jpg`，以及 Windows 导入含移动端 JPEG 图片的消息（如 #380）的队列粘贴与复制不再报「读取旧图片准备复制失败」；存量 13 张 `imported-*.png`（实为 JPEG）功能已不受影响，如需原地改名+更新 DB 记录需用户确认后再做。
+- 下一步最小行动：可选把本机应用与桌面安装包更新到 `v2.2.3`（Release 资产已核验，可直接使用）。真机验收项仍待用户回传：Android 侧载 2.2.3 APK 验收长按菜单、系统分享与小组件；Windows 验收导入含移动端 JPEG 图片的消息（如 #380）的队列粘贴与复制不再报「读取旧图片准备复制失败」，以及 Android 分享 JPEG 新建消息后落盘文件名为 `.jpg`；存量 13 张 `imported-*.png`（实为 JPEG）功能已不受影响，如需原地改名+更新 DB 记录需用户确认后再做。
