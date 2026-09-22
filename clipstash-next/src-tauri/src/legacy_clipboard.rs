@@ -135,6 +135,28 @@ pub(crate) fn copy_legacy_image_to_clipboard_from_dir(
     }
 }
 
+pub(crate) fn write_text_to_clipboard(text: &str) -> Result<usize, String> {
+    if text.trim().is_empty() {
+        return Err("没有可复制的文字".to_string());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = text;
+        return Err("复制文字到系统剪贴板仅支持 Windows".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        clipboard_write_with_retry("写入文字到系统剪贴板", || {
+            let mut clipboard = Clipboard::new()?;
+            clipboard.set_text(text.to_string())
+        })?;
+
+        Ok(text.chars().count())
+    }
+}
+
 pub(crate) fn copy_legacy_message_text_to_clipboard_from_dir(
     data_dir: PathBuf,
     message_id: i64,
@@ -440,8 +462,14 @@ pub(crate) fn copy_legacy_message_import_queue_item_to_clipboard_from_dir(
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::clipboard_write_with_retry;
+    use super::{clipboard_write_with_retry, write_text_to_clipboard};
     use arboard::Error;
+
+    #[test]
+    fn rejects_blank_text_before_touching_clipboard() {
+        assert!(write_text_to_clipboard("   ").is_err());
+        assert!(write_text_to_clipboard("").is_err());
+    }
 
     #[test]
     fn clipboard_write_retries_then_succeeds() {

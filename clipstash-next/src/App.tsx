@@ -30,6 +30,7 @@ import { ThumbnailProvider, useThumbnail } from "./useThumbnail";
 import {
   archiveExportedMessages,
   copyLegacyMessageTextToClipboard,
+  copyTextToClipboard,
   createLegacyImageMessage,
   createLegacyMixedMessage,
   createLegacyTextMessage,
@@ -61,6 +62,7 @@ import {
   setLegacyMessageArchived,
   setLaunchOnStartup,
   splitLegacyMessage,
+  splitLegacyMessageSelection,
   stageLegacyMessageImportToClipboard,
   previewLegacyMessageImportQueue,
   updateLegacyMessageText,
@@ -286,6 +288,7 @@ function AppContent() {
   const [splittingMessageId, setSplittingMessageId] = useState<number | null>(null);
   const [splitError, setSplitError] = useState<string | null>(null);
   const [splitResult, setSplitResult] = useState<LegacySplitMessageResult | null>(null);
+  const [splitSelectionNotice, setSplitSelectionNotice] = useState<string | null>(null);
   const [androidShareError, setAndroidShareError] = useState<string | null>(null);
   const [androidShareResult, setAndroidShareResult] = useState<LegacyMessage | null>(null);
   const [loadingImportQueueMessageId, setLoadingImportQueueMessageId] =
@@ -1678,6 +1681,39 @@ function AppContent() {
     }
   }
 
+  async function splitEditSelectionToNewMessage(selectedText: string, remainingText: string) {
+    if (!editingMessage || splittingEdit || savingEdit) return;
+
+    setSplittingEdit(true);
+    setEditError(null);
+    setSplitError(null);
+    setSplitResult(null);
+    setSplitSelectionNotice(null);
+
+    try {
+      if (editImagesChanged(editingMessage, editImageItems)) {
+        const imagesData = await composerImageItemsToNumberArrays(editImageItems);
+        await replaceLegacyMessageImages(editingMessage.id, imagesData);
+      }
+      const trimmed = remainingText.trim();
+      const result = await splitLegacyMessageSelection(
+        editingMessage.id,
+        selectedText,
+        trimmed.length > 0 ? trimmed : null,
+      );
+      await refreshAppData();
+      refreshAndroidWidgets();
+      setEditImageItems([]);
+      setEditInputKey((key) => key + 1);
+      setEditingMessage(null);
+      setSplitSelectionNotice(`已把选中文字拆成新消息 #${result.new_message.id}`);
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      setSplittingEdit(false);
+    }
+  }
+
   function openDeleteMessage(message: LegacyMessage) {
     setDeletingMessage(message);
     setDeleteConfirmed(false);
@@ -2205,6 +2241,7 @@ function AppContent() {
           onRemoveFile={removeEditFile}
           onSubmit={saveEditedMessage}
           onSplit={splitEditedMessage}
+          onSplitSelection={splitEditSelectionToNewMessage}
           onTextAreaHeightCommit={persistEditTextareaHeight}
           onTextChange={setEditTextDraft}
         />
@@ -2413,6 +2450,18 @@ function AppContent() {
           ) : (
             splitResult && <p>原消息已按非空行拆开，图片按顺序分配。</p>
           )}
+        </OperationFeedback>
+      )}
+
+      {splitSelectionNotice && (
+        <OperationFeedback
+          dismissLabel="关闭拆分提示"
+          onDismiss={() => setSplitSelectionNotice(null)}
+          surface="floating"
+          variant="success"
+          title={splitSelectionNotice}
+        >
+          <p>原消息保留剩余内容，图片仍留在原消息。</p>
         </OperationFeedback>
       )}
 
@@ -3710,6 +3759,7 @@ function EditMessageDialog({
   onRemoveFile,
   onSubmit,
   onSplit,
+  onSplitSelection,
   onTextAreaHeightCommit,
   onTextChange,
 }: {
@@ -3734,6 +3784,7 @@ function EditMessageDialog({
   onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSplit: () => void;
+  onSplitSelection?: (selectedText: string, remainingText: string) => Promise<void>;
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
 }) {
@@ -3758,6 +3809,7 @@ function EditMessageDialog({
       onRemoveFile={onRemoveFile}
       onSubmit={onSubmit}
       onSplit={onSplit}
+      onSplitSelection={onSplitSelection}
       onTextAreaHeightCommit={onTextAreaHeightCommit}
       onTextChange={onTextChange}
       placeholder="编辑文字，或选择图片替换原图片"
@@ -3794,6 +3846,7 @@ function MessageComposerDialog({
   onRemoveFile,
   onSubmit,
   onSplit,
+  onSplitSelection,
   onTextAreaHeightCommit,
   onTextChange,
   placeholder,
@@ -3826,6 +3879,7 @@ function MessageComposerDialog({
   onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSplit?: () => void;
+  onSplitSelection?: (selectedText: string, remainingText: string) => Promise<void>;
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
   placeholder: string;
@@ -3842,6 +3896,8 @@ function MessageComposerDialog({
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const formId = `${textAreaId}-form`;
   const formRef = useRef<HTMLFormElement | null>(null);
+  const [editorMenu, setEditorMenu] = useState<EditorMenuState | null>(null);
+  const [editorMenuError, setEditorMenuError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -3898,6 +3954,112 @@ function MessageComposerDialog({
   function handleClose() {
     onPreview(null);
     onClose();
+  }
+
+  function openEditorMenu(event: MouseEvent<HTMLTextAreaElement>) {
+    if (isAndroid) return;
+    event.preventDefault();
+    const textarea = event.currentTarget;
+    setEditorMenuError(null);
+    setEditorMenu({
+      x: event.clientX,
+      y: event.clientY,
+      start: textarea.selectionStart,
+      end: textarea.selectionEnd,
+    });
+  }
+
+  function closeEditorMenu() {
+    setEditorMenu(null);
+  }
+
+  function editorMenuSelection(menu: EditorMenuState) {
+    return textDraft.slice(menu.start, menu.end);
+  }
+
+  function replaceEditorSelection(menu: EditorMenuState, replacement: string) {
+    onTextChange(textDraft.slice(0, menu.start) + replacement + textDraft.slice(menu.end));
+    const caret = menu.start + replacement.length;
+    window.requestAnimationFrame(() => {
+      const textarea = textAreaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(caret, caret);
+    });
+  }
+
+  async function copyEditorSelection() {
+    const menu = editorMenu;
+    closeEditorMenu();
+    if (!menu) return;
+    const text = editorMenuSelection(menu);
+    if (!text.trim()) return;
+    try {
+      await copyTextToClipboard(text);
+    } catch (err) {
+      setEditorMenuError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function cutEditorSelection() {
+    const menu = editorMenu;
+    closeEditorMenu();
+    if (!menu) return;
+    const text = editorMenuSelection(menu);
+    if (!text.trim()) return;
+    try {
+      await copyTextToClipboard(text);
+    } catch (err) {
+      setEditorMenuError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    replaceEditorSelection(menu, "");
+  }
+
+  async function pasteIntoEditor() {
+    const menu = editorMenu;
+    closeEditorMenu();
+    if (!menu) return;
+    try {
+      const content = await readCurrentClipboard();
+      const text = content.kind === "text" ? content.text : null;
+      if (!text) {
+        setEditorMenuError("剪贴板里没有可粘贴的文字");
+        return;
+      }
+      replaceEditorSelection(menu, text);
+    } catch (err) {
+      setEditorMenuError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function searchEditorSelection() {
+    const menu = editorMenu;
+    closeEditorMenu();
+    if (!menu) return;
+    const text = editorMenuSelection(menu).trim();
+    if (!text) return;
+    try {
+      await openUrl(`https://www.bing.com/search?q=${encodeURIComponent(text)}`);
+    } catch (err) {
+      setEditorMenuError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function splitEditorSelection() {
+    const menu = editorMenu;
+    closeEditorMenu();
+    if (!menu || !onSplitSelection) return;
+    const selected = editorMenuSelection(menu);
+    if (!selected.trim()) return;
+    try {
+      await onSplitSelection(
+        selected,
+        textDraft.slice(0, menu.start) + textDraft.slice(menu.end),
+      );
+    } catch (err) {
+      setEditorMenuError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -3966,6 +4128,7 @@ function MessageComposerDialog({
               aria-label="消息内容"
               value={textDraft}
               onChange={(event) => onTextChange(event.target.value)}
+              onContextMenu={openEditorMenu}
               onBlur={commitTextAreaHeight}
               onMouseUp={commitTextAreaHeight}
               onPaste={onPaste}
@@ -4021,9 +4184,24 @@ function MessageComposerDialog({
           )}
         </form>
 
-        {error && (
-          <OperationFeedback variant="error" title={errorTitle}>
-            <p>{error}</p>
+        {editorMenu && (
+          <EditorContextMenu
+            x={editorMenu.x}
+            y={editorMenu.y}
+            hasSelection={editorMenu.end > editorMenu.start}
+            canSplit={Boolean(onSplitSelection)}
+            onClose={closeEditorMenu}
+            onCopy={() => void copyEditorSelection()}
+            onCut={() => void cutEditorSelection()}
+            onPaste={() => void pasteIntoEditor()}
+            onSearch={() => void searchEditorSelection()}
+            onSplit={() => void splitEditorSelection()}
+          />
+        )}
+
+        {(error || editorMenuError) && (
+          <OperationFeedback variant="error" title={editorMenuError ? "操作失败" : errorTitle}>
+            <p>{editorMenuError ?? error}</p>
           </OperationFeedback>
         )}
       </section>
@@ -4451,28 +4629,32 @@ function useOriginalPreview(image: PreviewImage): { src: string; failed?: boolea
   return image.src ? { src: image.src } : loaded?.image === image ? loaded : { src: "" };
 }
 
-function MessageContextMenu({
+type ContextMenuItem = {
+  key: string;
+  label: string;
+  disabled?: boolean;
+  action: () => void;
+};
+
+type EditorMenuState = {
+  x: number;
+  y: number;
+  start: number;
+  end: number;
+};
+
+function ContextMenuSurface({
   x,
   y,
-  isArchived,
-  canSplit,
-  merging,
+  label,
+  items,
   onClose,
-  onCopy,
-  onPaste,
-  onSplit,
-  onMerge,
 }: {
   x: number;
   y: number;
-  isArchived: boolean;
-  canSplit: boolean;
-  merging: boolean;
+  label: string;
+  items: ContextMenuItem[];
   onClose: () => void;
-  onCopy: () => void;
-  onPaste: () => void;
-  onSplit: () => void;
-  onMerge: (direction: MergeDirection) => void;
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState({ left: x, top: y });
@@ -4518,29 +4700,12 @@ function MessageContextMenu({
     };
   }, [onClose]);
 
-  const items: Array<{ key: string; label: string; disabled?: boolean; action: () => void }> = [
-    { key: "copy", label: "复制", action: onCopy },
-  ];
-  if (!isArchived) {
-    items.push({ key: "paste", label: "粘贴", action: onPaste });
-    items.push({
-      key: "split",
-      label: "拆分",
-      disabled: !canSplit,
-      action: onSplit,
-    });
-  }
-  items.push(
-    { key: "merge-down", label: "向下合并", disabled: merging, action: () => onMerge("down") },
-    { key: "merge-up", label: "向上合并", disabled: merging, action: () => onMerge("up") },
-  );
-
   return (
     <div
       ref={menuRef}
       className="message-context-menu"
       role="menu"
-      aria-label="消息快捷操作"
+      aria-label={label}
       style={{ left: position.left, top: position.top }}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
@@ -4558,6 +4723,85 @@ function MessageContextMenu({
         </button>
       ))}
     </div>
+  );
+}
+
+function MessageContextMenu({
+  x,
+  y,
+  isArchived,
+  canSplit,
+  merging,
+  onClose,
+  onCopy,
+  onPaste,
+  onSplit,
+  onMerge,
+}: {
+  x: number;
+  y: number;
+  isArchived: boolean;
+  canSplit: boolean;
+  merging: boolean;
+  onClose: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  onSplit: () => void;
+  onMerge: (direction: MergeDirection) => void;
+}) {
+  const items: ContextMenuItem[] = [{ key: "copy", label: "复制", action: onCopy }];
+  if (!isArchived) {
+    items.push({ key: "paste", label: "粘贴", action: onPaste });
+    items.push({
+      key: "split",
+      label: "拆分",
+      disabled: !canSplit,
+      action: onSplit,
+    });
+  }
+  items.push(
+    { key: "merge-down", label: "向下合并", disabled: merging, action: () => onMerge("down") },
+    { key: "merge-up", label: "向上合并", disabled: merging, action: () => onMerge("up") },
+  );
+
+  return (
+    <ContextMenuSurface items={items} label="消息快捷操作" onClose={onClose} x={x} y={y} />
+  );
+}
+
+function EditorContextMenu({
+  x,
+  y,
+  hasSelection,
+  canSplit,
+  onClose,
+  onCopy,
+  onCut,
+  onPaste,
+  onSearch,
+  onSplit,
+}: {
+  x: number;
+  y: number;
+  hasSelection: boolean;
+  canSplit: boolean;
+  onClose: () => void;
+  onCopy: () => void;
+  onCut: () => void;
+  onPaste: () => void;
+  onSearch: () => void;
+  onSplit: () => void;
+}) {
+  const items: ContextMenuItem[] = [
+    { key: "copy", label: "复制", disabled: !hasSelection, action: onCopy },
+    { key: "cut", label: "剪切", disabled: !hasSelection, action: onCut },
+    { key: "paste", label: "粘贴", action: onPaste },
+    { key: "search", label: "搜索", disabled: !hasSelection, action: onSearch },
+    { key: "split", label: "拆分", disabled: !hasSelection || !canSplit, action: onSplit },
+  ];
+
+  return (
+    <ContextMenuSurface items={items} label="编辑快捷操作" onClose={onClose} x={x} y={y} />
   );
 }
 

@@ -75,6 +75,13 @@ pub struct LegacySplitMessageResult {
 }
 
 #[derive(Serialize)]
+pub struct LegacySplitSelectionResult {
+    pub original_message_id: i64,
+    pub message: LegacyMessage,
+    pub new_message: LegacyMessage,
+}
+
+#[derive(Serialize)]
 pub struct LegacyMergeMessageResult {
     pub merged_message_id: i64,
     pub removed_message_id: i64,
@@ -223,6 +230,7 @@ mod tests {
     use crate::legacy_test_support::{query_image_rows, tiny_png_bytes};
     use crate::legacy_write_exec::{
         create_image_message_for_path, create_text_message_for_path, split_message_for_path,
+        split_message_selection_for_path,
     };
     use crate::legacy_write_precheck::read_message_for_update_precheck;
     use rusqlite::Connection;
@@ -298,6 +306,131 @@ mod tests {
             })
             .expect("query original split message");
         assert_eq!(original_count, 0);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn splits_selected_text_into_new_message_and_keeps_remaining_text() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-split-selection-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create split selection fixture dir");
+        let db_path = data_dir.join("clipstash.db");
+        let image_path = data_dir.join("images").join("keep.png");
+        fs::write(&image_path, tiny_png_bytes()).expect("write split selection image");
+        let conn = Connection::open(&db_path).expect("open split selection fixture db");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (id, text_content, created_at, archived, archived_at)
+            VALUES (1, '第一段
+第二段
+第三段', '2026-07-02 10:00:00', 1, '2026-07-03 09:00:00');
+            INSERT INTO message_images (message_id, image_filename) VALUES (1, 'keep.png');
+            ",
+        )
+        .expect("seed split selection fixture");
+        drop(conn);
+
+        let (message, new_message) = split_message_selection_for_path(
+            &db_path,
+            1,
+            "  第二段  ".to_string(),
+            Some("  第一段\n第三段  ".to_string()),
+        )
+        .expect("split selection");
+
+        assert_eq!(message.text_content.as_deref(), Some("第一段\n第三段"));
+        assert_eq!(new_message.text_content.as_deref(), Some("第二段"));
+        assert_eq!(new_message.created_at, "2026-07-02 10:00:00");
+        assert!(new_message.archived);
+        assert_eq!(
+            new_message.archived_at.as_deref(),
+            Some("2026-07-03 09:00:00")
+        );
+        assert!(new_message.images.is_empty());
+        assert_eq!(message.images.len(), 1);
+        assert!(PathBuf::from(&message.images[0].path).is_file());
+        assert!(image_path.is_file());
+
+        let conn = Connection::open(&db_path).expect("reopen split selection fixture db");
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .expect("count split selection messages");
+        assert_eq!(total, 2);
+        drop(conn);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn rejects_split_selection_with_blank_selected_text() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-split-selection-blank-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create blank selection fixture dir");
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("open blank selection fixture db");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (id, text_content, created_at, archived, archived_at)
+            VALUES (1, '保存原样', '2026-07-02 10:00:00', 0, NULL);
+            ",
+        )
+        .expect("seed blank selection fixture");
+        drop(conn);
+
+        let error = match split_message_selection_for_path(
+            &db_path,
+            1,
+            "   ".to_string(),
+            Some("剩下".to_string()),
+        ) {
+            Ok(_) => panic!("选中的内容为空时不应拆分成功"),
+            Err(error) => error,
+        };
+        assert!(error.contains("选中的内容为空"));
+
+        let conn = Connection::open(&db_path).expect("reopen blank selection fixture db");
+        let text: String = conn
+            .query_row(
+                "SELECT text_content FROM messages WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read untouched message");
+        assert_eq!(text, "保存原样");
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .expect("count untouched messages");
+        assert_eq!(total, 1);
+        drop(conn);
         let _ = fs::remove_dir_all(&data_dir);
     }
 

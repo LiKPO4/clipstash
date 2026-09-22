@@ -5,15 +5,15 @@ use crate::{
         copy_legacy_message_import_queue_item_to_clipboard_from_dir,
         copy_legacy_message_text_to_clipboard_from_dir,
         preview_legacy_message_import_queue_from_dir,
-        stage_legacy_message_import_to_clipboard_from_dir, LegacyCopyImageResult,
-        LegacyCopyTextResult, LegacyImportQueueCopyResult, LegacyImportQueuePreview,
-        LegacyImportStageResult,
+        stage_legacy_message_import_to_clipboard_from_dir, write_text_to_clipboard,
+        LegacyCopyImageResult, LegacyCopyTextResult, LegacyImportQueueCopyResult,
+        LegacyImportQueuePreview, LegacyImportStageResult,
     },
     legacy_data::{
         LegacyArchiveMessageResult, LegacyCreateTextMessageResult, LegacyDbBackup,
         LegacyDeleteMessageResult, LegacyImageFilesBackup, LegacyMergeMessageResult,
-        LegacyReplaceImagesResult, LegacySplitMessageResult, LegacyUpdateMessageResult,
-        LegacyWriteAudit,
+        LegacyReplaceImagesResult, LegacySplitMessageResult, LegacySplitSelectionResult,
+        LegacyUpdateMessageResult, LegacyWriteAudit,
     },
     legacy_image_files::resolve_legacy_image_path,
     legacy_model::{LegacyMessage, LegacyMessagePage, MergeDirection, MessageView, SortOrder},
@@ -27,7 +27,7 @@ use crate::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
         delete_message_for_path, merge_message_with_neighbor_for_path,
         replace_message_images_for_path, set_message_archived_for_path, split_message_for_path,
-        update_text_message_for_path,
+        split_message_selection_for_path, update_text_message_for_path,
     },
     legacy_write_precheck::{read_message_for_update_precheck, validate_replace_images_request},
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
@@ -385,6 +385,27 @@ pub fn split_message(
     })
 }
 
+pub fn split_message_selection(
+    message_id: i64,
+    selected_text: String,
+    remaining_text: Option<String>,
+) -> Result<LegacySplitSelectionResult, String> {
+    let paths = ready_paths()?;
+    let _ = read_message_for_update_precheck(&paths.db_path, message_id)?;
+    let _backup = create_legacy_db_backup_for_path(&paths.db_path)?;
+    let (message, new_message) = split_message_selection_for_path(
+        &paths.db_path,
+        message_id,
+        selected_text,
+        remaining_text,
+    )?;
+    Ok(LegacySplitSelectionResult {
+        original_message_id: message_id,
+        message,
+        new_message,
+    })
+}
+
 pub fn merge_message_with_neighbor(
     message_id: i64,
     direction: MergeDirection,
@@ -488,6 +509,10 @@ fn read_image_bytes_from_paths(paths: &AppPaths, filename: &str) -> Result<Vec<u
 pub fn copy_message_text_to_clipboard(message_id: i64) -> Result<LegacyCopyTextResult, String> {
     let paths = ready_paths()?;
     copy_legacy_message_text_to_clipboard_from_dir(paths.data_dir, message_id)
+}
+
+pub fn copy_text_to_clipboard(text: String) -> Result<usize, String> {
+    write_text_to_clipboard(&text)
 }
 
 pub fn stage_message_import_to_clipboard(

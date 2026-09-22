@@ -155,6 +155,70 @@ pub(crate) fn split_message_for_path(
         .collect()
 }
 
+/// 把选中的文字拆成一条新消息，原消息保留剩余内容（图片仍留在原消息）。
+pub(crate) fn split_message_selection_for_path(
+    db_path: &Path,
+    message_id: i64,
+    selected_text: String,
+    remaining_text: Option<String>,
+) -> Result<(LegacyMessage, LegacyMessage), String> {
+    if message_id <= 0 {
+        return Err("拆分消息失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!("拆分消息失败，数据库不存在：{}", db_path.display()));
+    }
+
+    let selected = selected_text.trim().to_string();
+    if selected.is_empty() {
+        return Err("拆分消息失败，选中的内容为空".to_string());
+    }
+    let remaining = remaining_text
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+
+    let data_dir = db_path
+        .parent()
+        .ok_or_else(|| format!("拆分消息失败，无法定位数据库目录：{}", db_path.display()))?;
+    let images_dir = data_dir.join("images");
+
+    let mut conn =
+        Connection::open(db_path).map_err(|err| format!("打开数据库准备拆分失败：{err}"))?;
+    configure_connection(&conn)?;
+    ensure_legacy_schema(&conn)?;
+    let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
+
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启消息拆分事务失败：{err}"))?;
+    tx.execute(
+        "INSERT INTO messages (text_content, created_at, archived, archived_at) VALUES (?, ?, ?, ?)",
+        params![
+            selected,
+            old_message.created_at,
+            if old_message.archived { 1 } else { 0 },
+            old_message.archived_at,
+        ],
+    )
+    .map_err(|err| format!("写入拆出的新消息失败：{err}"))?;
+    let new_message_id = tx.last_insert_rowid();
+    let updated = tx
+        .execute(
+            "UPDATE messages SET text_content = ? WHERE id = ?",
+            params![remaining, message_id],
+        )
+        .map_err(|err| format!("更新原消息剩余内容失败：{err}"))?;
+    if updated == 0 {
+        return Err(format!("拆分消息失败，原消息不存在：{message_id}"));
+    }
+    tx.commit()
+        .map_err(|err| format!("提交消息拆分事务失败：{err}"))?;
+
+    let message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
+    let new_message = read_legacy_message_by_id(&conn, &images_dir, new_message_id)?;
+    Ok((message, new_message))
+}
+
 pub(crate) fn merge_message_with_neighbor_for_path(
     db_path: &Path,
     message_id: i64,

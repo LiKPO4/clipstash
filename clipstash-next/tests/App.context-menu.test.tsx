@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { installImageUrlMocks } from "./imageUrlMocks";
@@ -440,5 +441,192 @@ describe("message card context menu", () => {
 
     expect(await screen.findByText("合并失败")).toBeTruthy();
     expect(await screen.findByText("下方没有相邻消息")).toBeTruthy();
+  });
+});
+
+describe("message editor context menu", () => {
+  const editorMessage = { ...message, text_content: "旧文字" };
+  let clipboardText = "剪贴板内容";
+
+  beforeEach(() => {
+    clipboardText = "剪贴板内容";
+    isAlwaysOnTopMock.mockResolvedValue(false);
+    setAlwaysOnTopMock.mockResolvedValue(undefined);
+    vi.mocked(openUrl).mockClear();
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_app_settings") return Promise.resolve({ ...defaultAppSettings });
+      if (command === "get_global_shortcut_errors") return Promise.resolve([]);
+      if (command === "get_launch_on_startup") return Promise.resolve(false);
+      if (command === "get_legacy_stats") return Promise.resolve(stats);
+      if (command === "list_legacy_messages") {
+        return Promise.resolve({
+          view: args?.view ?? "normal",
+          sort: "newest",
+          offset: Number(args?.offset ?? 0),
+          limit: Number(args?.limit ?? 30),
+          total_count: 1,
+          has_more: false,
+          messages: [editorMessage],
+        });
+      }
+      if (command === "read_legacy_image_bytes") {
+        return Promise.resolve(new Uint8Array(tinyPngBytes));
+      }
+      if (command === "copy_text_to_clipboard") {
+        return Promise.resolve(String(args?.text ?? "").length);
+      }
+      if (command === "read_current_clipboard") {
+        return Promise.resolve(
+          clipboardText.length > 0
+            ? { kind: "text", text: clipboardText, image_data: null }
+            : { kind: "image", text: null, image_data: [] },
+        );
+      }
+      if (command === "split_legacy_message_selection") {
+        return Promise.resolve({
+          original_message_id: args?.messageId,
+          message: { ...editorMessage, text_content: args?.remainingText },
+          new_message: { ...editorMessage, id: 31, text_content: args?.selectedText, images: [] },
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function openEditor(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }),
+    );
+    return await screen.findByRole("dialog", { name: "编辑消息 10" });
+  }
+
+  function openEditorMenu(dialog: HTMLElement, start: number, end: number) {
+    const textarea = within(dialog).getByLabelText("消息内容") as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(start, end);
+    fireEvent.contextMenu(textarea, { clientX: 40, clientY: 60 });
+    return textarea;
+  }
+
+  it("lists copy, cut, paste, search and split with selection-only items disabled", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 3, 3);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "复制",
+      "剪切",
+      "粘贴",
+      "搜索",
+      "拆分",
+    ]);
+    for (const label of ["复制", "剪切", "搜索", "拆分"]) {
+      const item = within(menu).getByRole("menuitem", { name: label }) as HTMLButtonElement;
+      expect(item.disabled).toBe(true);
+    }
+    expect(
+      (within(menu).getByRole("menuitem", { name: "粘贴" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("copies the selected text to the system clipboard", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 0, 2);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "复制" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("copy_text_to_clipboard", { text: "旧文" });
+    });
+  });
+
+  it("cuts the selected text out of the draft", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 1, 3);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "剪切" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("copy_text_to_clipboard", { text: "文字" });
+    });
+    await waitFor(() => {
+      expect((within(dialog).getByLabelText("消息内容") as HTMLTextAreaElement).value).toBe("旧");
+    });
+  });
+
+  it("pastes clipboard text at the selection", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 1, 2);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "粘贴" }));
+
+    await waitFor(() => {
+      expect((within(dialog).getByLabelText("消息内容") as HTMLTextAreaElement).value).toBe(
+        "旧剪贴板内容字",
+      );
+    });
+  });
+
+  it("reports when the clipboard holds no text", async () => {
+    clipboardText = "";
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 0, 1);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "粘贴" }));
+
+    expect(await screen.findByText("剪贴板里没有可粘贴的文字")).toBeTruthy();
+  });
+
+  it("opens a Bing search for the selected text", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 0, 3);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "搜索" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(openUrl)).toHaveBeenCalledWith(
+        "https://www.bing.com/search?q=%E6%97%A7%E6%96%87%E5%AD%97",
+      );
+    });
+  });
+
+  it("splits the selected text into a new message and closes the editor", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 0, 2);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "拆分" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("split_legacy_message_selection", {
+        messageId: 10,
+        selectedText: "旧文",
+        remainingText: "字",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
+    expect(await screen.findByText("已把选中文字拆成新消息 #31")).toBeTruthy();
   });
 });

@@ -523,6 +523,15 @@ fn split_legacy_message(
 }
 
 #[tauri::command(async)]
+fn split_legacy_message_selection(
+    message_id: i64,
+    selected_text: String,
+    remaining_text: Option<String>,
+) -> Result<legacy_data::LegacySplitSelectionResult, String> {
+    app_data::split_message_selection(message_id, selected_text, remaining_text)
+}
+
+#[tauri::command(async)]
 fn merge_legacy_message_with_neighbor(
     message_id: i64,
     direction: legacy_data::MergeDirection,
@@ -573,6 +582,11 @@ fn copy_legacy_message_text_to_clipboard(
     message_id: i64,
 ) -> Result<legacy_data::LegacyCopyTextResult, String> {
     app_data::copy_message_text_to_clipboard(message_id)
+}
+
+#[tauri::command(async)]
+fn copy_text_to_clipboard(text: String) -> Result<usize, String> {
+    app_data::copy_text_to_clipboard(text)
 }
 
 #[tauri::command(async)]
@@ -1328,6 +1342,7 @@ pub fn run() {
             fetch_latest_github_release,
             copy_legacy_image_to_clipboard,
             copy_legacy_message_text_to_clipboard,
+            copy_text_to_clipboard,
             copy_legacy_message_import_queue_item_to_clipboard,
             delete_legacy_message,
             get_global_shortcut_errors,
@@ -1362,6 +1377,7 @@ pub fn run() {
             set_legacy_message_archived,
             set_launch_on_startup,
             split_legacy_message,
+            split_legacy_message_selection,
             merge_legacy_message_with_neighbor,
             stage_legacy_message_import_to_clipboard,
             update_legacy_message_text,

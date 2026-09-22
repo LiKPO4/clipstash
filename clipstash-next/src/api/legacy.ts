@@ -36,6 +36,7 @@ import type {
   LegacyMessagePage,
   LegacyReplaceImagesResult,
   LegacySplitMessageResult,
+  LegacySplitSelectionResult,
   LegacyStats,
   LegacyUpdateMessageResult,
   MessageView,
@@ -219,6 +220,22 @@ export function splitLegacyMessage(
     textContent,
     imagesData,
   });
+}
+
+export function splitLegacyMessageSelection(
+  messageId: number,
+  selectedText: string,
+  remainingText: string | null,
+) {
+  return invoke<LegacySplitSelectionResult>("split_legacy_message_selection", {
+    messageId,
+    selectedText,
+    remainingText,
+  });
+}
+
+export function copyTextToClipboard(text: string) {
+  return invoke<number>("copy_text_to_clipboard", { text });
 }
 
 export function mergeLegacyMessageWithNeighbor(params: {

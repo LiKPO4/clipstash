@@ -215,6 +215,12 @@ export type LegacySplitMessageResult = {
   messages: LegacyMessage[];
 };
 
+export type LegacySplitSelectionResult = {
+  original_message_id: number;
+  message: LegacyMessage;
+  new_message: LegacyMessage;
+};
+
 export type MergeDirection = "up" | "down";
 
 export type LegacyMergeMessageResult = {
