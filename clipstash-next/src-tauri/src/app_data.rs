@@ -22,12 +22,13 @@ use crate::{
         list_legacy_messages_from_dir, list_legacy_messages_from_dir_filtered, query_count,
         read_legacy_stats_from_dir,
     },
-    legacy_schema::{configure_connection, ensure_legacy_schema},
+    legacy_schema::{configure_connection, ensure_legacy_schema, table_has_column},
     legacy_write_exec::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
         delete_message_for_path, merge_message_with_neighbor_for_path,
-        replace_message_images_for_path, set_message_archived_for_path, split_message_for_path,
-        split_message_selection_for_path, update_text_message_for_path,
+        replace_message_images_for_path, set_message_archived_for_path,
+        set_message_pinned_for_path, split_message_for_path, split_message_selection_for_path,
+        update_text_message_for_path,
     },
     legacy_write_precheck::{read_message_for_update_precheck, validate_replace_images_request},
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
@@ -389,6 +390,7 @@ pub fn split_message_selection(
     message_id: i64,
     selected_text: String,
     remaining_text: Option<String>,
+    archive_selected: bool,
 ) -> Result<LegacySplitSelectionResult, String> {
     let paths = ready_paths()?;
     let _ = read_message_for_update_precheck(&paths.db_path, message_id)?;
@@ -398,6 +400,7 @@ pub fn split_message_selection(
         message_id,
         selected_text,
         remaining_text,
+        archive_selected,
     )?;
     Ok(LegacySplitSelectionResult {
         original_message_id: message_id,
@@ -435,6 +438,27 @@ pub fn delete_message(message_id: i64) -> Result<LegacyDeleteMessageResult, Stri
         image_backup: None::<LegacyImageFilesBackup>,
         message,
     })
+}
+
+pub fn set_message_pinned(message_id: i64, pinned: bool) -> Result<LegacyMessage, String> {
+    let paths = ready_paths()?;
+    set_message_pinned_for_path(&paths.db_path, message_id, pinned)
+}
+
+pub fn message_is_pinned(message_id: i64) -> Result<bool, String> {
+    let paths = ready_paths()?;
+    let conn =
+        Connection::open(&paths.db_path).map_err(|err| format!("打开应用数据库失败：{err}"))?;
+    configure_connection(&conn)?;
+    conn.query_row(
+        "SELECT COALESCE(pinned, 0) FROM messages WHERE id = ?",
+        [message_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value == 1)
+    .optional()
+    .map(|value| value.unwrap_or(false))
+    .map_err(|err| format!("读取消息钉住状态失败：{err}"))
 }
 
 pub fn set_message_archived(
@@ -689,7 +713,8 @@ fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
             text_content TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             archived INTEGER DEFAULT 0,
-            archived_at TIMESTAMP
+            archived_at TIMESTAMP,
+            pinned INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS message_images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -715,6 +740,22 @@ fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|err| format!("初始化应用数据库结构失败：{err}"))?;
+    // 老库补 pinned 列：CREATE TABLE IF NOT EXISTS 不会给已存在的表加列。
+    if !table_has_column(conn, "messages", "pinned")? {
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN pinned INTEGER DEFAULT 0",
+            [],
+        )
+        .map_err(|err| format!("为 messages 表新增 pinned 列失败：{err}"))?;
+    }
+    // 依赖 pinned 列的索引必须建在补列之后。
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_messages_normal_pinned
+            ON messages(COALESCE(archived, 0), COALESCE(pinned, 0) DESC, created_at DESC, id DESC);
+        ",
+    )
+    .map_err(|err| format!("初始化钉住排序索引失败：{err}"))?;
     ensure_legacy_schema(conn)
 }
 
@@ -1216,6 +1257,49 @@ fn audit_for_backup(operation: &str, message_id: i64, backup: &LegacyDbBackup) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upgrades_old_schema_with_pinned_column_and_index() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            ",
+        )
+        .unwrap();
+
+        super::ensure_app_schema(&conn).unwrap();
+
+        let has_pinned: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'pinned'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_pinned, 1);
+        let has_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_normal_pinned'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_index, 1);
+        // 再次初始化必须保持幂等。
+        super::ensure_app_schema(&conn).unwrap();
+    }
+
     #[test]
     fn measures_deep_offset_against_keyset() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(), openUrl: vi.fn(
 function message(id: number, imageCount = 1): LegacyMessage {
   return {
     id, text_content: `测试消息 ${id}`, created_at: "2026-09-04 00:00:00",
-    archived: false, archived_at: null,
+    archived: false, archived_at: null, pinned: false,
     images: Array.from({ length: imageCount }, (_, index) => ({
       id: id * 10 + index, filename: `${id}-${index}.png`,
       path: `C:/synthetic/images/${id}-${index}.png`, exists: true,

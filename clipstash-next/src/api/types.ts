@@ -156,6 +156,7 @@ export type LegacyMessage = {
   created_at: string;
   archived: boolean;
   archived_at: string | null;
+  pinned: boolean;
   images: LegacyMessageImage[];
 };
 
@@ -298,6 +299,7 @@ export type LegacyImportQueuePasteResult = {
 export type LegacyImportQueuePasteArchiveResult = {
   paste: LegacyImportQueuePasteResult;
   archive_requested: boolean;
+  archive_skipped_pinned: boolean;
   archive_result: LegacyArchiveMessageResult | null;
   archive_error: string | null;
 };

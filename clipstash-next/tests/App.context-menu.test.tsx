@@ -72,6 +72,7 @@ const message = {
   created_at: "2026-06-08 17:10:00",
   archived: false,
   archived_at: null,
+  pinned: false,
   images: [image],
 };
 
@@ -81,6 +82,7 @@ const splittableMessage = {
   created_at: "2026-06-08 17:10:00",
   archived: false,
   archived_at: null,
+  pinned: false,
   images: [image],
 };
 
@@ -90,6 +92,7 @@ const neighborMessage = {
   created_at: "2026-06-08 17:00:00",
   archived: false,
   archived_at: null,
+  pinned: false,
   images: [],
 };
 
@@ -99,6 +102,7 @@ const archivedMessage = {
   created_at: "2026-06-07 17:10:00",
   archived: true,
   archived_at: "2026-06-07 18:00:00",
+  pinned: false,
   images: [],
 };
 
@@ -212,6 +216,13 @@ describe("message card context menu", () => {
           messages,
         });
       }
+      if (command === "set_legacy_message_pinned") {
+        const pinned = Boolean(args?.pinned);
+        normalMessages = normalMessages.map((item) =>
+          item.id === args?.messageId ? { ...item, pinned } : item,
+        );
+        return Promise.resolve({ ...message, pinned });
+      }
       if (command === "merge_legacy_message_with_neighbor") {
         return Promise.resolve(mergeResult);
       }
@@ -248,6 +259,7 @@ describe("message card context menu", () => {
             items: [],
           },
           archive_requested: false,
+          archive_skipped_pinned: false,
           archive_result: null,
           archive_error: null,
         });
@@ -269,7 +281,32 @@ describe("message card context menu", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
-    expect(labels).toEqual(["复制", "粘贴", "拆分", "向下合并", "向上合并"]);
+    expect(labels).toEqual(["复制", "粘贴", "拆分", "钉住", "向下合并", "向上合并"]);
+  });
+
+  it("pins a normal message from the context menu and outlines the card", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("#10");
+
+    const menu = await openMenu(10);
+    await user.click(within(menu).getByRole("menuitem", { name: "钉住" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_pinned", {
+        messageId: 10,
+        pinned: true,
+      });
+    });
+    await waitFor(() => {
+      expect(cardOf(10).className).toContain("message-card-pinned");
+      expect(
+        within(cardOf(10)).getByRole("button", { name: "归档" }).className,
+      ).toContain("archive-action-pinned");
+    });
+
+    const reopened = await openMenu(10);
+    expect(within(reopened).getByRole("menuitem", { name: "取消钉住" })).toBeTruthy();
   });
 
   it("copies the whole message via clipboard staging", async () => {
@@ -528,8 +565,9 @@ describe("message editor context menu", () => {
       "粘贴",
       "搜索",
       "拆分",
+      "归档",
     ]);
-    for (const label of ["复制", "剪切", "搜索", "拆分"]) {
+    for (const label of ["复制", "剪切", "搜索", "拆分", "归档"]) {
       const item = within(menu).getByRole("menuitem", { name: label }) as HTMLButtonElement;
       expect(item.disabled).toBe(true);
     }
@@ -622,11 +660,34 @@ describe("message editor context menu", () => {
         messageId: 10,
         selectedText: "旧文",
         remainingText: "字",
+        archiveSelected: false,
       });
     });
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
     });
     expect(await screen.findByText("已把选中文字拆成新消息 #31")).toBeTruthy();
+  });
+
+  it("archives the selected text as a new archived message", async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    openEditorMenu(dialog, 0, 2);
+    const menu = await screen.findByRole("menu", { name: "编辑快捷操作" });
+    await user.click(within(menu).getByRole("menuitem", { name: "归档" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("split_legacy_message_selection", {
+        messageId: 10,
+        selectedText: "旧文",
+        remainingText: "字",
+        archiveSelected: true,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑消息 10" })).toBeNull();
+    });
+    expect(await screen.findByText("已把选中文字归档为新消息 #31")).toBeTruthy();
   });
 });

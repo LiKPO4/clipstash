@@ -53,6 +53,17 @@ pub(crate) fn ensure_legacy_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// 判断某张表是否已有指定列，用于老库尚未迁移时的兼容读写。
+pub(crate) fn table_has_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, String> {
+    Ok(read_table_columns(conn, table)?
+        .iter()
+        .any(|name| name == column))
+}
+
 fn read_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))

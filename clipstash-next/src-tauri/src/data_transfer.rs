@@ -899,6 +899,7 @@ fn visit_normal_messages(
                 created_at: row.get(2).map_err(|err| err.to_string())?,
                 archived: false,
                 archived_at: row.get(3).map_err(|err| err.to_string())?,
+                pinned: false,
                 images: Vec::new(),
             });
         }

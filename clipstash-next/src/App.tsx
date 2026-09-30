@@ -60,6 +60,7 @@ import {
   repairAppDataDir,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  setLegacyMessagePinned,
   setLaunchOnStartup,
   splitLegacyMessage,
   splitLegacyMessageSelection,
@@ -101,9 +102,7 @@ const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
 const MIN_EDIT_TEXTAREA_HEIGHT = 180;
 const MAX_EDIT_TEXTAREA_HEIGHT = 700;
-const GITHUB_RELEASE_API_URL = "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
 const GITHUB_RELEASES_URL = "https://github.com/LiKPO4/clipstash/releases/latest";
-const IS_TEST_ENV = import.meta.env.MODE === "test";
 const ANDROID_BACK_EVENT = "clipstash-android-back";
 const ANDROID_SHARE_EVENT = "clipstash-android-share-ready";
 const ANDROID_WIDGET_ACTION_EVENT = "clipstash-android-widget-action-ready";
@@ -284,6 +283,8 @@ function AppContent() {
   const [contextMenu, setContextMenu] = useState<MessageContextMenuState | null>(null);
   const [mergingMessageId, setMergingMessageId] = useState<number | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinningMessageId, setPinningMessageId] = useState<number | null>(null);
   const [mergeResult, setMergeResult] = useState<LegacyMergeMessageResult | null>(null);
   const [splittingMessageId, setSplittingMessageId] = useState<number | null>(null);
   const [splitError, setSplitError] = useState<string | null>(null);
@@ -571,17 +572,18 @@ function AppContent() {
   }, [copyError, copyResult]);
 
   useEffect(() => {
-    if (!mergeError && !mergeResult && !splitError && !splitResult) return;
+    if (!mergeError && !mergeResult && !splitError && !splitResult && !pinError) return;
 
     const timer = window.setTimeout(() => {
       setMergeError(null);
       setMergeResult(null);
       setSplitError(null);
       setSplitResult(null);
+      setPinError(null);
     }, 2400);
 
     return () => window.clearTimeout(timer);
-  }, [mergeError, mergeResult, splitError, splitResult]);
+  }, [mergeError, mergeResult, splitError, splitResult, pinError]);
 
   useEffect(() => {
     if (!androidShareError && !androidShareResult) return;
@@ -1098,20 +1100,8 @@ function AppContent() {
     });
   }
 
+  // 桌面和 Android 都交给 Rust：Rust 侧走系统/环境代理，并在 GitHub 接口限流时自动改用不占配额的兜底检查。
   async function fetchLatestReleaseForCheck(): Promise<GithubReleaseInfo> {
-    if (!IS_ANDROID && !IS_TEST_ENV && typeof fetch === "function") {
-      const response = await fetch(GITHUB_RELEASE_API_URL, {
-        cache: "no-store",
-        headers: {
-          Accept: "application/vnd.github+json",
-        },
-      });
-      if (!response.ok) {
-        throw new Error(`GitHub Release 检查失败：HTTP ${response.status}`);
-      }
-      return response.json() as Promise<GithubReleaseInfo>;
-    }
-
     return fetchLatestGithubRelease();
   }
 
@@ -1681,7 +1671,11 @@ function AppContent() {
     }
   }
 
-  async function splitEditSelectionToNewMessage(selectedText: string, remainingText: string) {
+  async function extractEditSelection(
+    selectedText: string,
+    remainingText: string,
+    archive: boolean,
+  ) {
     if (!editingMessage || splittingEdit || savingEdit) return;
 
     setSplittingEdit(true);
@@ -1700,13 +1694,18 @@ function AppContent() {
         editingMessage.id,
         selectedText,
         trimmed.length > 0 ? trimmed : null,
+        archive,
       );
       await refreshAppData();
       refreshAndroidWidgets();
       setEditImageItems([]);
       setEditInputKey((key) => key + 1);
       setEditingMessage(null);
-      setSplitSelectionNotice(`已把选中文字拆成新消息 #${result.new_message.id}`);
+      setSplitSelectionNotice(
+        archive
+          ? `已把选中文字归档为新消息 #${result.new_message.id}`
+          : `已把选中文字拆成新消息 #${result.new_message.id}`,
+      );
     } catch (err) {
       throw err instanceof Error ? err : new Error(String(err));
     } finally {
@@ -1848,6 +1847,22 @@ function AppContent() {
   function pasteMessageFromContextMenu(message: LegacyMessage) {
     closeMessageContextMenu();
     void openImportQueue(message);
+  }
+
+  async function toggleMessagePinnedFromContextMenu(message: LegacyMessage) {
+    closeMessageContextMenu();
+    if (pinningMessageId !== null) return;
+
+    setPinningMessageId(message.id);
+    setPinError(null);
+    try {
+      await setLegacyMessagePinned(message.id, !message.pinned);
+      await refreshAppData();
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPinningMessageId(null);
+    }
   }
 
   async function splitMessageFromContextMenu(message: LegacyMessage) {
@@ -2197,12 +2212,14 @@ function AppContent() {
           x={contextMenu.x}
           y={contextMenu.y}
           isArchived={contextMenu.message.archived}
+          pinned={contextMenu.message.pinned}
           canSplit={splitMessageLines(contextMenu.message.text_content ?? "").length >= 2}
           merging={mergingMessageId === contextMenu.message.id}
           onClose={closeMessageContextMenu}
           onCopy={() => void copyMessageFromContextMenu(contextMenu.message)}
           onPaste={() => pasteMessageFromContextMenu(contextMenu.message)}
           onSplit={() => void splitMessageFromContextMenu(contextMenu.message)}
+          onTogglePin={() => void toggleMessagePinnedFromContextMenu(contextMenu.message)}
           onMerge={(direction) => void mergeMessageWithNeighbor(contextMenu.message, direction)}
         />
       )}
@@ -2241,7 +2258,7 @@ function AppContent() {
           onRemoveFile={removeEditFile}
           onSubmit={saveEditedMessage}
           onSplit={splitEditedMessage}
-          onSplitSelection={splitEditSelectionToNewMessage}
+          onExtractSelection={extractEditSelection}
           onTextAreaHeightCommit={persistEditTextareaHeight}
           onTextChange={setEditTextDraft}
         />
@@ -2490,6 +2507,18 @@ function AppContent() {
         </OperationFeedback>
       )}
 
+      {pinError && (
+        <OperationFeedback
+          dismissLabel="关闭钉住提示"
+          onDismiss={() => setPinError(null)}
+          surface="floating"
+          variant="error"
+          title="钉住失败"
+        >
+          <p>{pinError}</p>
+        </OperationFeedback>
+      )}
+
       {IS_ANDROID && !showSettings && (dataTransferError || dataExportResult) && (
         <OperationFeedback
           dismissLabel="关闭数据包提示"
@@ -2605,6 +2634,9 @@ function AppContent() {
                   <p>
                     导入后已自动归档。
                   </p>
+                )}
+                {importQueuePasteArchiveResult?.archive_skipped_pinned && (
+                  <p>消息已钉住，跳过自动归档。</p>
                 )}
                 {importQueuePasteArchiveResult?.archive_error && (
                   <p>归档失败：{importQueuePasteArchiveResult.archive_error}</p>
@@ -3626,7 +3658,11 @@ const MessageCard = memo(function MessageCard({
 
   return (
           <article
-            className="message-card"
+            className={
+              message.pinned && !message.archived
+                ? "message-card message-card-pinned"
+                : "message-card"
+            }
             key={message.id}
             onContextMenu={(event) => {
               event.preventDefault();
@@ -3659,7 +3695,11 @@ const MessageCard = memo(function MessageCard({
               <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
                 <button
                   type="button"
-                  className="archive-action"
+                  className={
+                    message.pinned && !message.archived
+                      ? "archive-action archive-action-pinned"
+                      : "archive-action"
+                  }
                   disabled={archivingMessageId !== null}
                   onClick={() => onArchive(message)}
                 >
@@ -3759,7 +3799,7 @@ function EditMessageDialog({
   onRemoveFile,
   onSubmit,
   onSplit,
-  onSplitSelection,
+  onExtractSelection,
   onTextAreaHeightCommit,
   onTextChange,
 }: {
@@ -3784,7 +3824,11 @@ function EditMessageDialog({
   onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSplit: () => void;
-  onSplitSelection?: (selectedText: string, remainingText: string) => Promise<void>;
+  onExtractSelection?: (
+    selectedText: string,
+    remainingText: string,
+    archive: boolean,
+  ) => Promise<void>;
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
 }) {
@@ -3809,7 +3853,7 @@ function EditMessageDialog({
       onRemoveFile={onRemoveFile}
       onSubmit={onSubmit}
       onSplit={onSplit}
-      onSplitSelection={onSplitSelection}
+      onExtractSelection={onExtractSelection}
       onTextAreaHeightCommit={onTextAreaHeightCommit}
       onTextChange={onTextChange}
       placeholder="编辑文字，或选择图片替换原图片"
@@ -3846,7 +3890,7 @@ function MessageComposerDialog({
   onRemoveFile,
   onSubmit,
   onSplit,
-  onSplitSelection,
+  onExtractSelection,
   onTextAreaHeightCommit,
   onTextChange,
   placeholder,
@@ -3879,7 +3923,11 @@ function MessageComposerDialog({
   onRemoveFile: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSplit?: () => void;
-  onSplitSelection?: (selectedText: string, remainingText: string) => Promise<void>;
+  onExtractSelection?: (
+    selectedText: string,
+    remainingText: string,
+    archive: boolean,
+  ) => Promise<void>;
   onTextAreaHeightCommit: (height: number) => void;
   onTextChange: (text: string) => void;
   placeholder: string;
@@ -3898,6 +3946,8 @@ function MessageComposerDialog({
   const formRef = useRef<HTMLFormElement | null>(null);
   const [editorMenu, setEditorMenu] = useState<EditorMenuState | null>(null);
   const [editorMenuError, setEditorMenuError] = useState<string | null>(null);
+  // 按码点计数，中文和 emoji 都算一个字符，与 Rust 侧 text_length 口径一致。
+  const charCount = Array.from(textDraft).length;
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -4046,16 +4096,17 @@ function MessageComposerDialog({
     }
   }
 
-  async function splitEditorSelection() {
+  async function extractEditorSelection(archive: boolean) {
     const menu = editorMenu;
     closeEditorMenu();
-    if (!menu || !onSplitSelection) return;
+    if (!menu || !onExtractSelection) return;
     const selected = editorMenuSelection(menu);
     if (!selected.trim()) return;
     try {
-      await onSplitSelection(
+      await onExtractSelection(
         selected,
         textDraft.slice(0, menu.start) + textDraft.slice(menu.end),
+        archive,
       );
     } catch (err) {
       setEditorMenuError(err instanceof Error ? err.message : String(err));
@@ -4077,7 +4128,10 @@ function MessageComposerDialog({
         <header className="edit-header composer-header">
           <div>
             <p className="eyebrow">{eyebrow}</p>
-            <h2>{title}</h2>
+            <h2>
+              {title}
+              <span className="composer-char-count">{charCount} 字符</span>
+            </h2>
           </div>
           {isAndroid ? (
             <div className="composer-mobile-actions">
@@ -4189,13 +4243,14 @@ function MessageComposerDialog({
             x={editorMenu.x}
             y={editorMenu.y}
             hasSelection={editorMenu.end > editorMenu.start}
-            canSplit={Boolean(onSplitSelection)}
+            canSplit={Boolean(onExtractSelection)}
             onClose={closeEditorMenu}
             onCopy={() => void copyEditorSelection()}
             onCut={() => void cutEditorSelection()}
             onPaste={() => void pasteIntoEditor()}
             onSearch={() => void searchEditorSelection()}
-            onSplit={() => void splitEditorSelection()}
+            onSplit={() => void extractEditorSelection(false)}
+            onArchive={() => void extractEditorSelection(true)}
           />
         )}
 
@@ -4730,23 +4785,27 @@ function MessageContextMenu({
   x,
   y,
   isArchived,
+  pinned,
   canSplit,
   merging,
   onClose,
   onCopy,
   onPaste,
   onSplit,
+  onTogglePin,
   onMerge,
 }: {
   x: number;
   y: number;
   isArchived: boolean;
+  pinned: boolean;
   canSplit: boolean;
   merging: boolean;
   onClose: () => void;
   onCopy: () => void;
   onPaste: () => void;
   onSplit: () => void;
+  onTogglePin: () => void;
   onMerge: (direction: MergeDirection) => void;
 }) {
   const items: ContextMenuItem[] = [{ key: "copy", label: "复制", action: onCopy }];
@@ -4757,6 +4816,11 @@ function MessageContextMenu({
       label: "拆分",
       disabled: !canSplit,
       action: onSplit,
+    });
+    items.push({
+      key: "pin",
+      label: pinned ? "取消钉住" : "钉住",
+      action: onTogglePin,
     });
   }
   items.push(
@@ -4780,6 +4844,7 @@ function EditorContextMenu({
   onPaste,
   onSearch,
   onSplit,
+  onArchive,
 }: {
   x: number;
   y: number;
@@ -4791,6 +4856,7 @@ function EditorContextMenu({
   onPaste: () => void;
   onSearch: () => void;
   onSplit: () => void;
+  onArchive: () => void;
 }) {
   const items: ContextMenuItem[] = [
     { key: "copy", label: "复制", disabled: !hasSelection, action: onCopy },
@@ -4798,6 +4864,7 @@ function EditorContextMenu({
     { key: "paste", label: "粘贴", action: onPaste },
     { key: "search", label: "搜索", disabled: !hasSelection, action: onSearch },
     { key: "split", label: "拆分", disabled: !hasSelection || !canSplit, action: onSplit },
+    { key: "archive", label: "归档", disabled: !hasSelection || !canSplit, action: onArchive },
   ];
 
   return (

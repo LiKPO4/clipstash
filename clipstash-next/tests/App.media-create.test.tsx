@@ -97,6 +97,7 @@ const createResult = {
     created_at: "2026-06-08 17:00:00",
     archived: false,
     archived_at: null,
+    pinned: false,
     images: [
       {
         id: 301,

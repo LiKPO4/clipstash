@@ -64,6 +64,7 @@ const message = {
   created_at: "2026-06-08 17:10:00",
   archived: false,
   archived_at: null,
+  pinned: false,
   images: [
     {
       id: 20,
@@ -266,6 +267,7 @@ const importQueuePasteAllResult = {
 const importQueuePasteArchiveResult = {
   paste: importQueuePasteAllResult,
   archive_requested: true,
+  archive_skipped_pinned: false,
   archive_result: archiveResult,
   archive_error: null,
 };
@@ -453,6 +455,7 @@ describe("edit and delete guarded actions", () => {
         return Promise.resolve({
           paste: importQueuePasteAllResult,
           archive_requested: false,
+          archive_skipped_pinned: false,
           archive_result: null,
           archive_error: null,
         });
@@ -592,6 +595,27 @@ describe("edit and delete guarded actions", () => {
     expect(screen.queryByText("已保存 #10")).toBeNull();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
+  });
+
+  it("shows the live character count in the editor header", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const card = await screen.findByText("#10");
+    await user.click(within(card.closest("article") as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
+    expect(within(dialog).getByText("3 字符")).toBeTruthy();
+
+    const textarea = within(dialog).getByLabelText("消息内容");
+    await user.clear(textarea);
+    expect(within(dialog).getByText("0 字符")).toBeTruthy();
+
+    // 按码点计数：emoji 也算一个字符
+    await user.type(textarea, "😀abcd");
+    await waitFor(() => {
+      expect(within(dialog).getByText("5 字符")).toBeTruthy();
+    });
   });
 
   it("keeps the editor open when a text selection drag ends on the backdrop", async () => {

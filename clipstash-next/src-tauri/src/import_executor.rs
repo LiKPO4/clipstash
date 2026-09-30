@@ -29,6 +29,7 @@ pub struct LegacyImportQueuePasteResult {
 pub struct LegacyImportQueuePasteArchiveResult {
     pub paste: LegacyImportQueuePasteResult,
     pub archive_requested: bool,
+    pub archive_skipped_pinned: bool,
     pub archive_result: Option<legacy_data::LegacyArchiveMessageResult>,
     pub archive_error: Option<String>,
 }
@@ -143,6 +144,18 @@ pub fn paste_legacy_import_queue_with_optional_archive(
         return Ok(LegacyImportQueuePasteArchiveResult {
             paste,
             archive_requested: archive_after_success,
+            archive_skipped_pinned: false,
+            archive_result: None,
+            archive_error: None,
+        });
+    }
+
+    // 钉住的消息不参与导入后自动归档，保留在普通列表顶部。
+    if app_data::message_is_pinned(message_id).unwrap_or(false) {
+        return Ok(LegacyImportQueuePasteArchiveResult {
+            paste,
+            archive_requested: archive_after_success,
+            archive_skipped_pinned: true,
             archive_result: None,
             archive_error: None,
         });
@@ -152,12 +165,14 @@ pub fn paste_legacy_import_queue_with_optional_archive(
         Ok(archive_result) => Ok(LegacyImportQueuePasteArchiveResult {
             paste,
             archive_requested: true,
+            archive_skipped_pinned: false,
             archive_result: Some(archive_result),
             archive_error: None,
         }),
         Err(err) => Ok(LegacyImportQueuePasteArchiveResult {
             paste,
             archive_requested: true,
+            archive_skipped_pinned: false,
             archive_result: None,
             archive_error: Some(err),
         }),

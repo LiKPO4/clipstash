@@ -350,6 +350,7 @@ mod tests {
             1,
             "  第二段  ".to_string(),
             Some("  第一段\n第三段  ".to_string()),
+            false,
         )
         .expect("split selection");
 
@@ -371,6 +372,67 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
             .expect("count split selection messages");
         assert_eq!(total, 2);
+        drop(conn);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn archives_selected_text_and_keeps_remaining_text_in_original() {
+        let data_dir = env::temp_dir().join(format!(
+            "clipstash-next-archive-selection-test-{}",
+            process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create archive selection fixture dir");
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("open archive selection fixture db");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (id, text_content, created_at, archived, archived_at)
+            VALUES (1, '待归档
+留在这', '2026-07-02 10:00:00', 0, NULL);
+            ",
+        )
+        .expect("seed archive selection fixture");
+        drop(conn);
+
+        let (message, new_message) = split_message_selection_for_path(
+            &db_path,
+            1,
+            "待归档".to_string(),
+            Some("留在这".to_string()),
+            true,
+        )
+        .expect("archive selection");
+
+        assert_eq!(message.text_content.as_deref(), Some("留在这"));
+        assert!(!message.archived);
+        assert_eq!(new_message.text_content.as_deref(), Some("待归档"));
+        assert!(new_message.archived);
+        assert!(new_message.archived_at.is_some());
+        assert_eq!(new_message.created_at, "2026-07-02 10:00:00");
+
+        let conn = Connection::open(&db_path).expect("reopen archive selection fixture db");
+        let archived_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE archived = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count archived selection messages");
+        assert_eq!(archived_count, 1);
         drop(conn);
         let _ = fs::remove_dir_all(&data_dir);
     }
@@ -411,6 +473,7 @@ mod tests {
             1,
             "   ".to_string(),
             Some("剩下".to_string()),
+            false,
         ) {
             Ok(_) => panic!("选中的内容为空时不应拆分成功"),
             Err(error) => error,

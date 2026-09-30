@@ -226,11 +226,13 @@ export function splitLegacyMessageSelection(
   messageId: number,
   selectedText: string,
   remainingText: string | null,
+  archiveSelected: boolean,
 ) {
   return invoke<LegacySplitSelectionResult>("split_legacy_message_selection", {
     messageId,
     selectedText,
     remainingText,
+    archiveSelected,
   });
 }
 
@@ -263,6 +265,10 @@ export function setLegacyMessageArchived(messageId: number, archived: boolean) {
     messageId,
     archived,
   });
+}
+
+export function setLegacyMessagePinned(messageId: number, pinned: boolean) {
+  return invoke<LegacyMessage>("set_legacy_message_pinned", { messageId, pinned });
 }
 
 export function copyLegacyImageToClipboard(filename: string) {

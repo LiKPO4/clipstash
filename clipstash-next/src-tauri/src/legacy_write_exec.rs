@@ -156,11 +156,13 @@ pub(crate) fn split_message_for_path(
 }
 
 /// 把选中的文字拆成一条新消息，原消息保留剩余内容（图片仍留在原消息）。
+/// `archive_selected` 为真时新消息直接归档（归档时间为当前时间），用于编辑器里的「归档」。
 pub(crate) fn split_message_selection_for_path(
     db_path: &Path,
     message_id: i64,
     selected_text: String,
     remaining_text: Option<String>,
+    archive_selected: bool,
 ) -> Result<(LegacyMessage, LegacyMessage), String> {
     if message_id <= 0 {
         return Err("拆分消息失败，消息 id 必须大于 0".to_string());
@@ -188,6 +190,13 @@ pub(crate) fn split_message_selection_for_path(
     ensure_legacy_schema(&conn)?;
     let old_message = read_legacy_message_by_id(&conn, &images_dir, message_id)?;
 
+    let new_archived = archive_selected || old_message.archived;
+    let new_archived_at = if archive_selected {
+        Some(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())
+    } else {
+        old_message.archived_at.clone()
+    };
+
     let tx = conn
         .transaction()
         .map_err(|err| format!("开启消息拆分事务失败：{err}"))?;
@@ -196,8 +205,8 @@ pub(crate) fn split_message_selection_for_path(
         params![
             selected,
             old_message.created_at,
-            if old_message.archived { 1 } else { 0 },
-            old_message.archived_at,
+            if new_archived { 1 } else { 0 },
+            new_archived_at,
         ],
     )
     .map_err(|err| format!("写入拆出的新消息失败：{err}"))?;
@@ -456,6 +465,47 @@ pub(crate) fn delete_message_for_path(
     delete_result?;
     remove_old_message_image_files(&old_message.images);
     Ok(old_message)
+}
+
+pub(crate) fn set_message_pinned_for_path(
+    db_path: &Path,
+    message_id: i64,
+    pinned: bool,
+) -> Result<LegacyMessage, String> {
+    if message_id <= 0 {
+        return Err("更新钉住状态失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!(
+            "更新钉住状态失败，数据库不存在：{}",
+            db_path.display()
+        ));
+    }
+
+    let data_dir = db_path.parent().ok_or_else(|| {
+        format!(
+            "更新钉住状态失败，无法定位数据库目录：{}",
+            db_path.display()
+        )
+    })?;
+    let images_dir = data_dir.join("images");
+    let conn = Connection::open(db_path)
+        .map_err(|err| format!("打开数据库准备更新钉住状态失败：{err}"))?;
+    configure_connection(&conn)?;
+    ensure_legacy_schema(&conn)?;
+
+    let updated = conn
+        .execute(
+            "UPDATE messages SET pinned = ? WHERE id = ?",
+            params![if pinned { 1 } else { 0 }, message_id],
+        )
+        .map_err(|err| format!("更新钉住状态失败：{err}"))?;
+
+    if updated == 0 {
+        return Err(format!("更新钉住状态失败，消息不存在：{message_id}"));
+    }
+
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
 pub(crate) fn set_message_archived_for_path(
@@ -919,5 +969,91 @@ mod merge_tests {
             .map(|image| image.filename.as_str())
             .collect::<Vec<_>>();
         assert_eq!(filenames, vec!["one-a.png"]);
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+    use crate::legacy_query::list_legacy_messages_from_dir;
+    use rusqlite::Connection;
+    use std::{env, fs, path::PathBuf, process};
+
+    struct PinFixture {
+        data_dir: PathBuf,
+        db_path: PathBuf,
+    }
+
+    fn create_fixture(name: &str) -> PinFixture {
+        let data_dir = env::temp_dir().join(format!("clipstash-next-pin-{name}-{}", process::id()));
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(data_dir.join("images")).expect("create pin fixture dir");
+        let db_path = data_dir.join("clipstash.db");
+        let conn = Connection::open(&db_path).expect("open pin fixture db");
+        conn.execute_batch(
+            "
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived INTEGER DEFAULT 0,
+                archived_at TIMESTAMP,
+                pinned INTEGER DEFAULT 0
+            );
+            CREATE TABLE message_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                image_filename TEXT NOT NULL
+            );
+            INSERT INTO messages (id, text_content, created_at) VALUES
+                (1, '旧消息', '2026-01-01 00:00:00'),
+                (2, '新消息', '2026-06-01 00:00:00');
+            ",
+        )
+        .expect("seed pin schema");
+        drop(conn);
+        PinFixture { data_dir, db_path }
+    }
+
+    #[test]
+    fn toggles_pinned_state() {
+        let fixture = create_fixture("toggle");
+
+        let pinned = set_message_pinned_for_path(&fixture.db_path, 1, true).expect("pin message");
+        assert!(pinned.pinned);
+
+        let unpinned =
+            set_message_pinned_for_path(&fixture.db_path, 1, false).expect("unpin message");
+        assert!(!unpinned.pinned);
+
+        let err = match set_message_pinned_for_path(&fixture.db_path, 99, true) {
+            Ok(_) => panic!("pin missing message should fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("消息不存在"), "{err}");
+    }
+
+    #[test]
+    fn pinned_messages_sort_first_in_normal_view() {
+        let fixture = create_fixture("order");
+        set_message_pinned_for_path(&fixture.db_path, 1, true).expect("pin old message");
+
+        let page = list_legacy_messages_from_dir(
+            fixture.data_dir.clone(),
+            MessageView::Normal,
+            SortOrder::Newest,
+            None,
+            None,
+        )
+        .expect("list normal messages");
+
+        let ids = page
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2]);
+        assert!(page.messages[0].pinned);
+        assert!(!page.messages[1].pinned);
     }
 }

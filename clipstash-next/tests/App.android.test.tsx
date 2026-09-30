@@ -96,6 +96,7 @@ const normalPage = {
       created_at: "2026-06-16 10:00:00",
       archived: false,
       archived_at: null,
+      pinned: false,
       images: [],
     },
   ],
@@ -107,6 +108,7 @@ const createdMessage = {
   created_at: "2026-06-16 10:10:00",
   archived: false,
   archived_at: null,
+  pinned: false,
   images: [],
 };
 
@@ -675,7 +677,7 @@ describe("android shell", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
-    expect(labels).toEqual(["复制", "粘贴", "拆分", "向下合并", "向上合并"]);
+    expect(labels).toEqual(["复制", "粘贴", "拆分", "钉住", "向下合并", "向上合并"]);
 
     await user.click(within(menu).getByRole("menuitem", { name: "复制" }));
     expect(androidCopyTextMock).toHaveBeenCalledWith("手机记录");

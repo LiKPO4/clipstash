@@ -258,29 +258,110 @@ fn repair_app_data_dir() -> Result<app_data::AppDataRepairResult, String> {
     app_data::repair_app_data_dir()
 }
 
+const GITHUB_RELEASE_API_URL: &str =
+    "https://api.github.com/repos/LiKPO4/clipstash/releases/latest";
+const GITHUB_RELEASE_LATEST_URL: &str = "https://github.com/LiKPO4/clipstash/releases/latest";
+const GITHUB_RELEASE_TAG_URL_PREFIX: &str = "https://github.com/LiKPO4/clipstash/releases/tag/";
+const GITHUB_RELEASE_DOWNLOAD_URL_PREFIX: &str =
+    "https://github.com/LiKPO4/clipstash/releases/download/";
+
 #[tauri::command(async)]
 fn fetch_latest_github_release() -> Result<GithubReleaseInfo, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|err| format!("创建 HTTP 客户端失败：{err}"))?;
+
+    match fetch_release_from_api(&client) {
+        Ok(info) => Ok(info),
+        // 匿名接口按出口 IP 限流（60 次/小时），配额被共享出口 IP 打满时会返回 403；
+        // 这里退回不占配额的 releases/latest 跳转，按 CI 产物命名构造下载地址。
+        Err(api_error) => fetch_release_from_latest_page(&client)
+            .map_err(|fallback_error| format!("{api_error}；备用检查也失败：{fallback_error}")),
+    }
+}
+
+fn fetch_release_from_api(client: &reqwest::blocking::Client) -> Result<GithubReleaseInfo, String> {
     let response = client
-        .get("https://api.github.com/repos/LiKPO4/clipstash/releases/latest")
+        .get(GITHUB_RELEASE_API_URL)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header(reqwest::header::USER_AGENT, "ClipStash-Next-Update-Checker")
         .send()
         .map_err(|err| format!("GitHub Release 检查失败：{err}"))?;
     if !response.status().is_success() {
-        return Err(format!(
-            "GitHub Release 检查失败：HTTP {}",
-            response.status()
-        ));
+        return Err(describe_release_api_failure(&response));
     }
     let body = response
         .text()
         .map_err(|err| format!("读取 GitHub Release 响应失败：{err}"))?;
     serde_json::from_str::<GithubReleaseInfo>(&body)
         .map_err(|err| format!("解析 GitHub Release 响应失败：{err}"))
+}
+
+fn describe_release_api_failure(response: &reqwest::blocking::Response) -> String {
+    let status = response.status();
+    let remaining = response
+        .headers()
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok());
+    let reset = response
+        .headers()
+        .get("x-ratelimit-reset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+
+    if status.as_u16() == 403 && remaining == Some("0") {
+        let wait_minutes = reset.and_then(|reset| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            Some(reset.saturating_sub(now) / 60 + 1)
+        });
+        return match wait_minutes {
+            Some(minutes) => format!("GitHub 接口限流（匿名配额已用完，约 {minutes} 分钟后恢复）"),
+            None => "GitHub 接口限流（匿名配额已用完）".to_string(),
+        };
+    }
+
+    format!("GitHub Release 检查失败：HTTP {status}")
+}
+
+fn fetch_release_from_latest_page(
+    client: &reqwest::blocking::Client,
+) -> Result<GithubReleaseInfo, String> {
+    let response = client
+        .get(GITHUB_RELEASE_LATEST_URL)
+        .header(reqwest::header::USER_AGENT, "ClipStash-Next-Update-Checker")
+        .send()
+        .map_err(|err| format!("备用检查失败：{err}"))?;
+    let final_url = response.url().as_str().to_string();
+    let tag = final_url
+        .strip_prefix(GITHUB_RELEASE_TAG_URL_PREFIX)
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .filter(|tag| !tag.is_empty())
+        .ok_or_else(|| format!("备用检查失败：未能从 {final_url} 解析最新版本"))?
+        .to_string();
+
+    let version = tag.trim_start_matches('v').to_string();
+    let asset = |filename: String| GithubReleaseAsset {
+        browser_download_url: Some(format!(
+            "{GITHUB_RELEASE_DOWNLOAD_URL_PREFIX}{tag}/{filename}"
+        )),
+        name: Some(filename),
+    };
+
+    Ok(GithubReleaseInfo {
+        assets: Some(vec![
+            asset(format!("ClipStash.Next_{version}_x64-setup.exe")),
+            asset(format!("ClipStash.Next_{version}_x64_en-US.msi")),
+            asset(format!(
+                "ClipStash.Next_{version}_android-universal-release-signed.apk"
+            )),
+        ]),
+        html_url: Some(format!("{GITHUB_RELEASE_TAG_URL_PREFIX}{tag}")),
+        tag_name: Some(tag),
+    })
 }
 
 #[tauri::command(async)]
@@ -527,8 +608,9 @@ fn split_legacy_message_selection(
     message_id: i64,
     selected_text: String,
     remaining_text: Option<String>,
+    archive_selected: bool,
 ) -> Result<legacy_data::LegacySplitSelectionResult, String> {
-    app_data::split_message_selection(message_id, selected_text, remaining_text)
+    app_data::split_message_selection(message_id, selected_text, remaining_text, archive_selected)
 }
 
 #[tauri::command(async)]
@@ -554,6 +636,14 @@ fn set_legacy_message_archived(
     archived: bool,
 ) -> Result<legacy_data::LegacyArchiveMessageResult, String> {
     app_data::set_message_archived(message_id, archived)
+}
+
+#[tauri::command(async)]
+fn set_legacy_message_pinned(
+    message_id: i64,
+    pinned: bool,
+) -> Result<legacy_data::LegacyMessage, String> {
+    app_data::set_message_pinned(message_id, pinned)
 }
 
 #[tauri::command(async)]
@@ -1375,6 +1465,7 @@ pub fn run() {
             repair_app_data_dir,
             replace_legacy_message_images,
             set_legacy_message_archived,
+            set_legacy_message_pinned,
             set_launch_on_startup,
             split_legacy_message,
             split_legacy_message_selection,
@@ -1435,5 +1526,76 @@ mod tests {
         let command = update_installer_command(msi);
 
         assert_eq!(command.get_args().count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod github_release_tests {
+    use super::{fetch_release_from_api, fetch_release_from_latest_page};
+    use std::time::Duration;
+
+    /// 需要网络，本机手动验证：`cargo test github_release -- --ignored --nocapture`
+    #[test]
+    #[ignore = "需要网络：验证 GitHub 更新检查与 releases/latest 兜底"]
+    fn resolves_latest_release_with_api_or_latest_page_fallback() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("build release client");
+
+        let (info, source) = match fetch_release_from_api(&client) {
+            Ok(info) => (info, "api".to_string()),
+            Err(api_error) => (
+                fetch_release_from_latest_page(&client).expect("latest page fallback"),
+                format!("fallback after: {api_error}"),
+            ),
+        };
+
+        let tag = info.tag_name.expect("release tag");
+        assert!(tag.starts_with('v'), "unexpected tag: {tag}");
+        let assets = info.assets.expect("release assets");
+        assert!(
+            assets.iter().any(|asset| asset
+                .name
+                .as_deref()
+                .unwrap_or("")
+                .ends_with("x64-setup.exe")),
+            "missing windows installer asset: {assets:?}"
+        );
+        assert!(
+            assets.iter().any(|asset| asset
+                .name
+                .as_deref()
+                .unwrap_or("")
+                .ends_with("android-universal-release-signed.apk")),
+            "missing android asset: {assets:?}"
+        );
+        println!(
+            "release-check-ok tag={tag} assets={} source={source}",
+            assets.len()
+        );
+    }
+
+    /// 需要网络，本机手动验证兜底分支：`cargo test github_release_latest_page -- --ignored --nocapture`
+    #[test]
+    #[ignore = "需要网络：单独验证 releases/latest 兜底解析"]
+    fn latest_page_fallback_builds_tag_and_asset_urls() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("build release client");
+
+        let info = fetch_release_from_latest_page(&client).expect("latest page fallback");
+        let tag = info.tag_name.expect("release tag");
+        let html_url = info.html_url.expect("release url");
+        let assets = info.assets.expect("release assets");
+
+        assert!(html_url.ends_with(&format!("/releases/tag/{tag}")));
+        for asset in &assets {
+            let url = asset.browser_download_url.as_deref().expect("asset url");
+            assert!(url.starts_with("https://github.com/LiKPO4/clipstash/releases/download/"));
+            assert!(url.contains(&tag));
+        }
+        println!("latest-page-fallback-ok tag={tag} assets={}", assets.len());
     }
 }

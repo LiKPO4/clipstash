@@ -1,7 +1,7 @@
 use crate::{
     legacy_model::{LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessageView, SortOrder},
     legacy_paths::path_to_string,
-    legacy_schema::{configure_connection, ensure_legacy_schema},
+    legacy_schema::{configure_connection, ensure_legacy_schema, table_has_column},
 };
 use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
@@ -91,6 +91,18 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         .map_err(|err| format!("只读打开旧数据库失败：{err}"))?;
     configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
+    // 旧 Python 版库没有 pinned 列：读取时降级为未钉住，不写库加列（只读连接也加不了）。
+    let has_pinned = table_has_column(&conn, "messages", "pinned")?;
+    let pinned_select = if has_pinned {
+        "COALESCE(pinned, 0)"
+    } else {
+        "0"
+    };
+    let pinned_order_prefix = if has_pinned && view == MessageView::Normal {
+        "COALESCE(pinned, 0) DESC, "
+    } else {
+        ""
+    };
     // Keep page rows, associated images, and any exact count in one read snapshot.
     let snapshot = conn
         .unchecked_transaction()
@@ -123,10 +135,10 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         view_where_sql(view).to_string()
     };
     let sql = format!(
-        "SELECT id, text_content, created_at, archived, archived_at \
+        "SELECT id, text_content, created_at, archived, archived_at, {pinned_select} \
          FROM messages \
          WHERE {where_sql} \
-         ORDER BY {sort_column} {order}, id {order} \
+         ORDER BY {pinned_order_prefix}{sort_column} {order}, id {order} \
          LIMIT ? OFFSET ?"
     );
 
@@ -141,6 +153,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
             row.get::<_, String>(2)?,
             archived == Some(1),
             row.get::<_, Option<String>>(4)?,
+            row.get::<_, i64>(5)? == 1,
         ))
     };
     let rows = if let Some(pattern) = search_pattern.as_deref() {
@@ -152,7 +165,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
 
     let mut messages = Vec::new();
     for row in rows {
-        let (id, text_content, created_at, archived, archived_at) =
+        let (id, text_content, created_at, archived, archived_at, pinned) =
             row.map_err(|err| format!("读取旧消息行失败：{err}"))?;
         messages.push(LegacyMessage {
             id,
@@ -160,6 +173,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
             created_at,
             archived,
             archived_at,
+            pinned,
             images: Vec::new(),
         });
     }
@@ -275,11 +289,19 @@ pub(crate) fn read_legacy_message_by_id(
     images_dir: &PathBuf,
     message_id: i64,
 ) -> Result<LegacyMessage, String> {
-    let (id, text_content, created_at, archived, archived_at) = conn
+    let has_pinned = table_has_column(conn, "messages", "pinned")?;
+    let pinned_select = if has_pinned {
+        "COALESCE(pinned, 0)"
+    } else {
+        "0"
+    };
+    let (id, text_content, created_at, archived, archived_at, pinned) = conn
         .query_row(
-            "SELECT id, text_content, created_at, archived, archived_at \
-             FROM messages \
-             WHERE id = ?",
+            &format!(
+                "SELECT id, text_content, created_at, archived, archived_at, {pinned_select} \
+                 FROM messages \
+                 WHERE id = ?"
+            ),
             [message_id],
             |row| {
                 let archived: Option<i64> = row.get(3)?;
@@ -289,6 +311,7 @@ pub(crate) fn read_legacy_message_by_id(
                     row.get::<_, String>(2)?,
                     archived == Some(1),
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)? == 1,
                 ))
             },
         )
@@ -301,6 +324,7 @@ pub(crate) fn read_legacy_message_by_id(
         created_at,
         archived,
         archived_at,
+        pinned,
         images,
     })
 }

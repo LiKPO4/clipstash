@@ -1103,6 +1103,13 @@ textarea:focus,
   font-size: 11px;
 }
 
+.message-card.message-card-pinned {
+  border-color: #3b6fd4;
+  box-shadow:
+    0 0 0 1px #3b6fd4,
+    0 1px 0 rgba(9, 36, 71, 0.04);
+}
+
 .message-meta strong {
   color: var(--ink);
   font-size: 13px;
@@ -1165,6 +1172,14 @@ textarea:focus,
 .message-actions .import-action:hover {
   color: #fff;
   background: var(--blue-deep);
+}
+
+.message-actions .archive-action.archive-action-pinned {
+  background: #8fb0e8;
+}
+
+.message-actions .archive-action.archive-action-pinned:hover {
+  background: #7ca1e2;
 }
 
 .message-actions .danger-action:hover {
@@ -1477,6 +1492,13 @@ textarea:focus,
 .composer-header h2,
 .composer-header .eyebrow {
   min-width: 0;
+}
+
+.composer-char-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .composer-mobile-actions {
