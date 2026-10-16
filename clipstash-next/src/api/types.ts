@@ -98,6 +98,7 @@ export type AppSettings = {
   edit_textarea_height: number;
   sort: SortOrder;
   message_double_click_action: MessageDoubleClickAction;
+  widget_opacity: number;
 };
 
 export type MainWindowState = {
@@ -156,9 +157,11 @@ export type LegacyMessage = {
   created_at: string;
   archived: boolean;
   archived_at: string | null;
-  pinned: boolean;
+  pin: MessagePin;
   images: LegacyMessageImage[];
 };
+
+export type MessagePin = "none" | "top" | "bottom";
 
 export type LegacyMessagePage = {
   view: MessageView;

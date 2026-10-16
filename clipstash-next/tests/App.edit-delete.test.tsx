@@ -64,7 +64,7 @@ const message = {
   created_at: "2026-06-08 17:10:00",
   archived: false,
   archived_at: null,
-  pinned: false,
+  pin: "none",
   images: [
     {
       id: 20,

@@ -1,7 +1,7 @@
 use crate::{
     app_data,
     legacy_image_files::sniff_image_extension,
-    legacy_model::{LegacyMessage, LegacyMessageImage},
+    legacy_model::{LegacyMessage, LegacyMessageImage, MessagePin},
     legacy_paths::path_to_string,
     legacy_schema::{configure_connection, ensure_legacy_schema},
 };
@@ -899,7 +899,7 @@ fn visit_normal_messages(
                 created_at: row.get(2).map_err(|err| err.to_string())?,
                 archived: false,
                 archived_at: row.get(3).map_err(|err| err.to_string())?,
-                pinned: false,
+                pin: MessagePin::None,
                 images: Vec::new(),
             });
         }

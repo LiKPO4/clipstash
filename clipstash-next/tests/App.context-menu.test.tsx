@@ -72,7 +72,7 @@ const message = {
   created_at: "2026-06-08 17:10:00",
   archived: false,
   archived_at: null,
-  pinned: false,
+  pin: "none",
   images: [image],
 };
 
@@ -82,7 +82,7 @@ const splittableMessage = {
   created_at: "2026-06-08 17:10:00",
   archived: false,
   archived_at: null,
-  pinned: false,
+  pin: "none",
   images: [image],
 };
 
@@ -92,7 +92,7 @@ const neighborMessage = {
   created_at: "2026-06-08 17:00:00",
   archived: false,
   archived_at: null,
-  pinned: false,
+  pin: "none",
   images: [],
 };
 
@@ -102,7 +102,7 @@ const archivedMessage = {
   created_at: "2026-06-07 17:10:00",
   archived: true,
   archived_at: "2026-06-07 18:00:00",
-  pinned: false,
+  pin: "none",
   images: [],
 };
 
@@ -217,11 +217,11 @@ describe("message card context menu", () => {
         });
       }
       if (command === "set_legacy_message_pinned") {
-        const pinned = Boolean(args?.pinned);
+        const pin = (args?.pin ?? "none") as "none" | "top" | "bottom";
         normalMessages = normalMessages.map((item) =>
-          item.id === args?.messageId ? { ...item, pinned } : item,
+          item.id === args?.messageId ? { ...item, pin } : item,
         );
-        return Promise.resolve({ ...message, pinned });
+        return Promise.resolve({ ...message, pin });
       }
       if (command === "merge_legacy_message_with_neighbor") {
         return Promise.resolve(mergeResult);
@@ -281,21 +281,29 @@ describe("message card context menu", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
-    expect(labels).toEqual(["复制", "粘贴", "拆分", "钉住", "向下合并", "向上合并"]);
+    expect(labels).toEqual([
+      "复制",
+      "粘贴",
+      "拆分",
+      "钉住置顶",
+      "钉住置底",
+      "向下合并",
+      "向上合并",
+    ]);
   });
 
-  it("pins a normal message from the context menu and outlines the card", async () => {
+  it("pins a normal message to the top and outlines the card", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("#10");
 
     const menu = await openMenu(10);
-    await user.click(within(menu).getByRole("menuitem", { name: "钉住" }));
+    await user.click(within(menu).getByRole("menuitem", { name: "钉住置顶" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_pinned", {
         messageId: 10,
-        pinned: true,
+        pin: "top",
       });
     });
     await waitFor(() => {
@@ -306,7 +314,41 @@ describe("message card context menu", () => {
     });
 
     const reopened = await openMenu(10);
-    expect(within(reopened).getByRole("menuitem", { name: "取消钉住" })).toBeTruthy();
+    expect(within(reopened).getByRole("menuitem", { name: "取消置顶" })).toBeTruthy();
+    expect(within(reopened).getByRole("menuitem", { name: "钉住置底" })).toBeTruthy();
+  });
+
+  it("pins a message to the bottom and clears it again", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("#10");
+
+    const menu = await openMenu(10);
+    await user.click(within(menu).getByRole("menuitem", { name: "钉住置底" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_pinned", {
+        messageId: 10,
+        pin: "bottom",
+      });
+    });
+    await waitFor(() => {
+      expect(cardOf(10).className).toContain("message-card-pinned");
+    });
+
+    const reopened = await openMenu(10);
+    expect(within(reopened).getByRole("menuitem", { name: "取消置底" })).toBeTruthy();
+    await user.click(within(reopened).getByRole("menuitem", { name: "取消置底" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_pinned", {
+        messageId: 10,
+        pin: "none",
+      });
+    });
+    await waitFor(() => {
+      expect(cardOf(10).className).not.toContain("message-card-pinned");
+    });
   });
 
   it("copies the whole message via clipboard staging", async () => {

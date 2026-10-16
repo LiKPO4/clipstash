@@ -27,6 +27,9 @@ object ClipStashWidgetData {
   private const val APP_DATA_DIR_NAME = "ClipStash Next"
   private const val DATA_LOCATION_FILE_NAME = "data-location.json"
   private const val DB_NAME = "clipstash.db"
+  private const val SETTINGS_FILE_NAME = "settings.json"
+  // 小组件背景默认不透明；设置缺失、损坏或越界时都回退到这个值，保持旧版本行为。
+  private const val DEFAULT_WIDGET_OPACITY = 100
   // 小组件每次刷新最多加载的未归档消息数：小组件列表实际只需展示少量行，
   // 200 条足以覆盖滚动查看需求，同时避免消息量大时全量查询拖慢每次刷新。
   private const val WIDGET_ITEM_LIMIT = 200
@@ -89,6 +92,29 @@ object ClipStashWidgetData {
     } catch (_: Exception) {
       false
     }
+  }
+
+  // 小组件背景不透明度（0-100）。settings.json 与数据库在同一数据目录，
+  // 直接按数据库文件解析出的目录读取，设置面板改动后由 refreshWidgets 触发重建生效。
+  fun loadWidgetOpacity(context: Context): Int {
+    val settingsFile = File(resolveDatabaseFile(context).parentFile, SETTINGS_FILE_NAME)
+    if (!settingsFile.isFile) return DEFAULT_WIDGET_OPACITY
+    return try {
+      parseWidgetOpacity(settingsFile.readText())
+    } catch (_: Exception) {
+      DEFAULT_WIDGET_OPACITY
+    }
+  }
+
+  internal fun parseWidgetOpacity(jsonText: String?): Int {
+    if (jsonText.isNullOrBlank()) return DEFAULT_WIDGET_OPACITY
+    val value = try {
+      JSONObject(jsonText).optDouble("widget_opacity", DEFAULT_WIDGET_OPACITY.toDouble())
+    } catch (_: Exception) {
+      return DEFAULT_WIDGET_OPACITY
+    }
+    if (value.isNaN()) return DEFAULT_WIDGET_OPACITY
+    return value.coerceIn(0.0, 100.0).toInt()
   }
 
   private fun resolveDatabaseFile(context: Context): File {

@@ -29,6 +29,35 @@ pub struct LegacyMessageImage {
     pub exists: bool,
 }
 
+/// 钉住位置：置顶 / 不钉 / 置底。库内用 1 / 0 / -1 存储，
+/// 这样 Normal 视图沿用 `COALESCE(pinned, 0) DESC` 排序即可得到「置顶在最前、置底在最后」，
+/// 旧库里的布尔值 1 正好是置顶。
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePin {
+    None,
+    Top,
+    Bottom,
+}
+
+impl MessagePin {
+    pub(crate) fn from_stored(value: i64) -> Self {
+        match value {
+            1 => Self::Top,
+            -1 => Self::Bottom,
+            _ => Self::None,
+        }
+    }
+
+    pub(crate) fn to_stored(self) -> i64 {
+        match self {
+            Self::Top => 1,
+            Self::None => 0,
+            Self::Bottom => -1,
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct LegacyMessage {
     pub id: i64,
@@ -36,7 +65,7 @@ pub struct LegacyMessage {
     pub created_at: String,
     pub archived: bool,
     pub archived_at: Option<String>,
-    pub pinned: bool,
+    pub pin: MessagePin,
     pub images: Vec<LegacyMessageImage>,
 }
 

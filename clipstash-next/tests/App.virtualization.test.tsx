@@ -11,7 +11,7 @@ type Props = ComponentProps<typeof MessageList>;
 function messages(count: number): LegacyMessage[] {
   return Array.from({ length: count }, (_, index) => ({
     id: index + 1, text_content: `消息 ${index + 1}`, created_at: "2026-09-04",
-    archived: false, archived_at: null, pinned: false, images: [],
+    archived: false, archived_at: null, pin: "none", images: [],
   }));
 }
 function props(rows: LegacyMessage[]): Props {

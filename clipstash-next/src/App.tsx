@@ -91,12 +91,13 @@ import type {
   LegacySplitMessageResult,
   LegacyMergeMessageResult,
   MergeDirection,
+  MessagePin,
   MessageView,
   SortOrder,
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.2.5";
+const CURRENT_VERSION = "2.2.6";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -249,6 +250,7 @@ function AppContent() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const [hoverDelay, setHoverDelay] = useState(0.8);
+  const [widgetOpacity, setWidgetOpacity] = useState(100);
   const [scrollLines, setScrollLines] = useState(1);
   const [fontScale, setFontScale] = useState(0);
   const [editTextareaHeight, setEditTextareaHeight] = useState(DEFAULT_EDIT_TEXTAREA_HEIGHT);
@@ -885,6 +887,7 @@ function AppContent() {
     setCaptureHotkey(settings.capture_hotkey);
     setSort(settings.sort);
     setMessageDoubleClickAction(settings.message_double_click_action ?? "edit");
+    setWidgetOpacity(settings.widget_opacity ?? 100);
     if (!IS_ANDROID && settings.always_on_top !== lastAlwaysOnTopValueRef.current) {
       lastAlwaysOnTopValueRef.current = settings.always_on_top;
       getCurrentWindow()
@@ -1849,14 +1852,17 @@ function AppContent() {
     void openImportQueue(message);
   }
 
-  async function toggleMessagePinnedFromContextMenu(message: LegacyMessage) {
+  async function toggleMessagePinnedFromContextMenu(
+    message: LegacyMessage,
+    position: "top" | "bottom",
+  ) {
     closeMessageContextMenu();
     if (pinningMessageId !== null) return;
 
     setPinningMessageId(message.id);
     setPinError(null);
     try {
-      await setLegacyMessagePinned(message.id, !message.pinned);
+      await setLegacyMessagePinned(message.id, message.pin === position ? "none" : position);
       await refreshAppData();
     } catch (err) {
       setPinError(err instanceof Error ? err.message : String(err));
@@ -2212,14 +2218,16 @@ function AppContent() {
           x={contextMenu.x}
           y={contextMenu.y}
           isArchived={contextMenu.message.archived}
-          pinned={contextMenu.message.pinned}
+          pin={contextMenu.message.pin}
           canSplit={splitMessageLines(contextMenu.message.text_content ?? "").length >= 2}
           merging={mergingMessageId === contextMenu.message.id}
           onClose={closeMessageContextMenu}
           onCopy={() => void copyMessageFromContextMenu(contextMenu.message)}
           onPaste={() => pasteMessageFromContextMenu(contextMenu.message)}
           onSplit={() => void splitMessageFromContextMenu(contextMenu.message)}
-          onTogglePin={() => void toggleMessagePinnedFromContextMenu(contextMenu.message)}
+          onTogglePin={(position) =>
+            void toggleMessagePinnedFromContextMenu(contextMenu.message, position)
+          }
           onMerge={(direction) => void mergeMessageWithNeighbor(contextMenu.message, direction)}
         />
       )}
@@ -2286,6 +2294,7 @@ function AppContent() {
           fontScale={fontScale}
           globalShortcutErrors={globalShortcutErrors}
           hoverDelay={hoverDelay}
+          widgetOpacity={widgetOpacity}
           openPathError={openPathError}
           pasteIntervalMs={pasteIntervalMs}
           matchBlankLinesToImages={matchBlankLinesToImages}
@@ -2344,6 +2353,11 @@ function AppContent() {
           onHoverDelayChange={(value) => {
             setHoverDelay(value);
             persistAppSettings({ hover_delay: value }).catch(() => undefined);
+          }}
+          onWidgetOpacityChange={(value) => {
+            setWidgetOpacity(value);
+            persistAppSettings({ widget_opacity: value }).catch(() => undefined);
+            refreshAndroidWidgets();
           }}
           onShowHotkeyChange={(value) => {
             setShowHotkey(value);
@@ -2766,6 +2780,7 @@ function SettingsDialog({
   fontScale,
   globalShortcutErrors,
   hoverDelay,
+  widgetOpacity,
   importingDataPackage,
   isAndroid,
   migrationError,
@@ -2802,6 +2817,7 @@ function SettingsDialog({
   onCloseToTrayChange,
   onFontScaleChange,
   onHoverDelayChange,
+  onWidgetOpacityChange,
   onShowHotkeyChange,
   onCaptureHotkeyChange,
   onMigrateLegacyData,
@@ -2829,6 +2845,7 @@ function SettingsDialog({
   fontScale: number;
   globalShortcutErrors: string[];
   hoverDelay: number;
+  widgetOpacity: number;
   importingDataPackage: boolean;
   isAndroid: boolean;
   migrationError: string | null;
@@ -2865,6 +2882,7 @@ function SettingsDialog({
   onCloseToTrayChange: (checked: boolean) => void;
   onFontScaleChange: (value: number) => void;
   onHoverDelayChange: (value: number) => void;
+  onWidgetOpacityChange: (value: number) => void;
   onShowHotkeyChange: (value: string) => void;
   onCaptureHotkeyChange: (value: string) => void;
   onMigrateLegacyData: () => void;
@@ -2888,6 +2906,12 @@ function SettingsDialog({
 
   function changeHoverDelay(value: number) {
     onHoverDelayChange(value);
+    onSettingsNotice(null);
+    showAutoSavedNotice();
+  }
+
+  function changeWidgetOpacity(value: number) {
+    onWidgetOpacityChange(value);
     onSettingsNotice(null);
     showAutoSavedNotice();
   }
@@ -3104,12 +3128,25 @@ function SettingsDialog({
               </>
             )}
             {isAndroid && (
-              <SettingToggle
-                checked={archiveAfterExport}
-                label="导出后自动归档"
-                description="数据包分享后自动将本次导出的消息移入已归档"
-                onChange={changeArchiveAfterExport}
-              />
+              <>
+                <SettingSlider
+                  label="小组件背景不透明度"
+                  max={100}
+                  min={0}
+                  step={5}
+                  suffix="%"
+                  value={widgetOpacity}
+                  onChange={changeWidgetOpacity}
+                />
+                <p>调低后桌面壁纸会透过小组件背景</p>
+
+                <SettingToggle
+                  checked={archiveAfterExport}
+                  label="导出后自动归档"
+                  description="数据包分享后自动将本次导出的消息移入已归档"
+                  onChange={changeArchiveAfterExport}
+                />
+              </>
             )}
             {settingsError && <p className="inline-error">{settingsError}</p>}
 
@@ -3659,7 +3696,7 @@ const MessageCard = memo(function MessageCard({
   return (
           <article
             className={
-              message.pinned && !message.archived
+              message.pin !== "none" && !message.archived
                 ? "message-card message-card-pinned"
                 : "message-card"
             }
@@ -3696,7 +3733,7 @@ const MessageCard = memo(function MessageCard({
                 <button
                   type="button"
                   className={
-                    message.pinned && !message.archived
+                    message.pin !== "none" && !message.archived
                       ? "archive-action archive-action-pinned"
                       : "archive-action"
                   }
@@ -4399,7 +4436,7 @@ function ComposerImageTile({
     }
 
     const request = previewRequestRef.current;
-    previewTimerRef.current = window.setTimeout(() => {
+    const firePreview = () => {
       previewTimerRef.current = null;
       showHoverPreviewWindow(nextPreview, anchor).catch(() => {
         if (request !== previewRequestRef.current) return;
@@ -4419,7 +4456,19 @@ function ComposerImageTile({
             if (request === previewRequestRef.current) onPreview(nextPreview);
           });
       });
-    }, Math.max(0, previewDelaySeconds * 1000));
+    };
+
+    // 页面被系统误判为 hidden（WebView2 可见性卡死）时，定时器会被密集
+    // 节流到分钟级；此时还能收到悬停/聚焦事件恰恰说明窗口其实在眼前，
+    // 跳过延迟定时器直接显示预览。
+    if (document.visibilityState === "hidden") {
+      firePreview();
+      return;
+    }
+    previewTimerRef.current = window.setTimeout(
+      firePreview,
+      Math.max(0, previewDelaySeconds * 1000),
+    );
   }
 
   function hidePreview() {
@@ -4564,7 +4613,7 @@ function MessageImageTile({
     const { anchor, preview } = readImagePreview(target);
     const request = previewRequestRef.current;
 
-    previewTimerRef.current = window.setTimeout(() => {
+    const firePreview = () => {
       previewTimerRef.current = null;
       onPreview({ ...preview, externalWindow: true });
       showHoverPreviewWindow(preview, anchor).catch(() => {
@@ -4581,7 +4630,19 @@ function MessageImageTile({
             if (request === previewRequestRef.current) onPreview(preview);
           });
       });
-    }, Math.max(0, previewDelaySeconds * 1000));
+    };
+
+    // 页面被系统误判为 hidden（WebView2 可见性卡死）时，定时器会被密集
+    // 节流到分钟级；此时还能收到悬停/聚焦事件恰恰说明窗口其实在眼前，
+    // 跳过延迟定时器直接显示预览。
+    if (document.visibilityState === "hidden") {
+      firePreview();
+      return;
+    }
+    previewTimerRef.current = window.setTimeout(
+      firePreview,
+      Math.max(0, previewDelaySeconds * 1000),
+    );
   }
 
   function openPreview(target: HTMLButtonElement) {
@@ -4785,7 +4846,7 @@ function MessageContextMenu({
   x,
   y,
   isArchived,
-  pinned,
+  pin,
   canSplit,
   merging,
   onClose,
@@ -4798,14 +4859,14 @@ function MessageContextMenu({
   x: number;
   y: number;
   isArchived: boolean;
-  pinned: boolean;
+  pin: MessagePin;
   canSplit: boolean;
   merging: boolean;
   onClose: () => void;
   onCopy: () => void;
   onPaste: () => void;
   onSplit: () => void;
-  onTogglePin: () => void;
+  onTogglePin: (position: "top" | "bottom") => void;
   onMerge: (direction: MergeDirection) => void;
 }) {
   const items: ContextMenuItem[] = [{ key: "copy", label: "复制", action: onCopy }];
@@ -4818,9 +4879,14 @@ function MessageContextMenu({
       action: onSplit,
     });
     items.push({
-      key: "pin",
-      label: pinned ? "取消钉住" : "钉住",
-      action: onTogglePin,
+      key: "pin-top",
+      label: pin === "top" ? "取消置顶" : "钉住置顶",
+      action: () => onTogglePin("top"),
+    });
+    items.push({
+      key: "pin-bottom",
+      label: pin === "bottom" ? "取消置底" : "钉住置底",
+      action: () => onTogglePin("bottom"),
     });
   }
   items.push(

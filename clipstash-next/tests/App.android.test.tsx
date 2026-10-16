@@ -80,6 +80,7 @@ const defaultAppSettings = {
   font_scale: 0,
   edit_textarea_height: 360,
   sort: "newest",
+  widget_opacity: 100,
 };
 
 const normalPage = {
@@ -96,7 +97,7 @@ const normalPage = {
       created_at: "2026-06-16 10:00:00",
       archived: false,
       archived_at: null,
-      pinned: false,
+      pin: "none",
       images: [],
     },
   ],
@@ -108,7 +109,7 @@ const createdMessage = {
   created_at: "2026-06-16 10:10:00",
   archived: false,
   archived_at: null,
-  pinned: false,
+  pin: "none",
   images: [],
 };
 
@@ -449,6 +450,31 @@ describe("android shell", () => {
     expect(await screen.findByText(/已自动归档/)).toBeTruthy();
   });
 
+  it("persists widget opacity changes and refreshes widgets immediately", async () => {
+    const user = userEvent.setup();
+    const { default: App } = await import("../src/App");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    const slider = within(dialog).getByRole("slider", { name: /小组件背景不透明度/ }) as HTMLInputElement;
+    expect(slider.value).toBe("100");
+    androidRefreshWidgetsMock.mockClear();
+
+    fireEvent.change(slider, { target: { value: "60" } });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+        patch: { widget_opacity: 60 },
+      });
+    });
+    expect(androidRefreshWidgetsMock).toHaveBeenCalled();
+    expect(appSettings.widget_opacity).toBe(60);
+    await waitFor(() => {
+      expect((within(dialog).getByRole("slider", { name: /小组件背景不透明度/ }) as HTMLInputElement).value).toBe("60");
+    });
+  });
+
   it("starts the same export flow from the widget share action", async () => {
     const consumePendingWidgetAction = vi.fn().mockReturnValueOnce("export").mockReturnValue("");
     androidShareZipMock = vi.fn();
@@ -677,7 +703,15 @@ describe("android shell", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
-    expect(labels).toEqual(["复制", "粘贴", "拆分", "钉住", "向下合并", "向上合并"]);
+    expect(labels).toEqual([
+      "复制",
+      "粘贴",
+      "拆分",
+      "钉住置顶",
+      "钉住置底",
+      "向下合并",
+      "向上合并",
+    ]);
 
     await user.click(within(menu).getByRole("menuitem", { name: "复制" }));
     expect(androidCopyTextMock).toHaveBeenCalledWith("手机记录");

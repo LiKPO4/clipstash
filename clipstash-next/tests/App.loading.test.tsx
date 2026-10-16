@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(), openUrl: vi.fn(
 function message(id: number, imageCount = 1): LegacyMessage {
   return {
     id, text_content: `测试消息 ${id}`, created_at: "2026-09-04 00:00:00",
-    archived: false, archived_at: null, pinned: false,
+    archived: false, archived_at: null, pin: "none",
     images: Array.from({ length: imageCount }, (_, index) => ({
       id: id * 10 + index, filename: `${id}-${index}.png`,
       path: `C:/synthetic/images/${id}-${index}.png`, exists: true,
@@ -317,6 +317,40 @@ describe("message loading independent of image IO", () => {
       expect(preview.style.width).toBe("1000px");
       expect(preview.style.height).toBe("500px");
     } finally {
+      if (imageDescriptor) Object.defineProperty(window, "Image", imageDescriptor);
+      else delete (window as Window & { Image?: typeof Image }).Image;
+    }
+  });
+
+  it("skips the hover delay when page visibility is stuck hidden", async () => {
+    const previous = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "get_app_settings") return Promise.resolve({ ...settings, hover_delay: 5 });
+      if (command === "read_legacy_image_bytes") return Promise.resolve(new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4]));
+      return previous(command, args);
+    });
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    const imageDescriptor = Object.getOwnPropertyDescriptor(window, "Image");
+    class FakeImage {
+      naturalWidth = 1600;
+      naturalHeight = 800;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    Object.defineProperty(window, "Image", { configurable: true, value: FakeImage });
+    try {
+      render(<App />);
+      await screen.findByText("测试消息 1");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "1-0.png" }));
+      // hover_delay 为 5 秒，若预览仍走延迟定时器，默认等待时间内不会出现
+      expect(await screen.findByRole("tooltip")).toBeTruthy();
+    } finally {
+      if (visibilityDescriptor) Object.defineProperty(document, "visibilityState", visibilityDescriptor);
+      else delete (document as unknown as { visibilityState?: string }).visibilityState;
       if (imageDescriptor) Object.defineProperty(window, "Image", imageDescriptor);
       else delete (window as Window & { Image?: typeof Image }).Image;
     }

@@ -641,9 +641,9 @@ fn set_legacy_message_archived(
 #[tauri::command(async)]
 fn set_legacy_message_pinned(
     message_id: i64,
-    pinned: bool,
+    pin: legacy_model::MessagePin,
 ) -> Result<legacy_data::LegacyMessage, String> {
-    app_data::set_message_pinned(message_id, pinned)
+    app_data::set_message_pinned(message_id, pin)
 }
 
 #[tauri::command(async)]
@@ -816,7 +816,34 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        sync_webview_visibility_after_show(&window);
     }
+}
+
+// tao 的 window.hide() 只发 SW_HIDE，不会更新 WebView2 controller 的
+// IsVisible；Chromium 侧对托盘隐藏窗口的可见性跟踪可能一直卡在
+// “页面已隐藏”，JS 定时器随之被密集节流到分钟级（悬停预览延迟
+// 实际数十秒才触发，表现为悬停不出预览）。隐藏时显式置 false，
+// 显示时强制 false→true 制造一次真实的可见性切换，让卡死的页面恢复。
+#[cfg(target_os = "windows")]
+fn sync_webview_visibility_after_hide(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        let controller = webview.controller();
+        unsafe {
+            let _ = controller.SetIsVisible(false);
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn sync_webview_visibility_after_show(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        let controller = webview.controller();
+        unsafe {
+            let _ = controller.SetIsVisible(false);
+            let _ = controller.SetIsVisible(true);
+        }
+    });
 }
 
 #[cfg(target_os = "windows")]
@@ -825,11 +852,13 @@ fn toggle_main_window(app: &AppHandle) {
         if window.is_visible().unwrap_or(false) {
             save_main_webview_window_state(&window);
             let _ = window.hide();
+            sync_webview_visibility_after_hide(&window);
         } else {
             restore_main_window_state(&window);
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
+            sync_webview_visibility_after_show(&window);
         }
     }
 }
@@ -1397,6 +1426,11 @@ pub fn run() {
                                 if should_hide_to_tray {
                                     api.prevent_close();
                                     let _ = window.hide();
+                                    if let Some(main) =
+                                        window.app_handle().get_webview_window("main")
+                                    {
+                                        sync_webview_visibility_after_hide(&main);
+                                    }
                                 } else {
                                     EXIT_REQUESTED.store(true, Ordering::SeqCst);
                                 }

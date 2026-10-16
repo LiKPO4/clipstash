@@ -2,7 +2,7 @@ use crate::{
     legacy_image_files::{
         next_image_filename, remove_old_message_image_files, save_image_file, sniff_image_extension,
     },
-    legacy_model::{LegacyMessage, MergeDirection, MessageView, SortOrder},
+    legacy_model::{LegacyMessage, MergeDirection, MessagePin, MessageView, SortOrder},
     legacy_query::{read_legacy_message_by_id, view_where_sql},
     legacy_schema::{configure_connection, ensure_legacy_schema},
     legacy_write_precheck::validate_replace_images_request,
@@ -470,7 +470,7 @@ pub(crate) fn delete_message_for_path(
 pub(crate) fn set_message_pinned_for_path(
     db_path: &Path,
     message_id: i64,
-    pinned: bool,
+    pin: MessagePin,
 ) -> Result<LegacyMessage, String> {
     if message_id <= 0 {
         return Err("更新钉住状态失败，消息 id 必须大于 0".to_string());
@@ -497,7 +497,7 @@ pub(crate) fn set_message_pinned_for_path(
     let updated = conn
         .execute(
             "UPDATE messages SET pinned = ? WHERE id = ?",
-            params![if pinned { 1 } else { 0 }, message_id],
+            params![pin.to_stored(), message_id],
         )
         .map_err(|err| format!("更新钉住状态失败：{err}"))?;
 
@@ -1007,7 +1007,8 @@ mod pin_tests {
             );
             INSERT INTO messages (id, text_content, created_at) VALUES
                 (1, '旧消息', '2026-01-01 00:00:00'),
-                (2, '新消息', '2026-06-01 00:00:00');
+                (2, '新消息', '2026-06-01 00:00:00'),
+                (3, '最新消息', '2026-09-01 00:00:00');
             ",
         )
         .expect("seed pin schema");
@@ -1016,17 +1017,22 @@ mod pin_tests {
     }
 
     #[test]
-    fn toggles_pinned_state() {
+    fn toggles_pin_position() {
         let fixture = create_fixture("toggle");
 
-        let pinned = set_message_pinned_for_path(&fixture.db_path, 1, true).expect("pin message");
-        assert!(pinned.pinned);
+        let pinned = set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::Top)
+            .expect("pin message to top");
+        assert_eq!(pinned.pin, MessagePin::Top);
 
-        let unpinned =
-            set_message_pinned_for_path(&fixture.db_path, 1, false).expect("unpin message");
-        assert!(!unpinned.pinned);
+        let bottom = set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::Bottom)
+            .expect("pin message to bottom");
+        assert_eq!(bottom.pin, MessagePin::Bottom);
 
-        let err = match set_message_pinned_for_path(&fixture.db_path, 99, true) {
+        let cleared = set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::None)
+            .expect("unpin message");
+        assert_eq!(cleared.pin, MessagePin::None);
+
+        let err = match set_message_pinned_for_path(&fixture.db_path, 99, MessagePin::Top) {
             Ok(_) => panic!("pin missing message should fail"),
             Err(err) => err,
         };
@@ -1034,9 +1040,11 @@ mod pin_tests {
     }
 
     #[test]
-    fn pinned_messages_sort_first_in_normal_view() {
+    fn pinned_top_sorts_first_and_pinned_bottom_sorts_last() {
         let fixture = create_fixture("order");
-        set_message_pinned_for_path(&fixture.db_path, 1, true).expect("pin old message");
+        set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::Top).expect("pin old to top");
+        set_message_pinned_for_path(&fixture.db_path, 3, MessagePin::Bottom)
+            .expect("pin newest to bottom");
 
         let page = list_legacy_messages_from_dir(
             fixture.data_dir.clone(),
@@ -1052,8 +1060,9 @@ mod pin_tests {
             .iter()
             .map(|message| message.id)
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec![1, 2]);
-        assert!(page.messages[0].pinned);
-        assert!(!page.messages[1].pinned);
+        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(page.messages[0].pin, MessagePin::Top);
+        assert_eq!(page.messages[1].pin, MessagePin::None);
+        assert_eq!(page.messages[2].pin, MessagePin::Bottom);
     }
 }

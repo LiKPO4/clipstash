@@ -55,11 +55,13 @@ class ClipStashWidgetProvider : AppWidgetProvider() {
       appWidgetId: Int,
     ) {
       val state = ClipStashWidgetData.load(context)
+      val backgroundAlpha = ClipStashWidgetData.loadWidgetOpacity(context) * 255 / 100
       val serviceIntent = Intent(context, ClipStashWidgetService::class.java).apply {
         putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
         data = Uri.parse("clipstash://widget/$appWidgetId")
       }
       val views = RemoteViews(context.packageName, R.layout.widget_todo).apply {
+        setInt(R.id.widget_background, "setImageAlpha", backgroundAlpha)
         setTextViewText(R.id.widget_title, context.getString(R.string.widget_todo_title))
         setTextViewText(R.id.widget_count, state.count.toString())
         val showRows = state.status == ClipStashWidgetStatus.Ready && state.items.isNotEmpty()

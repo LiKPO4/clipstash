@@ -16,7 +16,9 @@ use crate::{
         LegacyUpdateMessageResult, LegacyWriteAudit,
     },
     legacy_image_files::resolve_legacy_image_path,
-    legacy_model::{LegacyMessage, LegacyMessagePage, MergeDirection, MessageView, SortOrder},
+    legacy_model::{
+        LegacyMessage, LegacyMessagePage, MergeDirection, MessagePin, MessageView, SortOrder,
+    },
     legacy_paths::{legacy_data_dir, path_to_string},
     legacy_query::{
         list_legacy_messages_from_dir, list_legacy_messages_from_dir_filtered, query_count,
@@ -440,9 +442,9 @@ pub fn delete_message(message_id: i64) -> Result<LegacyDeleteMessageResult, Stri
     })
 }
 
-pub fn set_message_pinned(message_id: i64, pinned: bool) -> Result<LegacyMessage, String> {
+pub fn set_message_pinned(message_id: i64, pin: MessagePin) -> Result<LegacyMessage, String> {
     let paths = ready_paths()?;
-    set_message_pinned_for_path(&paths.db_path, message_id, pinned)
+    set_message_pinned_for_path(&paths.db_path, message_id, pin)
 }
 
 pub fn message_is_pinned(message_id: i64) -> Result<bool, String> {
@@ -455,7 +457,8 @@ pub fn message_is_pinned(message_id: i64) -> Result<bool, String> {
         [message_id],
         |row| row.get::<_, i64>(0),
     )
-    .map(|value| value == 1)
+    // 置顶存 1、置底存 -1，两个方向都算已钉住（用于导入后跳过自动归档）。
+    .map(|value| value != 0)
     .optional()
     .map(|value| value.unwrap_or(false))
     .map_err(|err| format!("读取消息钉住状态失败：{err}"))

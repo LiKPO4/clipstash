@@ -33,6 +33,7 @@ import type {
   LegacyImportStageResult,
   LegacyMergeMessageResult,
   LegacyMessage,
+  MessagePin,
   LegacyMessagePage,
   LegacyReplaceImagesResult,
   LegacySplitMessageResult,
@@ -267,8 +268,8 @@ export function setLegacyMessageArchived(messageId: number, archived: boolean) {
   });
 }
 
-export function setLegacyMessagePinned(messageId: number, pinned: boolean) {
-  return invoke<LegacyMessage>("set_legacy_message_pinned", { messageId, pinned });
+export function setLegacyMessagePinned(messageId: number, pin: MessagePin) {
+  return invoke<LegacyMessage>("set_legacy_message_pinned", { messageId, pin });
 }
 
 export function copyLegacyImageToClipboard(filename: string) {

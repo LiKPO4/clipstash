@@ -28,6 +28,8 @@ pub struct AppSettings {
     pub edit_textarea_height: i64,
     pub sort: String,
     pub message_double_click_action: String,
+    /// 小组件背景不透明度（0-100，100 为不透明）
+    pub widget_opacity: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -57,6 +59,7 @@ impl Default for AppSettings {
             edit_textarea_height: 360,
             sort: "newest".to_string(),
             message_double_click_action: "edit".to_string(),
+            widget_opacity: 100.0,
         }
     }
 }
@@ -79,6 +82,7 @@ pub struct AppSettingsPatch {
     pub edit_textarea_height: Option<i64>,
     pub sort: Option<String>,
     pub message_double_click_action: Option<String>,
+    pub widget_opacity: Option<f64>,
 }
 
 #[derive(Default, Deserialize)]
@@ -180,6 +184,9 @@ pub fn update_settings(patch: AppSettingsPatch) -> Result<AppSettings, String> {
     if let Some(value) = patch.message_double_click_action {
         settings.message_double_click_action = value;
     }
+    if let Some(value) = patch.widget_opacity {
+        settings.widget_opacity = value;
+    }
 
     let settings = normalize_settings(settings);
     if settings.show_hotkey == settings.capture_hotkey {
@@ -265,6 +272,7 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     settings.scroll_lines = settings.scroll_lines.clamp(1, 8);
     settings.font_scale = settings.font_scale.clamp(-4, 4);
     settings.edit_textarea_height = settings.edit_textarea_height.clamp(180, 700);
+    settings.widget_opacity = settings.widget_opacity.clamp(0.0, 100.0);
     if settings.sort != "oldest" {
         settings.sort = "newest".to_string();
     }
@@ -413,6 +421,7 @@ mod tests {
             font_scale: None,
             edit_textarea_height: None,
             sort: None,
+            widget_opacity: None,
         })
         .unwrap();
 
@@ -482,6 +491,31 @@ mod tests {
 
         assert!(settings.match_blank_lines_to_images);
         assert!(read_settings().unwrap().match_blank_lines_to_images);
+    }
+
+    #[test]
+    fn updates_widget_opacity_setting_with_clamping() {
+        let _guard = env_lock().lock().unwrap();
+        let appdata = isolated_appdata("widget-opacity");
+        reset_dir(&appdata);
+        env::set_var("APPDATA", &appdata);
+
+        let settings = update_settings(AppSettingsPatch {
+            widget_opacity: Some(45.0),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(settings.widget_opacity, 45.0);
+        assert_eq!(read_settings().unwrap().widget_opacity, 45.0);
+
+        let clamped = update_settings(AppSettingsPatch {
+            widget_opacity: Some(150.0),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(clamped.widget_opacity, 100.0);
+        assert_eq!(read_settings().unwrap().widget_opacity, 100.0);
     }
 
     #[test]

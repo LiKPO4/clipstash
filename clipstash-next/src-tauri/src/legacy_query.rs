@@ -1,5 +1,7 @@
 use crate::{
-    legacy_model::{LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessageView, SortOrder},
+    legacy_model::{
+        LegacyMessage, LegacyMessageImage, LegacyMessagePage, MessagePin, MessageView, SortOrder,
+    },
     legacy_paths::path_to_string,
     legacy_schema::{configure_connection, ensure_legacy_schema, table_has_column},
 };
@@ -153,7 +155,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
             row.get::<_, String>(2)?,
             archived == Some(1),
             row.get::<_, Option<String>>(4)?,
-            row.get::<_, i64>(5)? == 1,
+            MessagePin::from_stored(row.get::<_, i64>(5)?),
         ))
     };
     let rows = if let Some(pattern) = search_pattern.as_deref() {
@@ -165,7 +167,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
 
     let mut messages = Vec::new();
     for row in rows {
-        let (id, text_content, created_at, archived, archived_at, pinned) =
+        let (id, text_content, created_at, archived, archived_at, pin) =
             row.map_err(|err| format!("读取旧消息行失败：{err}"))?;
         messages.push(LegacyMessage {
             id,
@@ -173,7 +175,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
             created_at,
             archived,
             archived_at,
-            pinned,
+            pin,
             images: Vec::new(),
         });
     }
@@ -295,7 +297,7 @@ pub(crate) fn read_legacy_message_by_id(
     } else {
         "0"
     };
-    let (id, text_content, created_at, archived, archived_at, pinned) = conn
+    let (id, text_content, created_at, archived, archived_at, pin) = conn
         .query_row(
             &format!(
                 "SELECT id, text_content, created_at, archived, archived_at, {pinned_select} \
@@ -311,7 +313,7 @@ pub(crate) fn read_legacy_message_by_id(
                     row.get::<_, String>(2)?,
                     archived == Some(1),
                     row.get::<_, Option<String>>(4)?,
-                    row.get::<_, i64>(5)? == 1,
+                    MessagePin::from_stored(row.get::<_, i64>(5)?),
                 ))
             },
         )
@@ -324,7 +326,7 @@ pub(crate) fn read_legacy_message_by_id(
         created_at,
         archived,
         archived_at,
-        pinned,
+        pin,
         images,
     })
 }

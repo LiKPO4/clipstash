@@ -93,6 +93,13 @@ MVP 推荐 Kotlin 直接只读 SQLite：
 
 如果 Android 新库路径或表结构变动，必须同步更新 `ClipStashWidgetData.kt`，并补一条小组件只读查询测试或手动验收记录。
 
+### 小组件背景不透明度
+
+- 设置项 `widget_opacity`（0-100，默认 100 不透明）保存在应用设置 `settings.json`，与 `clipstash.db` 在同一数据目录。
+- 小组件侧由 `ClipStashWidgetData.loadWidgetOpacity()` 直接读文件解析（`parseWidgetOpacity` 为纯函数，走本地 JVM 单元测试，依赖 `testImplementation("org.json:json")` 提供真实 JSON 实现）。
+- 布局 `widget_todo.xml` 把卡片背景抽成独立 `ImageView`（`@+id/widget_background`），Provider 用 `RemoteViews.setInt(..., "setImageAlpha", opacity * 255 / 100)` 应用；RemoteViews 不能对任意 View 设 alpha，只能走 `ImageView.setImageAlpha`。
+- 前端设置面板拖动滑杆后立即调用 `ClipStashAndroid.refreshWidgets()` 重建小组件生效。
+
 ## App 内刷新触发
 
 需要在 Android 端增加一个桥接函数或原生 helper：
