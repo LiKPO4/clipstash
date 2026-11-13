@@ -155,8 +155,8 @@ describe("media create form", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    expect(await screen.findByText("11 条消息")).toBeTruthy();
-    expect(screen.getByText("103 条消息")).toBeTruthy();
+    expect(await screen.findByText("11条消息")).toBeTruthy();
+    expect(screen.getByText("103条消息")).toBeTruthy();
     const panel = await openMediaCreateDialog(user);
     expect(within(panel).queryByText("写入旧库前会自动备份")).toBeNull();
     expect(within(panel).queryByRole("checkbox")).toBeNull();

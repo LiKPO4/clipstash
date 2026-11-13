@@ -43,6 +43,18 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("desktop preview protocol", () => {
+  it("sends plain text through the same window without reading files and can switch back to images", async () => {
+    const { showDesktopPreview, hideDesktopPreview } = await import("../src/desktopPreview");
+    await showDesktopPreview({ filename: "消息 #10", text: "第一行\nhttps://example.com/long-path" }, position);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.size).toHaveBeenLastCalledWith(expect.objectContaining({ width: 360, height: 500 }));
+    expect(mocks.emit).toHaveBeenCalledWith("image-preview", "clipstash-preview-load", expect.objectContaining({ text: "第一行\nhttps://example.com/long-path", src: "" }));
+    await showDesktopPreview(source, position);
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenCalledWith("prepare_image_preview", { filename: source.filename, expectedPath: source.path });
+    expect(mocks.emit.mock.calls.filter((call) => call[1] === "clipstash-preview-load").at(-1)![2]).not.toHaveProperty("text");
+    await hideDesktopPreview();
+  });
   it("reuses a non-focusing window and passes a URL instead of original bytes or localStorage", async () => {
     const storage = vi.spyOn(Storage.prototype, "setItem");
     const { showDesktopPreview, hideDesktopPreview } = await import("../src/desktopPreview");

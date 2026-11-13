@@ -1,0 +1,56 @@
+/* One interaction policy for main UI, dialogs, file labels and reader windows. */
+:root :is(button, .composer-file-action) {
+  --button-hover-background: #dce7fc;
+  --button-hover-color: #254fb6;
+  --button-hover-border: #b9cdf4;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease, filter 120ms ease, scale 100ms ease;
+}
+:root :is(.primary-new, .write-submit) {
+  --button-hover-background: #355fc6;
+  --button-hover-color: white;
+  --button-hover-border: #2d55b5;
+}
+:root .archive-action {
+  --button-hover-background: #ccd2dc;
+  --button-hover-color: #374151;
+  --button-hover-border: #bac2ce;
+}
+:root .import-action {
+  --button-hover-background: #bcd2ff;
+  --button-hover-color: #254fb6;
+  --button-hover-border: #a8c2f0;
+}
+:root :is(.danger-action, .composer-image-remove) {
+  --button-hover-background: #ffe4df;
+  --button-hover-color: #c94d43;
+  --button-hover-border: #f1b4ac;
+}
+:root :is(.message-text-button, .image-preview-action, .empty-create-target) {
+  --button-hover-background: transparent;
+  --button-hover-color: #446fde;
+  --button-hover-border: transparent;
+}
+:root .composer-image-tile { --button-hover-background: transparent; }
+:root .android-image-preview {
+  --button-hover-background: rgba(5, 16, 32, .78);
+  --button-hover-color: inherit;
+  --button-hover-border: transparent;
+}
+:root :is(button, .composer-file-action):not(:disabled):hover {
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
+  box-shadow: inset 0 0 0 1px var(--button-hover-border);
+}
+:root :is(button, .composer-file-action):not(:disabled):active {
+  scale: .96;
+  filter: brightness(.9);
+}
+:root button:disabled { scale: 1; filter: none; }
+.file-input::file-selector-button {
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease, filter 120ms ease, scale 100ms ease;
+}
+.file-input:not(:disabled)::file-selector-button:hover { background: #dce7fc; color: #254fb6; box-shadow: inset 0 0 0 1px #b9cdf4; }
+.file-input:not(:disabled)::file-selector-button:active { scale: .96; filter: brightness(.9); }
+@media (prefers-reduced-motion: reduce) {
+  :root :is(button, .composer-file-action), .file-input::file-selector-button { transition: none; }
+}

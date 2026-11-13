@@ -667,11 +667,11 @@ describe("android shell", () => {
     const dialog = await screen.findByRole("dialog", { name: "编辑消息 1" });
     const actions = dialog.querySelector(".composer-mobile-actions");
     expect(actions).toBeTruthy();
-    expect(Array.from(actions!.querySelectorAll(":scope > :is(button, label)")).map((item) => item.textContent)).toEqual([
+    expect(Array.from(actions!.querySelectorAll(":scope > :is(button, label)")).map((item) => item.getAttribute("aria-label") || item.textContent)).toEqual([
       "拆分",
-      "图片",
+      "选择图片",
       "保存",
-      "×",
+      "关闭编辑",
     ]);
 
     const textarea = within(dialog).getByLabelText("消息内容");
@@ -702,7 +702,7 @@ describe("android shell", () => {
     const menu = await screen.findByRole("menu", { name: "消息快捷操作" });
     const labels = within(menu)
       .getAllByRole("menuitem")
-      .map((item) => item.textContent);
+      .map((item) => item.getAttribute("aria-label") || item.textContent);
     expect(labels).toEqual([
       "复制",
       "粘贴",

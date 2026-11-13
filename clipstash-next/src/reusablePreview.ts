@@ -1,5 +1,5 @@
 export type PreviewPosition = { left: number; top: number; width: number; height: number };
-export type PreparedPreview = { filename: string; src: string; width: number; height: number; release: () => Promise<void> };
+export type PreparedPreview = { filename: string; src: string; text?: string; width: number; height: number; release: () => Promise<void> };
 export interface PreviewWindowPort {
   hide(): Promise<void>;
   clear(): Promise<void>;

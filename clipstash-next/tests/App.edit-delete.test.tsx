@@ -712,9 +712,9 @@ describe("edit and delete guarded actions", () => {
     const dialog = await screen.findByRole("dialog", { name: "编辑消息 10" });
     const headerActions = dialog.querySelector(".composer-header-actions");
     expect(headerActions).toBeTruthy();
-    expect(Array.from(headerActions!.querySelectorAll("button")).map((button) => button.textContent)).toEqual([
+    expect(Array.from(headerActions!.querySelectorAll("button")).map((button) => button.getAttribute("aria-label") || button.textContent)).toEqual([
       "拆分",
-      "×",
+      "关闭编辑",
     ]);
 
     await user.click(within(dialog).getByRole("button", { name: "拆分" }));
@@ -1114,6 +1114,8 @@ describe("edit and delete guarded actions", () => {
     );
 
     const feedback = await screen.findByText("已复制 #10");
+    expect(feedback.closest("footer.app-bottom-bar")).toBeTruthy();
+    expect(screen.getByLabelText("操作提示").contains(feedback)).toBe(true);
     await user.click(feedback.closest(".operation-feedback") as HTMLElement);
 
     await waitFor(() => {
@@ -1690,6 +1692,37 @@ describe("edit and delete guarded actions", () => {
     expect(await screen.findByText("已导入 #10 · 2 项")).toBeTruthy();
     expect(screen.getByText("导入后已自动归档。")).toBeTruthy();
     expect(commandCallCount("paste_legacy_import_queue")).toBe(0);
+    expect(commandCallCount("get_legacy_stats")).toBe(2);
+    expect(commandCallCount("list_legacy_messages")).toBe(2);
+  });
+
+  it("imports an archived message without re-archiving it", async () => {
+    const user = userEvent.setup();
+    listedMessages = [{ ...message, archived: true, archived_at: "2026-06-08 17:30:00" }];
+    appSettings = { ...appSettings, archive_after_import: true };
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "已归档" }));
+    const card = await screen.findByText("#10");
+    await user.click(
+      within(card.closest("article") as HTMLElement).getByRole("button", {
+        name: "导入",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("preview_legacy_message_import_queue", {
+        messageId: 10,
+        matchBlankLinesToImages: false,
+      });
+      expect(invokeMock).toHaveBeenCalledWith("paste_legacy_import_queue_to_recent_window", {
+        messageId: 10,
+        delayMs: 250,
+        archiveAfterSuccess: false,
+        matchBlankLinesToImages: false,
+      });
+    });
+    expect(await screen.findByText("已导入 #10 · 2 项")).toBeTruthy();
     expect(commandCallCount("get_legacy_stats")).toBe(2);
     expect(commandCallCount("list_legacy_messages")).toBe(2);
   });

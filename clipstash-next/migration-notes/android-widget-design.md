@@ -98,6 +98,7 @@ MVP 推荐 Kotlin 直接只读 SQLite：
 - 设置项 `widget_opacity`（0-100，默认 100 不透明）保存在应用设置 `settings.json`，与 `clipstash.db` 在同一数据目录。
 - 小组件侧由 `ClipStashWidgetData.loadWidgetOpacity()` 直接读文件解析（`parseWidgetOpacity` 为纯函数，走本地 JVM 单元测试，依赖 `testImplementation("org.json:json")` 提供真实 JSON 实现）。
 - 布局 `widget_todo.xml` 把卡片背景抽成独立 `ImageView`（`@+id/widget_background`），Provider 用 `RemoteViews.setInt(..., "setImageAlpha", opacity * 255 / 100)` 应用；RemoteViews 不能对任意 View 设 alpha，只能走 `ImageView.setImageAlpha`。
+- 根布局 `widget_root` 必须显式声明 `android:background="@android:color/transparent"`：Android 12+（targetSdk 31+）检测到小组件根布局没有背景时，会在内容层下垫系统默认小组件底板，调低不透明度后底板透出会让文字/圆圈看起来跟着变淡且壁纸透不进来；根布局有背景（含透明）系统才跳过默认底板。
 - 前端设置面板拖动滑杆后立即调用 `ClipStashAndroid.refreshWidgets()` 重建小组件生效。
 
 ## App 内刷新触发

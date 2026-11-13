@@ -2,7 +2,13 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent">
+
+    <!-- 根布局必须显式声明背景（哪怕是透明）：Android 12+ 检测到小组件根布局没有背景时，
+         会在整个内容层下面垫一层系统默认小组件底板；调低背景不透明度后这块底板会透出来，
+         文字/圆圈等元素看起来像跟着变淡，壁纸也透不进来。声明透明背景后系统不再垫底板，
+         不透明度只作用于 widget_background 一层，其余元素保持完全不透明。 -->
 
     <!-- 背景独立成 ImageView，供 RemoteViews.setInt(..., "setImageAlpha", ...) 调透明度 -->
     <ImageView

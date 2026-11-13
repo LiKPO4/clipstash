@@ -270,8 +270,9 @@ describe("message loading independent of image IO", () => {
     const callbacks = installTestIntersectionObserver();
     render(<App />);
     expect(await screen.findByText("测试消息 1")).toBeTruthy();
+    // The row can be painted before its passive IntersectionObserver effect runs.
+    await waitFor(() => expect(callbacks).toHaveLength(1));
     expect(pending).toHaveLength(0);
-    expect(callbacks).toHaveLength(1);
 
     await act(async () => {
       callbacks[0]([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);

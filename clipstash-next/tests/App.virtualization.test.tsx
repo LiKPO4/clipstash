@@ -5,7 +5,10 @@ import { MessageList } from "../src/App";
 import type { LegacyMessage } from "../src/api/types";
 
 const { formatMock } = vi.hoisted(() => ({ formatMock: vi.fn(() => "时间") }));
-vi.mock("../src/formatTime", () => ({ formatLocalTime: formatMock }));
+vi.mock("../src/formatTime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/formatTime")>(),
+  formatLocalTime: formatMock,
+}));
 
 type Props = ComponentProps<typeof MessageList>;
 function messages(count: number): LegacyMessage[] {
@@ -67,12 +70,30 @@ describe("bounded message rendering", () => {
     const list = p.listRef.current!;
     const first = within(container.querySelector("article")!).getByRole("button", { name: "编辑" });
     act(() => first.focus());
-    fireEvent.scroll(list, { target: { scrollTop: 190 * 5_000 } });
+    fireEvent.scroll(list, { target: { scrollTop: 188 * 5_000 } });
     expect(screen.getByText("消息 5001")).toBeTruthy();
     expect(document.activeElement).toBe(first);
     expect(container.querySelectorAll(".message-card").length).toBeLessThan(25);
     act(() => first.blur());
     expect(screen.queryByText("消息 1")).toBeNull();
+  });
+
+  it("groups pinned messages independently of dates and keeps archived messages in date groups", () => {
+    const rows = messages(7);
+    rows[0].pin = rows[1].pin = "top";
+    rows[1].created_at = "2026-09-03";
+    rows[3].pin = rows[4].pin = "bottom";
+    rows[4].created_at = "2026-09-02";
+    rows[5].archived = rows[6].archived = true;
+    rows[5].pin = "top";
+    rows[6].pin = "bottom";
+    const { container } = render(<MessageList {...props(rows)} />);
+    const headings = Array.from(container.querySelectorAll(".message-day-heading"), (heading) => heading.textContent);
+    expect(headings).toHaveLength(4);
+    expect(headings[0]).toBe("置顶");
+    expect(headings[1]).toMatch(/9 月 4 日$/);
+    expect(headings[2]).toBe("置底");
+    expect(headings[3]).toMatch(/9 月 4 日$/);
   });
 
   it("skips unrelated card renders while event handlers use the latest committed props", () => {
@@ -102,7 +123,7 @@ describe("bounded message rendering", () => {
       });
     });
     expect(parseFloat(space.style.height)).toBe(initialHeight + 320);
-    fireEvent.scroll(p.listRef.current!, { target: { scrollTop: 190 * 500 } });
+    fireEvent.scroll(p.listRef.current!, { target: { scrollTop: 188 * 500 } });
     expect(parseFloat(space.style.height)).toBe(initialHeight + 320);
   });
 
@@ -123,12 +144,12 @@ describe("bounded message rendering", () => {
     const rows = messages(120);
     const p = props(rows.slice(0, 60));
     const { rerender } = render(<MessageList {...p} />);
-    p.listRef.current!.scrollTop = 190 * 30;
+    p.listRef.current!.scrollTop = 188 * 30;
     rerender(<MessageList {...p} messages={rows.slice(0, 90)} />);
-    expect(p.listRef.current!.scrollTop).toBe(190 * 30);
+    expect(p.listRef.current!.scrollTop).toBe(188 * 30);
     expect(screen.getByText("消息 31")).toBeTruthy();
     rerender(<MessageList {...p} messages={rows} />);
-    expect(p.listRef.current!.scrollTop).toBe(190 * 30);
+    expect(p.listRef.current!.scrollTop).toBe(188 * 30);
     expect(screen.getByText("消息 31")).toBeTruthy();
   });
 });

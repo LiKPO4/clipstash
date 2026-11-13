@@ -3,9 +3,10 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ReusablePreview, type PreviewPosition, type PreviewWindowPort } from "./reusablePreview";
+import { TEXT_READER_SIZE } from "./textReading";
 
 type Metadata = { path: string; width: number; height: number; lease: string | null };
-export type DesktopPreviewSource = { filename: string; path: string; file?: File };
+export type DesktopPreviewSource = { filename: string; path: string; file?: File } | { filename: string; text: string };
 const label = "image-preview";
 
 async function createPreviewWindow(onDestroyed: () => void): Promise<PreviewWindowPort> {
@@ -71,7 +72,7 @@ async function createPreviewWindow(onDestroyed: () => void): Promise<PreviewWind
       return new Promise<void>((resolve, reject) => {
         pending = { id, resolve, reject,
           timer: window.setTimeout(() => { cancelLoad(); }, 8000) };
-        void emitTo(label, "clipstash-preview-load", { id, filename: source.filename, src: source.src })
+        void emitTo(label, "clipstash-preview-load", { id, filename: source.filename, src: source.src, ...(source.text !== undefined ? { text: source.text } : {}) })
           .catch(() => cancelLoad());
       });
     },
@@ -87,6 +88,9 @@ async function createPreviewWindow(onDestroyed: () => void): Promise<PreviewWind
 const preview = new ReusablePreview(createPreviewWindow);
 export function showDesktopPreview(source: DesktopPreviewSource, position: (width: number, height: number) => PreviewPosition) {
   return preview.show(async () => {
+    if ("text" in source) {
+      return { filename: source.filename, text: source.text, src: "", ...TEXT_READER_SIZE, release: async () => {} };
+    }
     if (source.file && source.file.size > 128 * 1024 * 1024) throw new Error("临时预览图片超过 128MiB");
     const metadata: Metadata = source.file
       ? await invoke("prepare_preview_upload", new Uint8Array(await source.file.arrayBuffer()))

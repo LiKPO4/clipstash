@@ -9,6 +9,9 @@ import {
   type ReactNode,
   type TouchEvent,
   type RefObject,
+  type CSSProperties,
+  createContext,
+  useContext,
   memo,
   useCallback,
   useMemo,
@@ -17,15 +20,20 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useVirtualizer, defaultRangeExtractor } from "@tanstack/react-virtual";
 import { DataTransferProgress } from "./transferProgress";
+import { TextPreviewButton } from "./TextPreviewButton";
+import { OverlayScrollbar } from "./OverlayScrollbar";
+import { CONTROL_ICON_PATHS } from "./controlIcons";
 import { importZipFile } from "./zipFileUpload";
 import { useCommittedCallback } from "./useCommittedCallback";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { showDesktopPreview, hideDesktopPreview } from "./desktopPreview";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
-import { formatLocalTime } from "./formatTime";
+import "./buttonFeedback.css";
+import { formatLocalTime, messageDayGroup } from "./formatTime";
 import { ThumbnailProvider, useThumbnail } from "./useThumbnail";
 import {
   archiveExportedMessages,
@@ -97,7 +105,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.2.6";
+const CURRENT_VERSION = "2.3.3";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -234,16 +242,29 @@ const MESSAGE_LONG_PRESS_DELAY_MS = 500;
 const MESSAGE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 const SCROLL_HOVER_RESUME_DELAY_MS = 150;
 
+function CloseIcon() {
+  return <svg className="control-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={CONTROL_ICON_PATHS.close} /></svg>;
+}
+
+function ToolbarIcon({ name }: { name: "pin" | "settings" | "search" }) {
+  return <svg className="toolbar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {name === "pin" ? <path d="M9 3h6l-1 6 4 4H6l4-4-1-6M12 13v8" /> : name === "settings" ? <><path d="M10 3h4l.7 2.4 1.8 1 2.4-.6 2 3.5-1.7 1.7v2l1.7 1.7-2 3.5-2.4-.6-1.8 1L14 21h-4l-.7-2.4-1.8-1-2.4.6-2-3.5L4.8 13v-2L3.1 9.3l2-3.5 2.4.6 1.8-1L10 3Z" /><circle cx="12" cy="12" r="3" /></> : <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></>}
+  </svg>;
+}
+
+const FeedbackHostContext = createContext<HTMLElement | null>(null);
+
 function App() {
   return <ThumbnailProvider><AppContent /></ThumbnailProvider>;
 }
 
 function AppContent() {
+  const [feedbackHost, setFeedbackHost] = useState<HTMLDivElement | null>(null);
   const [stats, setStats] = useState<LegacyStats | null>(null);
   const [page, setPage] = useState<LegacyMessagePage | null>(null);
   const [view, setView] = useState<MessageView>("normal");
   const [sort, setSort] = useState<SortOrder>(() => getStoredSort());
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(true);
   const [searchDraft, setSearchDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -357,6 +378,35 @@ function AppContent() {
 
   useEffect(() => {
     document.title = APP_TITLE;
+  }, []);
+
+  // 安卓上键盘弹出时窗口可能不重排，把视觉视口高度写入 CSS 变量，让弹窗按可见高度布局，避免整体被顶进状态栏。
+  useEffect(() => {
+    if (!IS_ANDROID) return;
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    // 启动时键盘未弹出，记录基准高度；WebView 的 innerHeight 等于视觉视口高度，不能用来判断键盘开合
+    const baselineHeight = viewport.height;
+    const apply = () => {
+      document.documentElement.style.setProperty("--visual-vh", `${viewport.height}px`);
+      document.documentElement.style.setProperty("--vv-top", `${viewport.offsetTop}px`);
+      // 键盘打开时底部安全区已被键盘占据，再扣 env(safe-area-inset-bottom) 会在弹窗和键盘之间留出空洞
+      if (viewport.offsetTop > 0 || viewport.height < baselineHeight - 100) {
+        document.documentElement.style.setProperty("--sa-bottom", "0px");
+      } else {
+        document.documentElement.style.removeProperty("--sa-bottom");
+      }
+    };
+    apply();
+    viewport.addEventListener("resize", apply);
+    viewport.addEventListener("scroll", apply);
+    return () => {
+      viewport.removeEventListener("resize", apply);
+      viewport.removeEventListener("scroll", apply);
+      document.documentElement.style.removeProperty("--visual-vh");
+      document.documentElement.style.removeProperty("--vv-top");
+      document.documentElement.style.removeProperty("--sa-bottom");
+    };
   }, []);
 
   useEffect(() => {
@@ -1036,7 +1086,7 @@ function AppContent() {
   function clearSearch() {
     setSearchDraft("");
     setSearchQuery("");
-    setSearchOpen(false);
+    setSearchOpen(true);
   }
 
   async function openExternalUrl(url: string) {
@@ -1940,7 +1990,9 @@ function AppContent() {
     try {
       const preview = await previewLegacyMessageImportQueue(message.id, matchBlankLinesToImages);
       setImportQueuePreview(preview);
-      await pasteImportQueue(preview);
+      // 已归档消息导入后不再走自动归档：set_message_archived 会刷新 archived_at，
+      // 对已归档消息重复归档只会无意义地改掉归档时间。
+      await pasteImportQueue(preview, archiveAfterImport && !message.archived);
     } catch (err) {
       setImportQueueError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1948,7 +2000,7 @@ function AppContent() {
     }
   }
 
-  async function pasteImportQueue(preview: LegacyImportQueuePreview) {
+  async function pasteImportQueue(preview: LegacyImportQueuePreview, archiveAfterSuccess: boolean) {
     if (pastingImportQueue) return;
 
     setPastingImportQueue(true);
@@ -1960,7 +2012,7 @@ function AppContent() {
       const result = await pasteLegacyImportQueueToRecentWindow({
         messageId: preview.message_id,
         delayMs: pasteIntervalMs,
-        archiveAfterSuccess: archiveAfterImport,
+        archiveAfterSuccess,
         matchBlankLinesToImages,
       });
       setImportQueuePasteAllResult(result.paste);
@@ -1992,11 +2044,10 @@ function AppContent() {
       (editText.length > 0 ? editText : null)) ||
       editImagesChanged(editingMessage, editImageItems));
   return (
-    <main
+    <FeedbackHostContext.Provider value={feedbackHost}><main
       className={IS_ANDROID ? "shell shell-android" : "shell"}
       style={{ fontSize: `${14 + fontScale}px` }}
     >
-      <DataTransferProgress />
       <header className="app-topbar">
         <div className="brand-block">
           <span className="app-icon" aria-hidden="true">
@@ -2009,11 +2060,34 @@ function AppContent() {
         </div>
 
         <nav className="top-actions" aria-label="应用操作">
+          {IS_ANDROID ? (
+            <button type="button" onClick={exportDataPackage} disabled={exportingData}>
+              {exportingData ? "导出中" : "导出"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={alwaysOnTop ? "icon-action active" : "icon-action"}
+              aria-label={alwaysOnTop ? "已置顶" : "置顶"}
+              aria-pressed={alwaysOnTop}
+              onClick={toggleAlwaysOnTop}
+              title={topmostError ? `置顶失败：${topmostError}` : undefined}
+            >
+              <ToolbarIcon name="pin" />
+            </button>
+          )}
+          <button type="button" className="icon-action" aria-label="设置" title="设置" onClick={() => setShowSettings(true)}><ToolbarIcon name="settings" /></button>
+        </nav>
+      </header>
+
+      {searchOpen && (
+        <form className="message-search" role="search" onSubmit={submitSearch}>
           <button
             type="button"
-            className={searchOpen || searchQuery ? "icon-action active" : "icon-action"}
+            className={searchQuery ? "icon-action active" : "icon-action"}
             onClick={() => {
-              setSearchOpen((open) => !open);
+              setSearchOpen(true);
+              window.requestAnimationFrame(() => document.querySelector<HTMLInputElement>(".message-search input")?.focus());
             }}
             aria-label="搜索消息"
             title="搜索消息"
@@ -2028,39 +2102,12 @@ function AppContent() {
               <path d="M15.5 15.5 21 21" />
             </svg>
           </button>
-          {IS_ANDROID ? (
-            <button type="button" onClick={exportDataPackage} disabled={exportingData}>
-              {exportingData ? "导出中" : "导出"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={alwaysOnTop ? "active" : ""}
-              onClick={toggleAlwaysOnTop}
-              title={topmostError ? `置顶失败：${topmostError}` : undefined}
-            >
-              {alwaysOnTop ? "已置顶" : "置顶"}
-            </button>
-          )}
-          <button type="button" onClick={() => setShowSettings(true)}>设置</button>
-          <button
-            type="button"
-            className="primary-new"
-            onClick={() => setShowComposer(true)}
-          >
-            + 新建
-          </button>
-        </nav>
-      </header>
 
-      {searchOpen && (
-        <form className="message-search" role="search" onSubmit={submitSearch}>
           <input
             type="search"
             value={searchDraft}
             onChange={(event) => setSearchDraft(event.target.value)}
             placeholder="搜索消息内容"
-            autoFocus
             aria-label="搜索消息内容"
           />
           {searchQuery && (
@@ -2068,9 +2115,7 @@ function AppContent() {
               清空
             </button>
           )}
-          <button type="submit" className="write-submit">
-            搜索
-          </button>
+          <button type="submit" className="search-submit" aria-label="搜索" title="搜索（Enter）"><kbd aria-hidden="true">↵</kbd></button>
         </form>
       )}
 
@@ -2130,7 +2175,7 @@ function AppContent() {
               textAreaHeight={editTextareaHeight}
               textAreaId="new-media-message-text"
               textDraft={mediaTextDraft}
-              title="编辑消息"
+              title="新建消息"
             />
           )}
 
@@ -2138,12 +2183,12 @@ function AppContent() {
             <div className="segmented" role="tablist" aria-label="消息视图">
               <button
                 type="button"
-                aria-label="普通"
+                aria-label="暂存"
                 className={view === "normal" ? "active" : ""}
                 onClick={() => setView("normal")}
               >
-                <span>普通</span>
-                <small>{stats.normal_count} 条消息</small>
+                <span>暂存</span>
+                <small>{stats.normal_count}条消息</small>
               </button>
               <button
                 type="button"
@@ -2152,29 +2197,16 @@ function AppContent() {
                 onClick={() => setView("archived")}
               >
                 <span>已归档</span>
-                <small>{stats.archived_count} 条消息</small>
+                <small>{stats.archived_count}条消息</small>
               </button>
             </div>
 
-            <div className="segmented" aria-label="排序">
-              <button
-                type="button"
-                className={sort === "newest" ? "active" : ""}
-                onClick={() => updateSort("newest")}
-              >
-                最新
-              </button>
-              <button
-                type="button"
-                className={sort === "oldest" ? "active" : ""}
-                onClick={() => updateSort("oldest")}
-              >
-                最早
-              </button>
-            </div>
+            <button type="button" className="sort-action" aria-label="切换消息排序" title="点击切换消息排序" onClick={() => updateSort(sort === "newest" ? "oldest" : "newest")}>
+              {sort === "newest" ? "最新优先 ↓" : "最早优先 ↑"}
+            </button>
           </section>
 
-          {page && (
+          {page && page.messages.length > 0 && (
             <MessageList
               listRef={messageListRef}
               messages={page.messages}
@@ -2205,13 +2237,19 @@ function AppContent() {
             <button
               type="button"
               className="empty empty-create-target"
+              onClick={IS_ANDROID && !searchQuery ? () => setShowComposer(true) : undefined}
               onDoubleClick={() => setShowComposer(true)}
             >
-              {searchQuery ? "没有匹配的消息。" : "当前视图没有消息。双击空白处创建。"}
+              {searchQuery ? "没有匹配的消息。" : IS_ANDROID ? "当前视图没有消息。点按此处创建。" : "当前视图没有消息。双击空白处创建。"}
             </button>
           )}
         </>
       )}
+
+      <footer className="app-bottom-bar">
+        <div className="app-bottom-feedback" ref={setFeedbackHost} aria-label="操作提示"><DataTransferProgress /></div>
+        <button type="button" className="primary-new" onClick={() => setShowComposer(true)}>+ 新建</button>
+      </footer>
 
       {contextMenu && (
         <MessageContextMenu
@@ -2660,7 +2698,7 @@ function AppContent() {
           )}
         </OperationFeedback>
       )}
-    </main>
+    </main></FeedbackHostContext.Provider>
   );
 }
 
@@ -2714,6 +2752,7 @@ function OperationFeedback({
   title: string;
   variant: "error" | "success";
 }) {
+  const host = useContext(FeedbackHostContext);
   const classes = [
     "operation-feedback",
     `operation-feedback-${variant}`,
@@ -2723,7 +2762,7 @@ function OperationFeedback({
     .filter(Boolean)
     .join(" ");
 
-  return (
+  const content = (
     <section
       className={classes}
       role={variant === "error" ? "alert" : "status"}
@@ -2741,11 +2780,12 @@ function OperationFeedback({
             onDismiss();
           }}
         >
-          ×
+          <CloseIcon />
         </button>
       )}
     </section>
   );
+  return surface === "floating" && host ? createPortal(content, host) : content;
 }
 
 /** 遮罩关闭守卫：按下与松开都必须落在遮罩本身，避免弹窗内拖选文本把松开位置当成点击外部。 */
@@ -2899,6 +2939,8 @@ function SettingsDialog({
 }) {
   const backdropDismiss = useBackdropDismiss(onClose);
 
+  const settingsScrollRef = useRef<HTMLDivElement | null>(null);
+
   function showAutoSavedNotice(message = "设置已自动保存到本机") {
     onSettingsNotice(message);
     window.setTimeout(() => onSettingsNotice(null), 1800);
@@ -2989,15 +3031,16 @@ function SettingsDialog({
       >
         <header className="edit-header">
           <div>
-            <h2>设置</h2>
+            <p className="settings-eyebrow">使用偏好</p><h2>设置</h2>
           </div>
           <button type="button" className="preview-close" onClick={onClose} aria-label="关闭设置">
-            ×
+            <CloseIcon />
           </button>
         </header>
 
-        <div className="settings-body">
+        <div className={isAndroid ? "settings-body" : "settings-body overlay-scroll-target"} ref={settingsScrollRef}>
           <section className="settings-form" aria-label="应用设置">
+            <SettingsGroup title="阅读与列表" description="调整显示与日常操作">
             {!isAndroid && (
               <>
                 <SettingSlider
@@ -3008,8 +3051,8 @@ function SettingsDialog({
                   suffix="秒"
                   value={hoverDelay}
                   onChange={changeHoverDelay}
+                  description="鼠标放在文字或图片上多久后显示预览；文字以竖版纸页阅读"
                 />
-                <p>鼠标放在图片上多久后显示预览</p>
 
                 <SettingSlider
                   label="滚动速度"
@@ -3019,19 +3062,10 @@ function SettingsDialog({
                   suffix="行"
                   value={scrollLines}
                   onChange={changeScrollLines}
+                  description="鼠标滚轮每次滚动的行数"
                 />
-                <p>鼠标滚轮每次滚动的行数</p>
 
-                <SettingSlider
-                  label="粘贴间隔"
-                  max={3000}
-                  min={50}
-                  step={50}
-                  suffix="毫秒"
-                  value={pasteIntervalMs}
-                  onChange={changePasteInterval}
-                />
-                <p>导入图文消息时每一项之间的等待时间</p>
+
               </>
             )}
 
@@ -3043,8 +3077,8 @@ function SettingsDialog({
               prefix={fontScale > 0 ? "+" : ""}
               value={fontScale}
               onChange={changeFontScale}
+                  description="调整消息列表、按钮和状态栏文字"
             />
-            <p>调整消息列表、按钮和状态栏文字</p>
 
             <label className="setting-row">
               <span>消息排序</span>
@@ -3081,8 +3115,20 @@ function SettingsDialog({
               </div>
             </label>
 
+            </SettingsGroup>
             {!isAndroid && (
               <>
+                <SettingsGroup title="快速导入" description="控制图文粘贴与归档方式">
+                <SettingSlider
+                  label="粘贴间隔"
+                  max={3000}
+                  min={50}
+                  step={50}
+                  suffix="毫秒"
+                  value={pasteIntervalMs}
+                  onChange={changePasteInterval}
+                  description="导入图文消息时每一项之间的等待时间"
+                />
                 <SettingToggle
                   checked={archiveAfterImport}
                   label="快速导入后自动归档"
@@ -3097,6 +3143,8 @@ function SettingsDialog({
                   onChange={changeMatchBlankLinesToImages}
                 />
 
+                </SettingsGroup>
+                <SettingsGroup title="桌面与快捷键" description="让暂存站随时可用">
                 <SettingToggle
                   checked={closeToTray}
                   label="关闭窗口时隐藏到托盘"
@@ -3125,10 +3173,11 @@ function SettingsDialog({
                     {error}
                   </p>
                 ))}
+                </SettingsGroup>
               </>
             )}
             {isAndroid && (
-              <>
+              <SettingsGroup title="手机与小组件" description="调整桌面展示与分享偏好">
                 <SettingSlider
                   label="小组件背景不透明度"
                   max={100}
@@ -3137,8 +3186,8 @@ function SettingsDialog({
                   suffix="%"
                   value={widgetOpacity}
                   onChange={changeWidgetOpacity}
+                  description="调低后桌面壁纸会透过小组件背景"
                 />
-                <p>调低后桌面壁纸会透过小组件背景</p>
 
                 <SettingToggle
                   checked={archiveAfterExport}
@@ -3146,10 +3195,11 @@ function SettingsDialog({
                   description="数据包分享后自动将本次导出的消息移入已归档"
                   onChange={changeArchiveAfterExport}
                 />
-              </>
+              </SettingsGroup>
             )}
             {settingsError && <p className="inline-error">{settingsError}</p>}
 
+            <SettingsGroup title="关于与更新" description={`需求暂存站 v${CURRENT_VERSION}`}>
             <button
               type="button"
               className="check-update-action"
@@ -3202,6 +3252,7 @@ function SettingsDialog({
             )}
 
             {settingsNotice && <p className="settings-notice">{settingsNotice}</p>}
+            </SettingsGroup>
           </section>
 
           <section className="paths settings-safety" aria-label="本地存储">
@@ -3263,7 +3314,7 @@ function SettingsDialog({
             {openPathError && <p className="inline-error">打开目录失败：{openPathError}</p>}
           </section>
         </div>
-
+        {!isAndroid && <OverlayScrollbar targetRef={settingsScrollRef} label="设置滚动条" floating />}
       </section>
       {dataImportPreview && (
         <DataImportPreviewDialog
@@ -3277,6 +3328,13 @@ function SettingsDialog({
   );
 }
 
+function SettingsGroup({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return <section className="settings-group" aria-label={title}>
+    <header><h3>{title}</h3><p>{description}</p></header>
+    <div className="settings-group-content">{children}</div>
+  </section>;
+}
+
 function DataImportPreviewDialog({
   importing,
   preview,
@@ -3288,21 +3346,24 @@ function DataImportPreviewDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const scrollRef = useRef<HTMLElement | null>(null);
   return (
     <section
       aria-label="确认导入数据包"
       aria-modal="true"
-      className="edit-dialog import-preview-dialog"
+      ref={scrollRef}
+      className={IS_ANDROID ? "edit-dialog import-preview-dialog" : "edit-dialog import-preview-dialog overlay-scroll-target"}
       role="dialog"
       onClick={(event) => event.stopPropagation()}
     >
+      {!IS_ANDROID && <OverlayScrollbar targetRef={scrollRef} label="导入预览滚动条" floating />}
       <header className="edit-header">
         <div>
           <p className="eyebrow">导入预览</p>
           <h2>确认导入数据包</h2>
         </div>
         <button type="button" className="preview-close" onClick={onCancel} aria-label="关闭导入预览">
-          ×
+          <CloseIcon />
         </button>
       </header>
       <div className="import-preview-summary">
@@ -3326,6 +3387,7 @@ function DataImportPreviewDialog({
 
 function SettingSlider({
   label,
+  description,
   max,
   min,
   onChange,
@@ -3335,6 +3397,7 @@ function SettingSlider({
   value,
 }: {
   label: string;
+  description?: string;
   max: number;
   min: number;
   onChange: (value: number) => void;
@@ -3351,7 +3414,9 @@ function SettingSlider({
         {value}
         {suffix && ` ${suffix}`}
       </strong>
+      {description && <small className="setting-description">{description}</small>}
       <input
+        style={{ "--range-progress": `${((value - min) / (max - min)) * 100}%` } as CSSProperties}
         type="range"
         min={min}
         max={max}
@@ -3470,6 +3535,12 @@ export function MessageList({
   showExternalImport,
 }: MessageListProps) {
   const virtualized = messages.length > 60;
+  const days = useMemo(() => messages.map((message) => {
+    if (!message.archived && message.pin !== "none") {
+      return { key: `pin:${message.pin}`, label: message.pin === "top" ? "置顶" : "置底" };
+    }
+    return messageDayGroup(message.created_at);
+  }), [messages]);
   const [focusedId, setFocusedId] = useState<number | null>(null);
   const getItemKey = useCallback((index: number) => messages[index].id, [messages]);
   const focusedIndex = useMemo(() => messages.findIndex((message) => message.id === focusedId), [messages, focusedId]);
@@ -3480,7 +3551,7 @@ export function MessageList({
   }, [focusedIndex]);
   const virtualizer = useVirtualizer({
     count: messages.length, getScrollElement: () => listRef.current,
-    getItemKey, estimateSize: () => 180, overscan: 5, gap: 10,
+    getItemKey, estimateSize: () => 180, overscan: 5, gap: isAndroid ? 10 : 8,
     enabled: virtualized, rangeExtractor,
     initialRect: { width: 370, height: 600 },
     initialOffset: () => listRef.current?.scrollTop ?? 0,
@@ -3535,8 +3606,10 @@ export function MessageList({
   const stableCopy = useCommittedCallback(scheduleTextCopy);
   const stableCancelCopy = useCommittedCallback(clearTextCopyTimer);
   useEffect(() => () => clearTextCopyTimer(), []);
-  function renderCard(message: LegacyMessage) {
-    return <MessageCard key={message.id} message={message}
+  function renderCard(message: LegacyMessage, index: number) {
+    return <div className="message-day-entry" key={message.id}>
+      {(index === 0 || days[index].key !== days[index - 1].key) && <div className="message-day-heading">{days[index].label}</div>}
+      <MessageCard message={message}
       isExpanded={expandedImageMessageIds.includes(message.id)}
       archivingMessageId={archivingMessageId} importingMessageId={importingMessageId}
       isAndroid={isAndroid} previewDelaySeconds={previewDelaySeconds}
@@ -3549,7 +3622,7 @@ export function MessageList({
       onMessageContextMenu={stableMessageContextMenu}
       onToggleImages={stableToggleImages}
       onPreview={stablePreview}
-    />;
+    /></div>;
   }
   const requestMore = useCommittedCallback(requestMoreIfNearBottom);
 
@@ -3580,6 +3653,7 @@ export function MessageList({
   }, [scrollLines, listRef, requestMore]);
 
   return (
+    <div className={isAndroid ? "message-list-frame" : "message-list-frame message-list-frame-overlay"}>
     <section
       className={`message-list${virtualized ? " message-list-virtual" : ""}`}
       onFocusCapture={(event) => {
@@ -3611,12 +3685,14 @@ export function MessageList({
             <div key={row.key} data-index={row.index} data-message-id={messages[row.index].id}
               ref={virtualizer.measureElement} className="message-virtual-row"
               style={{ transform: `translateY(${row.start}px)` }}>
-              {renderCard(messages[row.index])}
+              {renderCard(messages[row.index], row.index)}
             </div>
           ))}
         </div>
       ) : messages.map(renderCard)}
     </section>
+    {!isAndroid && <OverlayScrollbar targetRef={listRef} />}
+    </div>
   );
 }
 
@@ -3721,6 +3797,7 @@ const MessageCard = memo(function MessageCard({
               <div className="message-meta-text">
                 <div className="message-time-line">
                   <strong>#{message.id}</strong>
+                  {message.pin !== "none" && !message.archived && <span className="message-pin-label">{message.pin === "top" ? "置顶" : "置底"}</span>}
                   <span>{formatLocalTime(message.created_at)}</span>
                 </div>
                 {message.archived && (
@@ -3729,56 +3806,24 @@ const MessageCard = memo(function MessageCard({
                   </span>
                 )}
               </div>
-              <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
-                <button
-                  type="button"
-                  className={
-                    message.pin !== "none" && !message.archived
-                      ? "archive-action archive-action-pinned"
-                      : "archive-action"
-                  }
-                  disabled={archivingMessageId !== null}
-                  onClick={() => onArchive(message)}
-                >
-                  {archivingMessageId === message.id
-                    ? "处理中..."
-                    : message.archived
-                      ? "恢复"
-                      : "归档"}
-                </button>
-                {!message.archived && (
-                  <>
-                    {showExternalImport && (
-                      <button
-                        type="button"
-                        disabled={importingMessageId !== null}
-                        onClick={() => onOpenImportQueue(message)}
-                      >
-                        {importingMessageId === message.id ? "准备中..." : "导入"}
-                      </button>
-                    )}
-                    <button type="button" onClick={() => onEdit(message)}>
-                      编辑
-                    </button>
-                  </>
-                )}
-                {message.archived && (
-                  <button type="button" className="danger-action" onClick={() => onDelete(message)}>
-                    删除
-                  </button>
-                )}
-              </div>
+
             </header>
 
             {message.text_content ? (
-              <button
+              <TextPreviewButton
                 type="button"
                 className="message-text message-text-button"
+                text={message.text_content}
+                title={`消息 #${message.id}`}
+                isAndroid={isAndroid}
+                delay={previewDelaySeconds}
+                position={calculateScreenPreviewPosition}
+                beforePreview={() => onPreview(null)}
                 onClick={() => onCopyText(message)}
                 onDoubleClick={onCancelTextCopy}
               >
                 <span className="message-text-content">{message.text_content}</span>
-              </button>
+              </TextPreviewButton>
             ) : message.images.length === 0 ? (
               <p className="message-text empty-text">无文字内容</p>
             ) : (
@@ -3810,6 +3855,46 @@ const MessageCard = memo(function MessageCard({
                 )}
               </section>
             )}
+            <footer className="message-card-footer">
+              <div className="message-actions" aria-label={`消息 ${message.id} 操作`}>
+                <button
+                  type="button"
+                  className={
+                    message.pin !== "none" && !message.archived
+                      ? "archive-action archive-action-pinned"
+                      : "archive-action"
+                  }
+                  disabled={archivingMessageId !== null}
+                  onClick={() => onArchive(message)}
+                >
+                  {archivingMessageId === message.id
+                    ? "处理中..."
+                    : message.archived
+                      ? "恢复"
+                      : "归档"}
+                </button>
+                {showExternalImport && (
+                  <button
+                    type="button"
+                    className="import-action"
+                    disabled={importingMessageId !== null}
+                    onClick={() => onOpenImportQueue(message)}
+                  >
+                    {importingMessageId === message.id ? "准备中..." : "导入"}
+                  </button>
+                )}
+                {!message.archived && (
+                  <button type="button" onClick={() => onEdit(message)}>
+                    编辑
+                  </button>
+                )}
+                {message.archived && (
+                  <button type="button" className="danger-action" onClick={() => onDelete(message)}>
+                    删除
+                  </button>
+                )}
+              </div>
+            </footer>
           </article>
   );
 });
@@ -3979,6 +4064,8 @@ function MessageComposerDialog({
 }) {
   const backdropDismiss = useBackdropDismiss(handleClose);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const attachmentsScrollRef = useRef<HTMLElement | null>(null);
+  const editorScrollRef = useRef<HTMLElement | null>(null);
   const formId = `${textAreaId}-form`;
   const formRef = useRef<HTMLFormElement | null>(null);
   const [editorMenu, setEditorMenu] = useState<EditorMenuState | null>(null);
@@ -4155,7 +4242,8 @@ function MessageComposerDialog({
       <section
         aria-label={dialogLabel}
         aria-modal="true"
-        className={`edit-dialog composer-dialog edit-message-dialog${isAndroid ? " composer-dialog-android" : ""}`}
+        ref={editorScrollRef}
+        className={`edit-dialog composer-dialog edit-message-dialog${isAndroid ? " composer-dialog-android" : " overlay-scroll-target"}`}
         role="dialog"
         onDragOver={handleDragOver}
         onKeyDown={handleDialogKeyDown}
@@ -4164,11 +4252,9 @@ function MessageComposerDialog({
       >
         <header className="edit-header composer-header">
           <div>
-            <p className="eyebrow">{eyebrow}</p>
-            <h2>
-              {title}
-              <span className="composer-char-count">{charCount} 字符</span>
-            </h2>
+            <p className="eyebrow composer-eyebrow">{eyebrow}</p>
+            <h2>{title}</h2>
+            <span className="composer-char-count">{charCount} 字符</span>
           </div>
           {isAndroid ? (
             <div className="composer-mobile-actions">
@@ -4189,7 +4275,7 @@ function MessageComposerDialog({
                 {saving ? "保存中" : "保存"}
               </button>
               <button type="button" className="preview-close" onClick={handleClose} aria-label={closeAriaLabel}>
-                ×
+                <CloseIcon />
               </button>
             </div>
           ) : (
@@ -4205,7 +4291,7 @@ function MessageComposerDialog({
                 </button>
               )}
               <button type="button" className="preview-close" onClick={handleClose} aria-label={closeAriaLabel}>
-                ×
+                <CloseIcon />
               </button>
             </div>
           )}
@@ -4215,6 +4301,7 @@ function MessageComposerDialog({
           <section className="message-composer-box">
             <textarea
               ref={textAreaRef}
+              className={isAndroid ? undefined : "overlay-scroll-target"}
               id={textAreaId}
               aria-label="消息内容"
               value={textDraft}
@@ -4232,7 +4319,11 @@ function MessageComposerDialog({
               }}
             />
 
-            {imageItems.length > 0 && (
+          </section>
+
+          {imageItems.length > 0 && (
+            <section className={isAndroid ? "composer-attachments" : "composer-attachments overlay-scroll-target"} ref={attachmentsScrollRef} aria-label="图片附件">
+              <header><span>图片附件</span><small>{imageItems.length} 张</small></header>
               <div className="composer-image-grid" aria-label="已选图片">
                 {imageItems.map((item, index) => (
                   <ComposerImageTile
@@ -4247,8 +4338,9 @@ function MessageComposerDialog({
                   />
                 ))}
               </div>
-            )}
-          </section>
+              {!isAndroid && <OverlayScrollbar targetRef={attachmentsScrollRef} label="图片附件滚动条" floating />}
+            </section>
+          )}
 
           <input
             key={inputKey}
@@ -4291,6 +4383,10 @@ function MessageComposerDialog({
           />
         )}
 
+        {!isAndroid && <>
+          <OverlayScrollbar targetRef={textAreaRef} rightEdgeRef={editorScrollRef} label="消息正文滚动条" floating refreshKey={textDraft} />
+          <OverlayScrollbar targetRef={editorScrollRef} label="消息弹窗滚动条" floating />
+        </>}
         {(error || editorMenuError) && (
           <OperationFeedback variant="error" title={editorMenuError ? "操作失败" : errorTitle}>
             <p>{editorMenuError ?? error}</p>
@@ -4319,13 +4415,15 @@ function DeleteMessageDialog({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const backdropDismiss = useBackdropDismiss(onClose);
+  const scrollRef = useRef<HTMLElement | null>(null);
 
   return (
     <div className="preview-backdrop edit-backdrop" role="presentation" {...backdropDismiss}>
       <section
         aria-label={`删除消息 ${message.id}`}
         aria-modal="true"
-        className="delete-dialog"
+        ref={scrollRef}
+        className={IS_ANDROID ? "delete-dialog" : "delete-dialog overlay-scroll-target"}
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -4335,10 +4433,11 @@ function DeleteMessageDialog({
             <h2>删除 #{message.id}</h2>
           </div>
           <button type="button" className="preview-close" onClick={onClose} aria-label="关闭删除">
-            ×
+            <CloseIcon />
           </button>
         </header>
 
+        {!IS_ANDROID && <OverlayScrollbar targetRef={scrollRef} label="删除弹窗滚动条" floating />}
         <p className="delete-copy">
           这会删除这条消息和关联图片。
         </p>
@@ -4521,7 +4620,7 @@ function ComposerImageTile({
           aria-label={`删除图片 ${filename}`}
           title="删除图片"
         >
-          ×
+          <CloseIcon />
         </button>
       )}
     </div>
@@ -4984,6 +5083,7 @@ function AndroidImagePreview({
 }
 
 async function showHoverPreviewWindow(image: PreviewImage, anchor: DOMRect) {
+  window.dispatchEvent(new Event("clipstash-preview-replaced"));
   await showDesktopPreview({ filename: image.filename, path: image.path,
     file: image.images[image.index]?.file },
     (width, height) => calculateScreenPreviewPosition(anchor, width, height));
