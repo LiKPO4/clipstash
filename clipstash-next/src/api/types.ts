@@ -7,6 +7,7 @@ export type LegacyStats = {
   normal_count: number;
   archived_count: number;
   total_count: number;
+  urgent_count: number;
 };
 
 export type AppMigrationResult = {
@@ -158,6 +159,7 @@ export type LegacyMessage = {
   archived: boolean;
   archived_at: string | null;
   pin: MessagePin;
+  urgent: boolean;
   images: LegacyMessageImage[];
 };
 

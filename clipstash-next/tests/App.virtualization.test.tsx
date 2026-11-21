@@ -14,7 +14,7 @@ type Props = ComponentProps<typeof MessageList>;
 function messages(count: number): LegacyMessage[] {
   return Array.from({ length: count }, (_, index) => ({
     id: index + 1, text_content: `消息 ${index + 1}`, created_at: "2026-09-04",
-    archived: false, archived_at: null, pin: "none", images: [],
+    archived: false, archived_at: null, pin: "none", urgent: false, images: [],
   }));
 }
 function props(rows: LegacyMessage[]): Props {
@@ -76,6 +76,23 @@ describe("bounded message rendering", () => {
     expect(container.querySelectorAll(".message-card").length).toBeLessThan(25);
     act(() => first.blur());
     expect(screen.queryByText("消息 1")).toBeNull();
+  });
+
+  it("groups urgent messages ahead of pinned messages and marks the card", () => {
+    const rows = messages(3);
+    rows[0].urgent = true;
+    rows[0].pin = "bottom";
+    rows[1].pin = "top";
+    const { container } = render(<MessageList {...props(rows)} />);
+
+    const headings = Array.from(container.querySelectorAll(".message-day-heading"), (heading) => heading.textContent);
+    expect(headings).toHaveLength(3);
+    expect(headings[0]).toBe("紧急");
+    expect(headings[1]).toBe("置顶");
+    expect(headings[2]).toMatch(/9 月 4 日$/);
+    const urgentCard = container.querySelector(".message-card-urgent");
+    expect(urgentCard).not.toBeNull();
+    expect(within(urgentCard as HTMLElement).queryByText("置底")).toBeNull();
   });
 
   it("groups pinned messages independently of dates and keeps archived messages in date groups", () => {

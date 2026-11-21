@@ -19,6 +19,7 @@ import {
   previewLegacyMessageImportQueue,
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
+  setLegacyMessageUrgent,
   splitLegacyMessage,
   stageLegacyMessageImportToClipboard,
   updateLegacyMessageText,
@@ -225,6 +226,17 @@ describe("legacy api command contracts", () => {
     expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_archived", {
       messageId: 114,
       archived: true,
+    });
+  });
+
+  it("maps urgent state arguments to the backend command", async () => {
+    invokeMock.mockResolvedValueOnce({ id: 114, urgent: true });
+
+    await setLegacyMessageUrgent(114, true);
+
+    expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_urgent", {
+      messageId: 114,
+      urgent: true,
     });
   });
 

@@ -110,6 +110,7 @@ fn get_legacy_stats() -> Result<legacy_data::LegacyStats, String> {
         normal_count: stats.normal_count,
         archived_count: stats.archived_count,
         total_count: stats.total_count,
+        urgent_count: stats.urgent_count,
     })
 }
 
@@ -644,6 +645,14 @@ fn set_legacy_message_pinned(
     pin: legacy_model::MessagePin,
 ) -> Result<legacy_data::LegacyMessage, String> {
     app_data::set_message_pinned(message_id, pin)
+}
+
+#[tauri::command(async)]
+fn set_legacy_message_urgent(
+    message_id: i64,
+    urgent: bool,
+) -> Result<legacy_data::LegacyMessage, String> {
+    app_data::set_message_urgent(message_id, urgent)
 }
 
 #[tauri::command(async)]
@@ -1500,6 +1509,7 @@ pub fn run() {
             replace_legacy_message_images,
             set_legacy_message_archived,
             set_legacy_message_pinned,
+            set_legacy_message_urgent,
             set_launch_on_startup,
             split_legacy_message,
             split_legacy_message_selection,

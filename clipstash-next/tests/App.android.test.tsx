@@ -98,6 +98,7 @@ const normalPage = {
       archived: false,
       archived_at: null,
       pin: "none",
+      urgent: false,
       images: [],
     },
   ],
@@ -110,6 +111,7 @@ const createdMessage = {
   archived: false,
   archived_at: null,
   pin: "none",
+  urgent: false,
   images: [],
 };
 
@@ -704,6 +706,7 @@ describe("android shell", () => {
       .getAllByRole("menuitem")
       .map((item) => item.getAttribute("aria-label") || item.textContent);
     expect(labels).toEqual([
+      "紧急",
       "复制",
       "粘贴",
       "拆分",

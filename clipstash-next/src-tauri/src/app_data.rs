@@ -29,8 +29,8 @@ use crate::{
         create_image_message_for_path, create_mixed_message_for_path, create_text_message_for_path,
         delete_message_for_path, merge_message_with_neighbor_for_path,
         replace_message_images_for_path, set_message_archived_for_path,
-        set_message_pinned_for_path, split_message_for_path, split_message_selection_for_path,
-        update_text_message_for_path,
+        set_message_pinned_for_path, set_message_urgent_for_path, split_message_for_path,
+        split_message_selection_for_path, update_text_message_for_path,
     },
     legacy_write_precheck::{read_message_for_update_precheck, validate_replace_images_request},
     legacy_write_validation::{normalize_optional_text_message, normalize_text_message},
@@ -65,6 +65,7 @@ pub struct AppStats {
     pub normal_count: i64,
     pub archived_count: i64,
     pub total_count: i64,
+    pub urgent_count: i64,
 }
 
 #[derive(Serialize)]
@@ -447,6 +448,11 @@ pub fn set_message_pinned(message_id: i64, pin: MessagePin) -> Result<LegacyMess
     set_message_pinned_for_path(&paths.db_path, message_id, pin)
 }
 
+pub fn set_message_urgent(message_id: i64, urgent: bool) -> Result<LegacyMessage, String> {
+    let paths = ready_paths()?;
+    set_message_urgent_for_path(&paths.db_path, message_id, urgent)
+}
+
 pub fn message_is_pinned(message_id: i64) -> Result<bool, String> {
     let paths = ready_paths()?;
     let conn =
@@ -500,7 +506,7 @@ fn archive_messages_for_path(db_path: &Path, message_ids: &[i64]) -> Result<usiz
         let mut statement = transaction
             .prepare(
                 "UPDATE messages
-                 SET archived = 1, archived_at = ?1
+                 SET archived = 1, archived_at = ?1, urgent = 0
                  WHERE id = ?2 AND (archived = 0 OR archived IS NULL)",
             )
             .map_err(|err| format!("准备批量归档消息失败：{err}"))?;
@@ -717,7 +723,8 @@ fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             archived INTEGER DEFAULT 0,
             archived_at TIMESTAMP,
-            pinned INTEGER DEFAULT 0
+            pinned INTEGER DEFAULT 0,
+            urgent INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS message_images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -751,14 +758,23 @@ fn ensure_app_schema(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|err| format!("为 messages 表新增 pinned 列失败：{err}"))?;
     }
-    // 依赖 pinned 列的索引必须建在补列之后。
+    if !table_has_column(conn, "messages", "urgent")? {
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN urgent INTEGER DEFAULT 0",
+            [],
+        )
+        .map_err(|err| format!("为 messages 表新增 urgent 列失败：{err}"))?;
+    }
+    // 依赖 pinned / urgent 列的索引必须建在补列之后。
     conn.execute_batch(
         "
         CREATE INDEX IF NOT EXISTS idx_messages_normal_pinned
             ON messages(COALESCE(archived, 0), COALESCE(pinned, 0) DESC, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_normal_urgent
+            ON messages(COALESCE(archived, 0), COALESCE(urgent, 0) DESC, COALESCE(pinned, 0) DESC, created_at DESC, id DESC);
         ",
     )
-    .map_err(|err| format!("初始化钉住排序索引失败：{err}"))?;
+    .map_err(|err| format!("初始化消息优先级排序索引失败：{err}"))?;
     ensure_legacy_schema(conn)
 }
 
@@ -1211,6 +1227,10 @@ fn read_app_stats_from_paths(paths: &AppPaths) -> Result<AppStats, String> {
     )?;
     let archived_count = query_count(&conn, "SELECT COUNT(*) FROM messages WHERE archived = 1")?;
     let total_count = query_count(&conn, "SELECT COUNT(*) FROM messages")?;
+    let urgent_count = query_count(
+        &conn,
+        "SELECT COUNT(*) FROM messages WHERE COALESCE(archived, 0) = 0 AND COALESCE(urgent, 0) = 1",
+    )?;
 
     Ok(AppStats {
         data_dir: path_to_string(&paths.data_dir),
@@ -1221,6 +1241,7 @@ fn read_app_stats_from_paths(paths: &AppPaths) -> Result<AppStats, String> {
         normal_count,
         archived_count,
         total_count,
+        urgent_count,
     })
 }
 
@@ -1261,7 +1282,7 @@ fn audit_for_backup(operation: &str, message_id: i64, backup: &LegacyDbBackup) -
 #[cfg(test)]
 mod tests {
     #[test]
-    fn upgrades_old_schema_with_pinned_column_and_index() {
+    fn upgrades_old_schema_with_priority_columns_and_indexes() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "
@@ -1291,6 +1312,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_pinned, 1);
+        let has_urgent: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'urgent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_urgent, 1);
         let has_index: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_normal_pinned'",
@@ -1299,6 +1328,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_index, 1);
+        let has_urgent_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_normal_urgent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_urgent_index, 1);
         // 再次初始化必须保持幂等。
         super::ensure_app_schema(&conn).unwrap();
     }
@@ -1775,14 +1812,20 @@ mod tests {
         let conn = Connection::open(&db_path).unwrap();
         ensure_app_schema(&conn).unwrap();
         conn.execute_batch(
-            "INSERT INTO messages (id, text_content, archived) VALUES
-                (1, 'first', 0),
-                (2, 'second', 0),
-                (3, 'already archived', 1);",
+            "INSERT INTO messages (id, text_content, archived, urgent) VALUES
+                (1, 'first', 0, 1),
+                (2, 'second', 0, 1),
+                (3, 'already archived', 1, 0);",
         )
         .unwrap();
         drop(conn);
 
+        let paths = AppPaths {
+            data_dir: base.clone(),
+            db_path: db_path.clone(),
+            images_dir: base.join("images"),
+        };
+        assert_eq!(read_app_stats_from_paths(&paths).unwrap().urgent_count, 2);
         let archived = archive_messages_for_path(&db_path, &[1, 3, 99]).unwrap();
 
         let conn = Connection::open(&db_path).unwrap();
@@ -1805,6 +1848,23 @@ mod tests {
             },)
             .unwrap()
             .is_some());
+        assert_eq!(
+            query_count(
+                &conn,
+                "SELECT COUNT(*) FROM messages WHERE id = 1 AND urgent = 0"
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            query_count(
+                &conn,
+                "SELECT COUNT(*) FROM messages WHERE id = 2 AND urgent = 1"
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(read_app_stats_from_paths(&paths).unwrap().urgent_count, 1);
 
         drop(conn);
         fs::remove_dir_all(base).unwrap();

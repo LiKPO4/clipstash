@@ -66,6 +66,7 @@ pub struct LegacyMessage {
     pub archived: bool,
     pub archived_at: Option<String>,
     pub pin: MessagePin,
+    pub urgent: bool,
     pub images: Vec<LegacyMessageImage>,
 }
 

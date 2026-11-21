@@ -149,6 +149,36 @@ jobs:
           Write-Output "value=$ver" >> $env:GITHUB_OUTPUT
           Write-Host "Build version: $ver"
 
+      - name: Sync ClipStash Next version
+        shell: pwsh
+        env:
+          CLIPSTASH_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = $env:CLIPSTASH_VERSION
+
+          $cargoTomlPath = "clipstash-next\src-tauri\Cargo.toml"
+          $tauriConfigPath = "clipstash-next\src-tauri\tauri.conf.json"
+          $appPath = "clipstash-next\src\App.tsx"
+
+          $syncPackageJson = @'
+          const fs = require("fs");
+          const version = process.env.CLIPSTASH_VERSION;
+          for (const path of ["clipstash-next/package.json", "clipstash-next/package-lock.json"]) {
+            const data = JSON.parse(fs.readFileSync(path, "utf8"));
+            data.version = version;
+            if (data.packages && data.packages[""]) {
+              data.packages[""].version = version;
+            }
+            fs.writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
+          }
+          '@
+          node -e $syncPackageJson
+
+          (Get-Content $cargoTomlPath -Raw) -replace '(?m)^version = "[0-9]+\.[0-9]+\.[0-9]+"', "version = `"$ver`"" | Set-Content $cargoTomlPath -NoNewline
+          (Get-Content $tauriConfigPath -Raw) -replace '"version": "[0-9]+\.[0-9]+\.[0-9]+"', "`"version`": `"$ver`"" -replace '"title": ".*@linjianglu"', "`"title`": `"需求暂存站 v$ver  @linjianglu`"" | Set-Content $tauriConfigPath -NoNewline
+          (Get-Content $appPath -Raw) -replace 'const CURRENT_VERSION = "[0-9]+\.[0-9]+\.[0-9]+";', "const CURRENT_VERSION = `"$ver`";" | Set-Content $appPath -NoNewline
+
       - name: Restore Android signing keystore
         shell: pwsh
         env:

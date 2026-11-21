@@ -1,6 +1,8 @@
 package com.clipstash.next
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ClipStashWidgetDataTest {
@@ -41,5 +43,23 @@ class ClipStashWidgetDataTest {
     assertEquals(100, ClipStashWidgetData.parseWidgetOpacity("""{"widget_opacity": 150}"""))
     assertEquals(0, ClipStashWidgetData.parseWidgetOpacity("""{"widget_opacity": -20}"""))
     assertEquals(100, ClipStashWidgetData.parseWidgetOpacity("""{"widget_opacity": "NaN"}"""))
+  }
+
+  @Test
+  fun clearsUrgentOnlyWhenSchemaHasUrgentColumn() {
+    val withUrgent = ClipStashWidgetData.archiveMessageSql(hasUrgentColumn = true)
+    assertTrue(withUrgent.contains("urgent = 0"))
+
+    val withoutUrgent = ClipStashWidgetData.archiveMessageSql(hasUrgentColumn = false)
+    assertFalse(withoutUrgent.contains("urgent"))
+  }
+
+  @Test
+  fun ordersLatestItemsByUrgentAndPinnedWhenColumnsExist() {
+    val full = ClipStashWidgetData.latestItemsSql(hasUrgentColumn = true, hasPinnedColumn = true)
+    assertTrue(full.contains("ORDER BY COALESCE(m.urgent, 0) DESC, COALESCE(m.pinned, 0) DESC, m.created_at DESC, m.id DESC"))
+
+    val legacy = ClipStashWidgetData.latestItemsSql(hasUrgentColumn = false, hasPinnedColumn = false)
+    assertTrue(legacy.contains("ORDER BY m.created_at DESC, m.id DESC"))
   }
 }

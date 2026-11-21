@@ -1085,6 +1085,19 @@ textarea:focus,
   box-shadow: none;
 }
 
+.message-card.message-card-urgent {
+  border-color: var(--danger);
+}
+
+.message-card-urgent::before {
+  background: var(--danger);
+}
+
+.message-pin-label.message-urgent-label {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .message-meta strong {
   color: var(--muted); font-family: Consolas, monospace; font-size: 11px; font-weight: 400;
 }
@@ -1644,7 +1657,7 @@ textarea:focus,
 }
 
 .settings-dialog > .edit-header {
-  align-items: center; padding: 18px 18px 16px; border-bottom: 1px solid var(--line); background: white;
+  align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--line); background: white;
 }
 
 .settings-body {

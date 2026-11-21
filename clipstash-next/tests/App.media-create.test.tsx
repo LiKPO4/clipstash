@@ -98,6 +98,7 @@ const createResult = {
     archived: false,
     archived_at: null,
     pin: "none",
+    urgent: false,
     images: [
       {
         id: 301,

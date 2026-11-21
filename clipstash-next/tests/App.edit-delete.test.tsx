@@ -56,6 +56,7 @@ const stats = {
   normal_count: 1,
   archived_count: 0,
   total_count: 1,
+  urgent_count: 0,
 };
 
 const message = {
@@ -65,6 +66,7 @@ const message = {
   archived: false,
   archived_at: null,
   pin: "none",
+  urgent: false,
   images: [
     {
       id: 20,
@@ -321,6 +323,7 @@ describe("edit and delete guarded actions", () => {
 
   beforeEach(() => {
     appSettings = { ...defaultAppSettings };
+    stats.urgent_count = 0;
     isAlwaysOnTopMock.mockResolvedValue(false);
     setAlwaysOnTopMock.mockResolvedValue(undefined);
     listedMessages = [message];
@@ -501,6 +504,64 @@ describe("edit and delete guarded actions", () => {
       expect(setAlwaysOnTopMock).toHaveBeenCalledWith(true);
     });
     expect(screen.getByRole("button", { name: "已置顶" })).toBeTruthy();
+  });
+
+  it("starts always-on-top for urgent messages without persisting the preference", async () => {
+    const user = userEvent.setup();
+    stats.urgent_count = 1;
+    listedMessages = [{ ...message, urgent: true }];
+    render(<App />);
+
+    const topmostButton = await screen.findByRole("button", { name: "已置顶" });
+    await waitFor(() => {
+      expect(setAlwaysOnTopMock).toHaveBeenCalledWith(true);
+    });
+    expect(appSettings.always_on_top).toBe(false);
+
+    await user.click(topmostButton);
+
+    expect(await screen.findByRole("button", { name: "置顶" })).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+      patch: { always_on_top: false },
+    });
+    expect(appSettings.always_on_top).toBe(false);
+  });
+
+  it("keeps urgent startup always-on-top across unrelated settings updates and delayed isAlwaysOnTop", async () => {
+    const user = userEvent.setup();
+    let resolveInitialTopmost!: (value: boolean) => void;
+    isAlwaysOnTopMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveInitialTopmost = resolve;
+        }),
+    );
+    stats.urgent_count = 1;
+    listedMessages = [{ ...message, urgent: true }];
+    render(<App />);
+
+    await screen.findByRole("button", { name: "已置顶" });
+    await waitFor(() => {
+      expect(setAlwaysOnTopMock).toHaveBeenCalledWith(true);
+    });
+
+    // 模拟挂载时的 isAlwaysOnTop() 晚于紧急置顶返回旧值 false
+    resolveInitialTopmost(false);
+    await Promise.resolve();
+    expect(screen.getByRole("button", { name: "已置顶" })).toBeTruthy();
+
+    setAlwaysOnTopMock.mockClear();
+
+    // 修改无关设置（切换排序）不应撤掉紧急临时置顶
+    await user.click(screen.getByRole("button", { name: "切换消息排序" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_app_settings", {
+        patch: { sort: "oldest" },
+      });
+    });
+    expect(setAlwaysOnTopMock).not.toHaveBeenCalledWith(false);
+    expect(screen.getByRole("button", { name: "已置顶" })).toBeTruthy();
+    expect(appSettings.always_on_top).toBe(false);
   });
 
   it("loads more messages automatically near the list bottom", async () => {

@@ -158,18 +158,11 @@ object ClipStashWidgetData {
 
   private fun queryLatestItems(db: SQLiteDatabase): List<ClipStashWidgetItem> {
     val items = mutableListOf<ClipStashWidgetItem>()
-    db.rawQuery(
-      """
-        SELECT m.id, m.text_content, COUNT(mi.id) AS image_count
-        FROM messages m
-        LEFT JOIN message_images mi ON mi.message_id = m.id
-        WHERE m.archived = 0 OR m.archived IS NULL
-        GROUP BY m.id
-        ORDER BY m.created_at DESC, m.id DESC
-        LIMIT $WIDGET_ITEM_LIMIT
-      """.trimIndent(),
-      emptyArray(),
-    ).use { cursor ->
+    val sql = latestItemsSql(
+      hasUrgentColumn = db.hasColumn("messages", "urgent"),
+      hasPinnedColumn = db.hasColumn("messages", "pinned"),
+    )
+    db.rawQuery(sql, emptyArray()).use { cursor ->
       while (cursor.moveToNext()) {
         val text = cursor.getString(1)?.trim().orEmpty()
         val imageCount = cursor.getInt(2)
@@ -179,6 +172,50 @@ object ClipStashWidgetData {
     return items
   }
 
+  internal fun latestItemsSql(hasUrgentColumn: Boolean, hasPinnedColumn: Boolean): String {
+    val priorityPrefix = buildString {
+      if (hasUrgentColumn) append("COALESCE(m.urgent, 0) DESC, ")
+      if (hasPinnedColumn) append("COALESCE(m.pinned, 0) DESC, ")
+    }
+    return """
+        SELECT m.id, m.text_content, COUNT(mi.id) AS image_count
+        FROM messages m
+        LEFT JOIN message_images mi ON mi.message_id = m.id
+        WHERE m.archived = 0 OR m.archived IS NULL
+        GROUP BY m.id
+        ORDER BY ${priorityPrefix}m.created_at DESC, m.id DESC
+        LIMIT $WIDGET_ITEM_LIMIT
+      """.trimIndent()
+  }
+
+  internal fun archiveMessageSql(hasUrgentColumn: Boolean): String {
+    return if (hasUrgentColumn) {
+      """
+        UPDATE messages
+        SET archived = 1, archived_at = datetime('now'), urgent = 0
+        WHERE id = ? AND (archived = 0 OR archived IS NULL)
+      """.trimIndent()
+    } else {
+      """
+        UPDATE messages
+        SET archived = 1, archived_at = datetime('now')
+        WHERE id = ? AND (archived = 0 OR archived IS NULL)
+      """.trimIndent()
+    }
+  }
+
+  private fun SQLiteDatabase.hasColumn(tableName: String, columnName: String): Boolean {
+    rawQuery("PRAGMA table_info($tableName)", emptyArray()).use { cursor ->
+      val nameIndex = cursor.getColumnIndex("name")
+      while (cursor.moveToNext()) {
+        if (nameIndex >= 0 && cursor.getString(nameIndex) == columnName) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   // execSQL 不能执行带结果行的语句，busy_timeout 赋值会返回一行导致抛异常，
   // 这里改用 rawQuery 设置超时。
   private fun SQLiteDatabase.applyBusyTimeout() {
@@ -186,13 +223,8 @@ object ClipStashWidgetData {
   }
 
   private fun SQLiteDatabase.execArchiveMessage(messageId: Long): Int {
-    return compileStatement(
-      """
-        UPDATE messages
-        SET archived = 1, archived_at = datetime('now')
-        WHERE id = ? AND (archived = 0 OR archived IS NULL)
-      """.trimIndent(),
-    ).use { statement ->
+    val sql = archiveMessageSql(hasColumn("messages", "urgent"))
+    return compileStatement(sql).use { statement ->
       statement.bindLong(1, messageId)
       statement.executeUpdateDelete()
     }

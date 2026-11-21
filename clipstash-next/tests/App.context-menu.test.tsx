@@ -57,6 +57,7 @@ const stats = {
   normal_count: 2,
   archived_count: 1,
   total_count: 3,
+  urgent_count: 0,
 };
 
 const image = {
@@ -73,6 +74,7 @@ const message = {
   archived: false,
   archived_at: null,
   pin: "none",
+  urgent: false,
   images: [image],
 };
 
@@ -83,6 +85,7 @@ const splittableMessage = {
   archived: false,
   archived_at: null,
   pin: "none",
+  urgent: false,
   images: [image],
 };
 
@@ -93,6 +96,7 @@ const neighborMessage = {
   archived: false,
   archived_at: null,
   pin: "none",
+  urgent: false,
   images: [],
 };
 
@@ -103,6 +107,7 @@ const archivedMessage = {
   archived: true,
   archived_at: "2026-06-07 18:00:00",
   pin: "none",
+  urgent: false,
   images: [],
 };
 
@@ -182,6 +187,7 @@ describe("message card context menu", () => {
 
   beforeEach(() => {
     appSettings = { ...defaultAppSettings };
+    stats.urgent_count = 0;
     normalMessages = [message, neighborMessage];
     isAlwaysOnTopMock.mockResolvedValue(false);
     setAlwaysOnTopMock.mockResolvedValue(undefined);
@@ -222,6 +228,14 @@ describe("message card context menu", () => {
           item.id === args?.messageId ? { ...item, pin } : item,
         );
         return Promise.resolve({ ...message, pin });
+      }
+      if (command === "set_legacy_message_urgent") {
+        const urgent = Boolean(args?.urgent);
+        normalMessages = normalMessages.map((item) =>
+          item.id === args?.messageId ? { ...item, urgent } : item,
+        );
+        stats.urgent_count = normalMessages.filter((item) => item.urgent && !item.archived).length;
+        return Promise.resolve({ ...message, urgent });
       }
       if (command === "merge_legacy_message_with_neighbor") {
         return Promise.resolve(mergeResult);
@@ -282,6 +296,7 @@ describe("message card context menu", () => {
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
     expect(labels).toEqual([
+      "紧急",
       "复制",
       "粘贴",
       "拆分",
@@ -290,6 +305,64 @@ describe("message card context menu", () => {
       "向下合并",
       "向上合并",
     ]);
+  });
+
+  it("marks a message urgent and cancels it without losing its pin", async () => {
+    const user = userEvent.setup();
+    normalMessages = [{ ...message, pin: "top" }, neighborMessage];
+    render(<App />);
+    await screen.findByText("#10");
+
+    const menu = await openMenu(10);
+    await user.click(within(menu).getByRole("menuitem", { name: "紧急" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_urgent", {
+        messageId: 10,
+        urgent: true,
+      });
+    });
+    await waitFor(() => {
+      expect(cardOf(10).className).toContain("message-card-urgent");
+      expect(cardOf(10).className).toContain("message-card-pinned");
+    });
+    expect(within(cardOf(10)).getByText("紧急")).toBeTruthy();
+    expect(within(cardOf(10)).queryByText("置顶")).toBeNull();
+
+    const reopened = await openMenu(10);
+    await user.click(within(reopened).getByRole("menuitem", { name: "取消紧急" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_urgent", {
+        messageId: 10,
+        urgent: false,
+      });
+    });
+    await waitFor(() => {
+      expect(cardOf(10).className).not.toContain("message-card-urgent");
+      expect(cardOf(10).className).toContain("message-card-pinned");
+    });
+    expect(within(cardOf(10)).getByText("置顶")).toBeTruthy();
+  });
+
+  it("shows urgent error title when updating urgent status fails", async () => {
+    const user = userEvent.setup();
+    const baseImpl = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "set_legacy_message_urgent") {
+        return Promise.reject(new Error("数据库只读"));
+      }
+      return baseImpl ? baseImpl(command, args) : Promise.reject(new Error(command));
+    });
+
+    render(<App />);
+    await screen.findByText("#10");
+
+    const menu = await openMenu(10);
+    await user.click(within(menu).getByRole("menuitem", { name: "紧急" }));
+
+    expect(await screen.findByText("紧急状态更新失败")).toBeTruthy();
+    expect(screen.getByText("数据库只读")).toBeTruthy();
   });
 
   it("pins a normal message to the top and outlines the card", async () => {

@@ -272,6 +272,10 @@ export function setLegacyMessagePinned(messageId: number, pin: MessagePin) {
   return invoke<LegacyMessage>("set_legacy_message_pinned", { messageId, pin });
 }
 
+export function setLegacyMessageUrgent(messageId: number, urgent: boolean) {
+  return invoke<LegacyMessage>("set_legacy_message_urgent", { messageId, urgent });
+}
+
 export function copyLegacyImageToClipboard(filename: string) {
   return invoke<LegacyCopyImageResult>("copy_legacy_image_to_clipboard", {
     filename,

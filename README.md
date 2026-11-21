@@ -4,7 +4,7 @@ ClipStash（需求暂存站）是一个剪贴板暂存工具，用来快速保�
 
 当前仓库包含两个版本：
 
-- **ClipStash Next（推荐）**：`clipstash-next/`，基于 Tauri 2 + React + TypeScript + Rust + SQLite，当前版本 `v2.3.3`，支持 Windows 桌面与 Android。
+- **ClipStash Next（推荐）**：`clipstash-next/`，基于 Tauri 2 + React + TypeScript + Rust + SQLite，当前版本 `v2.3.4`，支持 Windows 桌面与 Android。
 - **旧版 Python/Tkinter**：根目录，当前版本 `v1.3.43`，继续可用，但不再新增大功能。
 
 Next 版首次启动会只读扫描旧版 `%APPDATA%\ClipStash` 数据并复制到 `%APPDATA%\ClipStash Next`，不会破坏旧版数据。

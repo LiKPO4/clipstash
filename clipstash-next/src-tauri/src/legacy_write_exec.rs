@@ -4,7 +4,7 @@ use crate::{
     },
     legacy_model::{LegacyMessage, MergeDirection, MessagePin, MessageView, SortOrder},
     legacy_query::{read_legacy_message_by_id, view_where_sql},
-    legacy_schema::{configure_connection, ensure_legacy_schema},
+    legacy_schema::{configure_connection, ensure_legacy_schema, table_has_column},
     legacy_write_precheck::validate_replace_images_request,
     legacy_write_validation::validate_images_data,
 };
@@ -341,17 +341,61 @@ fn find_neighbor_message_id(
             .unwrap_or_else(|| anchor.created_at.clone()),
     };
     // 显示顺序：newest 降序、oldest 升序；“下方”沿显示顺序前进，“上方”相反。
-    let (compare_op, order_dir, label) = match (direction, sort) {
+    let (time_compare_op, time_order_dir, label) = match (direction, sort) {
         (MergeDirection::Down, SortOrder::Newest) => ("<", "DESC", "下方"),
         (MergeDirection::Up, SortOrder::Newest) => (">", "ASC", "上方"),
         (MergeDirection::Down, SortOrder::Oldest) => (">", "ASC", "下方"),
         (MergeDirection::Up, SortOrder::Oldest) => ("<", "DESC", "上方"),
     };
+    if view == MessageView::Normal {
+        let has_urgent = table_has_column(conn, "messages", "urgent")?;
+        let has_pinned = table_has_column(conn, "messages", "pinned")?;
+        if has_urgent || has_pinned {
+            let urgent_expr = if has_urgent {
+                "COALESCE(urgent, 0)"
+            } else {
+                "0"
+            };
+            let pinned_expr = if has_pinned {
+                "COALESCE(pinned, 0)"
+            } else {
+                "0"
+            };
+            let anchor_urgent: i64 = if anchor.urgent { 1 } else { 0 };
+            let anchor_pinned: i64 = anchor.pin.to_stored();
+            // Normal 视图优先级列始终按 DESC 排在时间前；向下找更低优先级，向上找更高优先级。
+            let (priority_compare_op, priority_order_dir) = match direction {
+                MergeDirection::Down => ("<", "DESC"),
+                MergeDirection::Up => (">", "ASC"),
+            };
+            let sql = format!(
+                "SELECT id FROM messages \
+                 WHERE {where_sql} \
+                   AND ( \
+                     {urgent_expr} {priority_compare_op} ?1 \
+                     OR ({urgent_expr} = ?1 AND {pinned_expr} {priority_compare_op} ?2) \
+                     OR ({urgent_expr} = ?1 AND {pinned_expr} = ?2 AND {sort_expr} {time_compare_op} ?3) \
+                     OR ({urgent_expr} = ?1 AND {pinned_expr} = ?2 AND {sort_expr} = ?3 AND id {time_compare_op} ?4) \
+                   ) \
+                 ORDER BY {urgent_expr} {priority_order_dir}, {pinned_expr} {priority_order_dir}, {sort_expr} {time_order_dir}, id {time_order_dir} \
+                 LIMIT 1"
+            );
+            return conn
+                .query_row(
+                    &sql,
+                    params![anchor_urgent, anchor_pinned, anchor_sort_value, anchor.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(|err| format!("查找相邻消息失败：{err}"))?
+                .ok_or_else(|| format!("合并消息失败，{label}没有相邻消息"));
+        }
+    }
     let sql = format!(
         "SELECT id FROM messages \
          WHERE {where_sql} \
-           AND ({sort_expr} {compare_op} ?1 OR ({sort_expr} = ?1 AND id {compare_op} ?2)) \
-         ORDER BY {sort_expr} {order_dir}, id {order_dir} \
+           AND ({sort_expr} {time_compare_op} ?1 OR ({sort_expr} = ?1 AND id {time_compare_op} ?2)) \
+         ORDER BY {sort_expr} {time_order_dir}, id {time_order_dir} \
          LIMIT 1"
     );
     conn.query_row(&sql, params![anchor_sort_value, anchor.id], |row| {
@@ -508,6 +552,47 @@ pub(crate) fn set_message_pinned_for_path(
     read_legacy_message_by_id(&conn, &images_dir, message_id)
 }
 
+pub(crate) fn set_message_urgent_for_path(
+    db_path: &Path,
+    message_id: i64,
+    urgent: bool,
+) -> Result<LegacyMessage, String> {
+    if message_id <= 0 {
+        return Err("更新紧急状态失败，消息 id 必须大于 0".to_string());
+    }
+    if !db_path.is_file() {
+        return Err(format!(
+            "更新紧急状态失败，数据库不存在：{}",
+            db_path.display()
+        ));
+    }
+
+    let data_dir = db_path.parent().ok_or_else(|| {
+        format!(
+            "更新紧急状态失败，无法定位数据库目录：{}",
+            db_path.display()
+        )
+    })?;
+    let images_dir = data_dir.join("images");
+    let conn = Connection::open(db_path)
+        .map_err(|err| format!("打开数据库准备更新紧急状态失败：{err}"))?;
+    configure_connection(&conn)?;
+    ensure_legacy_schema(&conn)?;
+
+    let updated = conn
+        .execute(
+            "UPDATE messages SET urgent = ? WHERE id = ?",
+            params![if urgent { 1 } else { 0 }, message_id],
+        )
+        .map_err(|err| format!("更新紧急状态失败：{err}"))?;
+
+    if updated == 0 {
+        return Err(format!("更新紧急状态失败，消息不存在：{message_id}"));
+    }
+
+    read_legacy_message_by_id(&conn, &images_dir, message_id)
+}
+
 pub(crate) fn set_message_archived_for_path(
     db_path: &Path,
     message_id: i64,
@@ -541,9 +626,14 @@ pub(crate) fn set_message_archived_for_path(
     } else {
         None
     };
+    let archive_sql = if table_has_column(&conn, "messages", "urgent")? {
+        "UPDATE messages SET archived = ?, archived_at = ?, urgent = 0 WHERE id = ?"
+    } else {
+        "UPDATE messages SET archived = ?, archived_at = ? WHERE id = ?"
+    };
     let updated = conn
         .execute(
-            "UPDATE messages SET archived = ?, archived_at = ? WHERE id = ?",
+            archive_sql,
             params![archived_value, archived_at, message_id],
         )
         .map_err(|err| format!("更新归档状态失败：{err}"))?;
@@ -998,7 +1088,8 @@ mod pin_tests {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 archived INTEGER DEFAULT 0,
                 archived_at TIMESTAMP,
-                pinned INTEGER DEFAULT 0
+                pinned INTEGER DEFAULT 0,
+                urgent INTEGER DEFAULT 0
             );
             CREATE TABLE message_images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1040,6 +1131,65 @@ mod pin_tests {
     }
 
     #[test]
+    fn toggles_urgent_without_losing_pin_position() {
+        let fixture = create_fixture("urgent-toggle");
+        set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::Top)
+            .expect("pin message to top");
+
+        let urgent =
+            set_message_urgent_for_path(&fixture.db_path, 1, true).expect("mark message urgent");
+        assert!(urgent.urgent);
+        assert_eq!(urgent.pin, MessagePin::Top);
+
+        let cleared =
+            set_message_urgent_for_path(&fixture.db_path, 1, false).expect("clear urgent state");
+        assert!(!cleared.urgent);
+        assert_eq!(cleared.pin, MessagePin::Top);
+    }
+
+    #[test]
+    fn urgent_sorts_before_pinned_top() {
+        let fixture = create_fixture("urgent-order");
+        set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::Top).expect("pin old to top");
+        set_message_pinned_for_path(&fixture.db_path, 3, MessagePin::Bottom)
+            .expect("pin newest to bottom");
+        set_message_urgent_for_path(&fixture.db_path, 2, true).expect("mark middle urgent");
+
+        let page = list_legacy_messages_from_dir(
+            fixture.data_dir.clone(),
+            MessageView::Normal,
+            SortOrder::Newest,
+            None,
+            None,
+        )
+        .expect("list normal messages");
+
+        let ids = page
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![2, 1, 3]);
+        assert!(page.messages[0].urgent);
+    }
+
+    #[test]
+    fn archiving_clears_urgent_and_restore_does_not_restore_it() {
+        let fixture = create_fixture("urgent-archive");
+        set_message_urgent_for_path(&fixture.db_path, 1, true).expect("mark message urgent");
+
+        let archived = set_message_archived_for_path(&fixture.db_path, 1, true)
+            .expect("archive urgent message");
+        assert!(archived.archived);
+        assert!(!archived.urgent);
+
+        let restored = set_message_archived_for_path(&fixture.db_path, 1, false)
+            .expect("restore archived message");
+        assert!(!restored.archived);
+        assert!(!restored.urgent);
+    }
+
+    #[test]
     fn pinned_top_sorts_first_and_pinned_bottom_sorts_last() {
         let fixture = create_fixture("order");
         set_message_pinned_for_path(&fixture.db_path, 1, MessagePin::Top).expect("pin old to top");
@@ -1064,5 +1214,46 @@ mod pin_tests {
         assert_eq!(page.messages[0].pin, MessagePin::Top);
         assert_eq!(page.messages[1].pin, MessagePin::None);
         assert_eq!(page.messages[2].pin, MessagePin::Bottom);
+    }
+
+    #[test]
+    fn merge_follows_urgent_and_pinned_visual_order_in_both_sorts() {
+        // newest 视觉顺序：2(urgent) -> 1(top) -> 3(bottom)
+        let fixture_newest = create_fixture("merge-priority-newest");
+        set_message_pinned_for_path(&fixture_newest.db_path, 1, MessagePin::Top)
+            .expect("pin old to top");
+        set_message_pinned_for_path(&fixture_newest.db_path, 3, MessagePin::Bottom)
+            .expect("pin newest to bottom");
+        set_message_urgent_for_path(&fixture_newest.db_path, 2, true).expect("mark middle urgent");
+
+        let (merged, removed_id) = merge_message_with_neighbor_for_path(
+            &fixture_newest.db_path,
+            2,
+            MergeDirection::Down,
+            MessageView::Normal,
+            SortOrder::Newest,
+        )
+        .expect("merge urgent down into pinned top");
+        assert_eq!(removed_id, 1);
+        assert_eq!(merged.text_content.as_deref(), Some("新消息\n旧消息"));
+
+        // oldest 视觉顺序：2(urgent) -> 1(top) -> 3(bottom)，向上合并 3 应合并到 1
+        let fixture_oldest = create_fixture("merge-priority-oldest");
+        set_message_pinned_for_path(&fixture_oldest.db_path, 1, MessagePin::Top)
+            .expect("pin old to top");
+        set_message_pinned_for_path(&fixture_oldest.db_path, 3, MessagePin::Bottom)
+            .expect("pin newest to bottom");
+        set_message_urgent_for_path(&fixture_oldest.db_path, 2, true).expect("mark middle urgent");
+
+        let (merged_up, removed_up_id) = merge_message_with_neighbor_for_path(
+            &fixture_oldest.db_path,
+            3,
+            MergeDirection::Up,
+            MessageView::Normal,
+            SortOrder::Oldest,
+        )
+        .expect("merge pinned bottom up into pinned top");
+        assert_eq!(removed_up_id, 1);
+        assert_eq!(merged_up.text_content.as_deref(), Some("旧消息\n最新消息"));
     }
 }

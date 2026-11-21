@@ -69,6 +69,7 @@ import {
   replaceLegacyMessageImages,
   setLegacyMessageArchived,
   setLegacyMessagePinned,
+  setLegacyMessageUrgent,
   setLaunchOnStartup,
   splitLegacyMessage,
   splitLegacyMessageSelection,
@@ -105,7 +106,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.3.3";
+const CURRENT_VERSION = "2.3.4";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -306,7 +307,7 @@ function AppContent() {
   const [contextMenu, setContextMenu] = useState<MessageContextMenuState | null>(null);
   const [mergingMessageId, setMergingMessageId] = useState<number | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
-  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinError, setPinError] = useState<{ title: string; message: string } | null>(null);
   const [pinningMessageId, setPinningMessageId] = useState<number | null>(null);
   const [mergeResult, setMergeResult] = useState<LegacyMergeMessageResult | null>(null);
   const [splittingMessageId, setSplittingMessageId] = useState<number | null>(null);
@@ -364,6 +365,8 @@ function AppContent() {
   const androidShareTaskRef = useRef<Promise<void>>(Promise.resolve());
   // 上次实际调用 setAlwaysOnTop IPC 时的值，用于跳过无变化的重复调用（null 表示尚未调用过）。
   const lastAlwaysOnTopValueRef = useRef<boolean | null>(null);
+  const urgentStartupTopmostCheckedRef = useRef(false);
+  const urgentStartupTopmostOverrideRef = useRef(false);
   const dataPackageInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMessageListScrollTopRef = useRef<number | null>(null);
   const requestEpochRef = useRef(0);
@@ -704,6 +707,26 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    if (
+      IS_ANDROID ||
+      !appSettingsReady ||
+      !stats ||
+      urgentStartupTopmostCheckedRef.current
+    ) {
+      return;
+    }
+    urgentStartupTopmostCheckedRef.current = true;
+    if (!stats.urgent_count || lastAlwaysOnTopValueRef.current === true) return;
+
+    urgentStartupTopmostOverrideRef.current = true;
+    lastAlwaysOnTopValueRef.current = true;
+    setAlwaysOnTop(true);
+    getCurrentWindow()
+      .setAlwaysOnTop(true)
+      .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
+  }, [appSettingsReady, stats]);
+
+  useEffect(() => {
     let alive = true;
     if (IS_ANDROID) {
       return () => {
@@ -714,7 +737,7 @@ function AppContent() {
     getCurrentWindow()
       .isAlwaysOnTop()
       .then((isTopmost) => {
-        if (alive) setAlwaysOnTop(isTopmost);
+        if (alive && lastAlwaysOnTopValueRef.current === null) setAlwaysOnTop(isTopmost);
       })
       .catch((err: unknown) => {
         if (alive) setTopmostError(err instanceof Error ? err.message : String(err));
@@ -922,7 +945,9 @@ function AppContent() {
   }
 
   function applyAppSettings(settings: AppSettings) {
-    setAlwaysOnTop(settings.always_on_top);
+    const effectiveAlwaysOnTop =
+      urgentStartupTopmostOverrideRef.current || settings.always_on_top;
+    setAlwaysOnTop(effectiveAlwaysOnTop);
     setCloseToTray(settings.close_to_tray);
     setStartup(settings.launch_on_startup);
     setArchiveAfterImport(settings.archive_after_import);
@@ -938,10 +963,10 @@ function AppContent() {
     setSort(settings.sort);
     setMessageDoubleClickAction(settings.message_double_click_action ?? "edit");
     setWidgetOpacity(settings.widget_opacity ?? 100);
-    if (!IS_ANDROID && settings.always_on_top !== lastAlwaysOnTopValueRef.current) {
-      lastAlwaysOnTopValueRef.current = settings.always_on_top;
+    if (!IS_ANDROID && effectiveAlwaysOnTop !== lastAlwaysOnTopValueRef.current) {
+      lastAlwaysOnTopValueRef.current = effectiveAlwaysOnTop;
       getCurrentWindow()
-        .setAlwaysOnTop(settings.always_on_top)
+        .setAlwaysOnTop(effectiveAlwaysOnTop)
         .catch((err: unknown) => setTopmostError(err instanceof Error ? err.message : String(err)));
     }
   }
@@ -987,6 +1012,8 @@ function AppContent() {
 
   async function toggleAlwaysOnTop() {
     const nextAlwaysOnTop = !alwaysOnTop;
+    const previousUrgentOverride = urgentStartupTopmostOverrideRef.current;
+    urgentStartupTopmostOverrideRef.current = false;
     setTopmostError(null);
 
     try {
@@ -996,6 +1023,7 @@ function AppContent() {
       );
       await getCurrentWindow().setAlwaysOnTop(settings.always_on_top);
     } catch (err: unknown) {
+      urgentStartupTopmostOverrideRef.current = previousUrgentOverride;
       setTopmostError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -1914,8 +1942,32 @@ function AppContent() {
     try {
       await setLegacyMessagePinned(message.id, message.pin === position ? "none" : position);
       await refreshAppData();
+      refreshAndroidWidgets();
     } catch (err) {
-      setPinError(err instanceof Error ? err.message : String(err));
+      setPinError({
+        title: "钉住失败",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setPinningMessageId(null);
+    }
+  }
+
+  async function toggleMessageUrgentFromContextMenu(message: LegacyMessage) {
+    closeMessageContextMenu();
+    if (pinningMessageId !== null) return;
+
+    setPinningMessageId(message.id);
+    setPinError(null);
+    try {
+      await setLegacyMessageUrgent(message.id, !message.urgent);
+      await refreshAppData();
+      refreshAndroidWidgets();
+    } catch (err) {
+      setPinError({
+        title: "紧急状态更新失败",
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setPinningMessageId(null);
     }
@@ -2257,6 +2309,7 @@ function AppContent() {
           y={contextMenu.y}
           isArchived={contextMenu.message.archived}
           pin={contextMenu.message.pin}
+          urgent={contextMenu.message.urgent}
           canSplit={splitMessageLines(contextMenu.message.text_content ?? "").length >= 2}
           merging={mergingMessageId === contextMenu.message.id}
           onClose={closeMessageContextMenu}
@@ -2266,6 +2319,7 @@ function AppContent() {
           onTogglePin={(position) =>
             void toggleMessagePinnedFromContextMenu(contextMenu.message, position)
           }
+          onToggleUrgent={() => void toggleMessageUrgentFromContextMenu(contextMenu.message)}
           onMerge={(direction) => void mergeMessageWithNeighbor(contextMenu.message, direction)}
         />
       )}
@@ -2561,13 +2615,13 @@ function AppContent() {
 
       {pinError && (
         <OperationFeedback
-          dismissLabel="关闭钉住提示"
+          dismissLabel="关闭状态提示"
           onDismiss={() => setPinError(null)}
           surface="floating"
           variant="error"
-          title="钉住失败"
+          title={pinError.title}
         >
-          <p>{pinError}</p>
+          <p>{pinError.message}</p>
         </OperationFeedback>
       )}
 
@@ -3030,9 +3084,7 @@ function SettingsDialog({
         onClick={(event) => event.stopPropagation()}
       >
         <header className="edit-header">
-          <div>
-            <p className="settings-eyebrow">使用偏好</p><h2>设置</h2>
-          </div>
+          <h2>设置</h2>
           <button type="button" className="preview-close" onClick={onClose} aria-label="关闭设置">
             <CloseIcon />
           </button>
@@ -3040,7 +3092,7 @@ function SettingsDialog({
 
         <div className={isAndroid ? "settings-body" : "settings-body overlay-scroll-target"} ref={settingsScrollRef}>
           <section className="settings-form" aria-label="应用设置">
-            <SettingsGroup title="阅读与列表" description="调整显示与日常操作">
+            <SettingsGroup title="阅读与列表">
             {!isAndroid && (
               <>
                 <SettingSlider
@@ -3328,9 +3380,9 @@ function SettingsDialog({
   );
 }
 
-function SettingsGroup({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+function SettingsGroup({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return <section className="settings-group" aria-label={title}>
-    <header><h3>{title}</h3><p>{description}</p></header>
+    <header><h3>{title}</h3>{description && <p>{description}</p>}</header>
     <div className="settings-group-content">{children}</div>
   </section>;
 }
@@ -3536,6 +3588,9 @@ export function MessageList({
 }: MessageListProps) {
   const virtualized = messages.length > 60;
   const days = useMemo(() => messages.map((message) => {
+    if (!message.archived && message.urgent) {
+      return { key: "urgent", label: "紧急" };
+    }
     if (!message.archived && message.pin !== "none") {
       return { key: `pin:${message.pin}`, label: message.pin === "top" ? "置顶" : "置底" };
     }
@@ -3771,11 +3826,11 @@ const MessageCard = memo(function MessageCard({
 
   return (
           <article
-            className={
-              message.pin !== "none" && !message.archived
-                ? "message-card message-card-pinned"
-                : "message-card"
-            }
+            className={`message-card${
+              !message.archived && (message.urgent || message.pin !== "none")
+                ? " message-card-pinned"
+                : ""
+            }${!message.archived && message.urgent ? " message-card-urgent" : ""}`}
             key={message.id}
             onContextMenu={(event) => {
               event.preventDefault();
@@ -3797,7 +3852,11 @@ const MessageCard = memo(function MessageCard({
               <div className="message-meta-text">
                 <div className="message-time-line">
                   <strong>#{message.id}</strong>
-                  {message.pin !== "none" && !message.archived && <span className="message-pin-label">{message.pin === "top" ? "置顶" : "置底"}</span>}
+                  {!message.archived && message.urgent ? (
+                    <span className="message-pin-label message-urgent-label">紧急</span>
+                  ) : message.pin !== "none" && !message.archived ? (
+                    <span className="message-pin-label">{message.pin === "top" ? "置顶" : "置底"}</span>
+                  ) : null}
                   <span>{formatLocalTime(message.created_at)}</span>
                 </div>
                 {message.archived && (
@@ -3860,7 +3919,7 @@ const MessageCard = memo(function MessageCard({
                 <button
                   type="button"
                   className={
-                    message.pin !== "none" && !message.archived
+                    !message.archived && (message.urgent || message.pin !== "none")
                       ? "archive-action archive-action-pinned"
                       : "archive-action"
                   }
@@ -4946,6 +5005,7 @@ function MessageContextMenu({
   y,
   isArchived,
   pin,
+  urgent,
   canSplit,
   merging,
   onClose,
@@ -4953,12 +5013,14 @@ function MessageContextMenu({
   onPaste,
   onSplit,
   onTogglePin,
+  onToggleUrgent,
   onMerge,
 }: {
   x: number;
   y: number;
   isArchived: boolean;
   pin: MessagePin;
+  urgent: boolean;
   canSplit: boolean;
   merging: boolean;
   onClose: () => void;
@@ -4966,9 +5028,18 @@ function MessageContextMenu({
   onPaste: () => void;
   onSplit: () => void;
   onTogglePin: (position: "top" | "bottom") => void;
+  onToggleUrgent: () => void;
   onMerge: (direction: MergeDirection) => void;
 }) {
-  const items: ContextMenuItem[] = [{ key: "copy", label: "复制", action: onCopy }];
+  const items: ContextMenuItem[] = [];
+  if (!isArchived) {
+    items.push({
+      key: "urgent",
+      label: urgent ? "取消紧急" : "紧急",
+      action: onToggleUrgent,
+    });
+  }
+  items.push({ key: "copy", label: "复制", action: onCopy });
   if (!isArchived) {
     items.push({ key: "paste", label: "粘贴", action: onPaste });
     items.push({

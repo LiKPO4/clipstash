@@ -22,6 +22,7 @@ pub struct LegacyStats {
     pub normal_count: i64,
     pub archived_count: i64,
     pub total_count: i64,
+    pub urgent_count: i64,
 }
 
 pub(crate) fn read_legacy_stats_from_dir(data_dir: PathBuf) -> Result<LegacyStats, String> {
@@ -46,6 +47,14 @@ pub(crate) fn read_legacy_stats_from_dir(data_dir: PathBuf) -> Result<LegacyStat
     )?;
     let archived_count = query_count(&conn, "SELECT COUNT(*) FROM messages WHERE archived = 1")?;
     let total_count = query_count(&conn, "SELECT COUNT(*) FROM messages")?;
+    let urgent_count = if table_has_column(&conn, "messages", "urgent")? {
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM messages WHERE COALESCE(archived, 0) = 0 AND COALESCE(urgent, 0) = 1",
+        )?
+    } else {
+        0
+    };
 
     Ok(LegacyStats {
         data_dir: path_to_string(&data_dir),
@@ -56,6 +65,7 @@ pub(crate) fn read_legacy_stats_from_dir(data_dir: PathBuf) -> Result<LegacyStat
         normal_count,
         archived_count,
         total_count,
+        urgent_count,
     })
 }
 
@@ -93,15 +103,26 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         .map_err(|err| format!("只读打开旧数据库失败：{err}"))?;
     configure_connection(&conn)?;
     ensure_legacy_schema(&conn)?;
-    // 旧 Python 版库没有 pinned 列：读取时降级为未钉住，不写库加列（只读连接也加不了）。
+    // 旧 Python 版库没有 pinned / urgent 列：读取时降级为未钉住、非紧急，不写库加列。
     let has_pinned = table_has_column(&conn, "messages", "pinned")?;
     let pinned_select = if has_pinned {
         "COALESCE(pinned, 0)"
     } else {
         "0"
     };
-    let pinned_order_prefix = if has_pinned && view == MessageView::Normal {
-        "COALESCE(pinned, 0) DESC, "
+    let has_urgent = table_has_column(&conn, "messages", "urgent")?;
+    let urgent_select = if has_urgent {
+        "COALESCE(urgent, 0)"
+    } else {
+        "0"
+    };
+    let priority_order_prefix = if view == MessageView::Normal {
+        match (has_urgent, has_pinned) {
+            (true, true) => "COALESCE(urgent, 0) DESC, COALESCE(pinned, 0) DESC, ",
+            (true, false) => "COALESCE(urgent, 0) DESC, ",
+            (false, true) => "COALESCE(pinned, 0) DESC, ",
+            (false, false) => "",
+        }
     } else {
         ""
     };
@@ -137,10 +158,10 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
         view_where_sql(view).to_string()
     };
     let sql = format!(
-        "SELECT id, text_content, created_at, archived, archived_at, {pinned_select} \
+        "SELECT id, text_content, created_at, archived, archived_at, {pinned_select}, {urgent_select} \
          FROM messages \
          WHERE {where_sql} \
-         ORDER BY {pinned_order_prefix}{sort_column} {order}, id {order} \
+         ORDER BY {priority_order_prefix}{sort_column} {order}, id {order} \
          LIMIT ? OFFSET ?"
     );
 
@@ -156,6 +177,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
             archived == Some(1),
             row.get::<_, Option<String>>(4)?,
             MessagePin::from_stored(row.get::<_, i64>(5)?),
+            row.get::<_, i64>(6)? == 1,
         ))
     };
     let rows = if let Some(pattern) = search_pattern.as_deref() {
@@ -167,7 +189,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
 
     let mut messages = Vec::new();
     for row in rows {
-        let (id, text_content, created_at, archived, archived_at, pin) =
+        let (id, text_content, created_at, archived, archived_at, pin, urgent) =
             row.map_err(|err| format!("读取旧消息行失败：{err}"))?;
         messages.push(LegacyMessage {
             id,
@@ -176,6 +198,7 @@ pub(crate) fn list_legacy_messages_from_dir_filtered(
             archived,
             archived_at,
             pin,
+            urgent,
             images: Vec::new(),
         });
     }
@@ -297,10 +320,16 @@ pub(crate) fn read_legacy_message_by_id(
     } else {
         "0"
     };
-    let (id, text_content, created_at, archived, archived_at, pin) = conn
+    let has_urgent = table_has_column(conn, "messages", "urgent")?;
+    let urgent_select = if has_urgent {
+        "COALESCE(urgent, 0)"
+    } else {
+        "0"
+    };
+    let (id, text_content, created_at, archived, archived_at, pin, urgent) = conn
         .query_row(
             &format!(
-                "SELECT id, text_content, created_at, archived, archived_at, {pinned_select} \
+                "SELECT id, text_content, created_at, archived, archived_at, {pinned_select}, {urgent_select} \
                  FROM messages \
                  WHERE id = ?"
             ),
@@ -314,6 +343,7 @@ pub(crate) fn read_legacy_message_by_id(
                     archived == Some(1),
                     row.get::<_, Option<String>>(4)?,
                     MessagePin::from_stored(row.get::<_, i64>(5)?),
+                    row.get::<_, i64>(6)? == 1,
                 ))
             },
         )
@@ -327,6 +357,7 @@ pub(crate) fn read_legacy_message_by_id(
         archived,
         archived_at,
         pin,
+        urgent,
         images,
     })
 }

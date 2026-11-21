@@ -900,6 +900,7 @@ fn visit_normal_messages(
                 archived: false,
                 archived_at: row.get(3).map_err(|err| err.to_string())?,
                 pin: MessagePin::None,
+                urgent: false,
                 images: Vec::new(),
             });
         }
