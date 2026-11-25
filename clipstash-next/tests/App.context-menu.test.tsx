@@ -300,8 +300,8 @@ describe("message card context menu", () => {
       "复制",
       "粘贴",
       "拆分",
-      "钉住置顶",
-      "钉住置底",
+      "置顶",
+      "置底",
       "向下合并",
       "向上合并",
     ]);
@@ -371,7 +371,7 @@ describe("message card context menu", () => {
     await screen.findByText("#10");
 
     const menu = await openMenu(10);
-    await user.click(within(menu).getByRole("menuitem", { name: "钉住置顶" }));
+    await user.click(within(menu).getByRole("menuitem", { name: "置顶" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_pinned", {
@@ -388,7 +388,7 @@ describe("message card context menu", () => {
 
     const reopened = await openMenu(10);
     expect(within(reopened).getByRole("menuitem", { name: "取消置顶" })).toBeTruthy();
-    expect(within(reopened).getByRole("menuitem", { name: "钉住置底" })).toBeTruthy();
+    expect(within(reopened).getByRole("menuitem", { name: "置底" })).toBeTruthy();
   });
 
   it("pins a message to the bottom and clears it again", async () => {
@@ -397,7 +397,7 @@ describe("message card context menu", () => {
     await screen.findByText("#10");
 
     const menu = await openMenu(10);
-    await user.click(within(menu).getByRole("menuitem", { name: "钉住置底" }));
+    await user.click(within(menu).getByRole("menuitem", { name: "置底" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_legacy_message_pinned", {

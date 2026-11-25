@@ -106,7 +106,7 @@ import type {
 } from "./api/types";
 
 const PAGE_LIMIT = 30;
-const CURRENT_VERSION = "2.3.4";
+const CURRENT_VERSION = "2.3.5";
 const APP_TITLE = `需求暂存站 v${CURRENT_VERSION}  @linjianglu`;
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const DEFAULT_EDIT_TEXTAREA_HEIGHT = 360;
@@ -5050,12 +5050,12 @@ function MessageContextMenu({
     });
     items.push({
       key: "pin-top",
-      label: pin === "top" ? "取消置顶" : "钉住置顶",
+      label: pin === "top" ? "取消置顶" : "置顶",
       action: () => onTogglePin("top"),
     });
     items.push({
       key: "pin-bottom",
-      label: pin === "bottom" ? "取消置底" : "钉住置底",
+      label: pin === "bottom" ? "取消置底" : "置底",
       action: () => onTogglePin("bottom"),
     });
   }
